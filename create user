@@ -1,0 +1,2 @@
+sudo adduser hung319
+sudo usermod -aG sudo hung319
