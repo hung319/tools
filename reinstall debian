@@ -1,1 +1,1 @@
-sudo wget --no-check-certificate -qO InstallNET.sh 'https://raw.githubusercontent.com/leitbogioro/Tools/master/Linux_reinstall/InstallNET.sh' && chmod a+x InstallNET.sh && sudo bash InstallNET.sh -debian
+sudo wget --no-check-certificate -qO InstallNET.sh 'https://raw.githubusercontent.com/leitbogioro/Tools/master/Linux_reinstall/InstallNET.sh' && sudo chmod a+x InstallNET.sh && sudo bash InstallNET.sh -debian
