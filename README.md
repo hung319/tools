@@ -5,4 +5,6 @@ user:
 ```sh
 root 
 ```
-pass:```sh LeitboGi0ro ```
+pass:
+```sh
+LeitboGi0ro ```
