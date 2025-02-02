@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# đổi pass
+passwd
+
+# tạo user mới
+sudo adduser hung319
+sudo usermod -aG sudo hung319
+
 # cập nhập OS
 sudo apt update && sudo apt upgrade -y
 
@@ -16,8 +23,8 @@ sudo iptables -F
 # Chỉnh về múi giờ Việt Nam
 timedatectl set-timezone Asia/Ho_Chi_Minh
 
-# Tạo swap 2GB RAM
-sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+# Tạo swap 4GB RAM
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 cat <<EOF > /etc/sysctl.d/99-xs-swappiness.conf
 vm.swappiness=10
 EOF
