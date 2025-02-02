@@ -7,4 +7,5 @@ root
 ```
 pass:
 ```sh
-LeitboGi0ro ```
+LeitboGi0ro
+```
