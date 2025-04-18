@@ -1,42 +1,45 @@
 // ==UserScript==
-// @name         Full Proxy Wrapper with API Key
+// @name         Full Proxy Redirect (with Auth-Compatible Format)
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Tải mọi nội dung trang (HTML, text, API...) qua proxy nhưng giữ nguyên URL
+// @version      2.1
+// @description  Chuyển hướng toàn bộ request (HTML, fetch, XHR...) qua proxy có định dạng tương thích server
 // @match        *://*/*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
-(async function () {
+(function() {
     'use strict';
 
-    const proxy = "";
+    const proxyBase = "";
     const apiKey = "";
-    const targetUrl = location.href;
+    const currentUrl = location.href;
 
-    if (targetUrl.startsWith(proxy)) return;
+    // Tránh vòng lặp khi đã vào proxy rồi
+    if (currentUrl.startsWith(proxyBase)) return;
 
-    try {
-        const proxyUrl = `${proxy}${encodeURIComponent(targetUrl)}?key=${apiKey}`;
-        const response = await fetch(proxyUrl);
+    // Hàm tạo URL đúng định dạng proxy server cần
+    const toProxyURL = (url) => `${proxyBase}${encodeURIComponent(url)}?key=${apiKey}`;
 
-        if (!response.ok) throw new Error(`Proxy lỗi: ${response.statusText}`);
-
-        const contentType = response.headers.get("content-type") || "";
-
-        if (contentType.includes("text/html")) {
-            const html = await response.text();
-            document.open();
-            document.write(html);
-            document.close();
-        } else if (contentType.includes("application/json") || contentType.includes("text/plain")) {
-            const text = await response.text();
-            document.documentElement.innerHTML = `<pre style="white-space: pre-wrap; word-break: break-all;">${text}</pre>`;
-        } else {
-            document.body.innerHTML = `<h2>Loại nội dung không hỗ trợ: ${contentType}</h2>`;
-        }
-    } catch (e) {
-        document.body.innerHTML = `<h1 style="color:red;">Lỗi proxy: ${e.message}</h1>`;
+    // Nếu là trang HTML chính, chuyển hướng toàn trang
+    const isHtml = /text\/html/.test(document.contentType || "");
+    if (isHtml) {
+        const newUrl = toProxyURL(currentUrl);
+        location.replace(newUrl);
+        return;
     }
+
+    // Patch fetch()
+    const originalFetch = window.fetch;
+    window.fetch = function(input, init = {}) {
+        const url = typeof input === "string" ? input : input.url;
+        return originalFetch(toProxyURL(url), init);
+    };
+
+    // Patch XMLHttpRequest
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+        const proxyUrl = toProxyURL(url);
+        return originalOpen.call(this, method, proxyUrl, ...rest);
+    };
 })();
