@@ -1,0 +1,2 @@
+F12 unlock: https://greasyfork.org/en/scripts/440060-anti-anti-debugger
+m3u8 detect: https://github.com/FirefoxUniverse/FirefoxTweaksVN/raw/refs/heads/main/userscript/m3u8.user.js
