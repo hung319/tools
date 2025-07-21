@@ -4,7 +4,8 @@
 :root {
     --bg-color: #0a0a1a;
     --primary-color: #00f7ff;
-    --success-color: #00ff7f; /* Màu xanh lá neon cho thông báo */
+    --success-color: #00ff7f; /* Màu xanh lá neon */
+    --error-color: #ff5252; /* Màu đỏ neon */
     --text-color: #e0e0e0;
     --panel-bg-color: rgba(10, 25, 47, 0.85);
     --border-color: rgba(0, 247, 255, 0.2);
@@ -67,15 +68,15 @@ button#downloadBtn:disabled { border-color: #555; color: #555; cursor: not-allow
 .loading.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-.menu-link-nsfw a { color: #ff5252 !important; text-shadow: 0 0 5px #ff5252; }
+.menu-link-nsfw a { color: var(--error-color) !important; text-shadow: 0 0 5px var(--error-color); }
 .menu-link-nsfw a:hover { color: #ff8a80 !important; background-color: rgba(255, 82, 82, 0.1) !important; }
-.menu-link-nsfw .nav-icon { color: #ff5252 !important; }
-body.page-nsfw-downloader .download-card h1 { color: #ff5252; text-shadow: 0 0 10px #ff5252; }
+.menu-link-nsfw .nav-icon { color: var(--error-color) !important; }
+body.page-nsfw-downloader .download-card h1 { color: var(--error-color); text-shadow: 0 0 10px var(--error-color); }
 
-/* --- Trang Công Cụ Chung (rdname, rdusername) --- */
+/* --- Trang Công Cụ Chung (rdname, rdusername, regex) --- */
 .tool-container { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); text-align: center; }
 .tool-container h1 { text-align: center; margin-bottom: 30px; }
-.tool-container div { margin-bottom: 20px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+.tool-container .control-group { margin-bottom: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; }
 .tool-container button { display: block; margin: 20px auto 0; font-family: 'Fira Code', monospace; background-color: transparent; color: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 4px; padding: 10px 20px; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
 .tool-container button:hover { background-color: var(--primary-color); color: var(--bg-color); box-shadow: 0 0 15px var(--primary-color); }
 #tenList { list-style: none; text-align: center; margin-top: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px; min-height: 100px; background-color: rgba(0,0,0,0.2); }
@@ -86,3 +87,12 @@ body.page-nsfw-downloader .download-card h1 { color: #ff5252; text-shadow: 0 0 1
 #username-display { font-size: 24px; margin-top: 20px; cursor: pointer; padding: 10px 20px; background-color: rgba(0,0,0,0.2); border: 1px dashed var(--border-color); border-radius: 4px; transition: all 0.3s; word-break: break-all; }
 #username-display:hover { border-color: var(--primary-color); color: var(--primary-color); }
 #copy-message { color: var(--success-color); margin-top: 15px; display: none; }
+
+/* --- Trang Regex Tool --- */
+.regex-tool-container { display: flex; flex-direction: column; gap: 20px; }
+.regex-input, .regex-textarea { width: 100%; padding: 10px; font-family: 'Fira Code', monospace; background-color: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 14px; }
+.regex-input:focus, .regex-textarea:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 10px var(--primary-color); }
+.regex-textarea { min-height: 150px; resize: vertical; }
+.regex-error { color: var(--error-color); text-shadow: 0 0 5px var(--error-color); min-height: 1.5em; text-align: left; }
+.regex-results { text-align: left; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px; background-color: rgba(0,0,0,0.2); min-height: 150px; white-space: pre-wrap; word-break: break-all; }
+.regex-results .match { background-color: rgba(0, 255, 127, 0.3); box-shadow: 0 0 8px var(--success-color); color: #fff; border-radius: 3px; }

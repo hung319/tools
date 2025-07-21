@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Regex Tool | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <main>
+        <div class="container tool-container">
+            <h1>Regex Tester</h1>
+            <div class="regex-tool-container">
+                <div>
+                    <label for="regex-pattern">Biểu thức Regex:</label>
+                    <input type="text" id="regex-pattern" class="regex-input" placeholder="/pattern/flags">
+                    <div id="regex-error" class="regex-error"></div>
+                </div>
+                <div>
+                    <label for="test-string">Chuỗi kiểm tra:</label>
+                    <textarea id="test-string" class="regex-textarea" placeholder="Dán văn bản của bạn vào đây..."></textarea>
+                </div>
+                <div>
+                    <label>Kết quả (các kết quả trùng khớp sẽ được highlight):</label>
+                    <div id="regex-results" class="regex-results"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script src="../js/regex-tool.js" defer></script>
+</body>
+</html>
