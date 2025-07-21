@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tải Ảnh NSFW | My Tech Site</title>
+    
+    <link rel="stylesheet" href="../css/style.css">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body class="page-nsfw-downloader"> <main>
+        <div class="container">
+            <div class="download-card">
+                <h1>NSFW Image Downloader</h1>
+                <div class="input-group">
+                    <label for="imageCount">Số lượng ảnh tải xuống:</label>
+                    <input type="number" id="imageCount" value="50" min="1">
+                </div>
+                
+                <div class="input-group">
+                    <label for="apiSelector">Chọn API:</label>
+                    <select id="apiSelector">
+                        <option value="waifu.pics">Waifu.pics</option>
+                        <option value="konachan(questionable)">Konachan.net (Questionable)</option>
+                        <option value="konachan(explicit)">Konachan.net (Explicit)</option>
+                        <option value="yande.re(questionable)">Yande.re (Questionable)</option>
+                        <option value="yande.re(explicit)">Yande.re (Explicit)</option>
+                    </select>
+                </div>
+
+                <button id="downloadBtn">DOWNLOAD & ZIP</button>
+                <div class="loading" id="loadingAnimation"></div>
+                <div id="status"></div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script src="../js/nsfw-downloader.js" defer></script>
+
+</body>
+</html>

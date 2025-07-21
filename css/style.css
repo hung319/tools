@@ -76,3 +76,23 @@ button#downloadBtn:disabled { border-color: #555; color: #555; cursor: not-allow
 .loading.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+/* --- Bổ sung style cho các mục NSFW --- */
+
+/* Màu đỏ cảnh báo cho link menu NSFW */
+.menu-link-nsfw a {
+    color: #ff5252 !important; /* Màu đỏ cảnh báo */
+    text-shadow: 0 0 5px #ff5252;
+}
+.menu-link-nsfw a:hover {
+    color: #ff8a80 !important;
+    background-color: rgba(255, 82, 82, 0.1) !important;
+}
+.menu-link-nsfw .nav-icon {
+    color: #ff5252 !important;
+}
+
+/* Màu đỏ cho tiêu đề trang NSFW Downloader */
+body.page-nsfw-downloader .download-card h1 {
+  color: #ff5252;
+  text-shadow: 0 0 10px #ff5252;
+}
