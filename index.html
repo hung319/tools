@@ -3,24 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Website của bạn</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Trang Chủ</title>
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <header>
-        <nav>
-            <div class="logo">LOGO</div>
-            <div class="hamburger" onclick="toggleMenu()">&#9776;</div>
-            <ul class="menu">
-                <li><a href="index.html">Trang Chủ</a></li>
-                <li><a href="download.html">Tải Ảnh NSFW</a></li>
-            </ul>
+
+    <header class="header">
+        <a href="index.html" class="logo">MyWebsite</a>
+        
+        <button id="hamburger-btn" class="hamburger-btn">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+
+        <nav id="nav-menu" class="nav-menu">
+            <ul>
+                <li><a href="tools/tool1.html">Công cụ 1</a></li>
+                <li><a href="tools/tool2.html">Công cụ 2</a></li>
+                </ul>
         </nav>
     </header>
-    <main>
-        <h1>Chào mừng đến với trang chủ!</h1>
-        <p>Chọn menu để điều hướng.</p>
+
+    <main class="main-content">
+        <h1>Chào mừng bạn đến với trang web của tôi!</h1>
+        <p>Đây là trang giới thiệu chính. Hãy khám phá các công cụ hữu ích bằng cách nhấn vào menu ở góc trên bên phải.</p>
     </main>
-    <script src="script.js"></script>
+
+    <script src="js/script.js"></script>
 </body>
 </html>
