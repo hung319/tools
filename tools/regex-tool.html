@@ -9,32 +9,25 @@
 <body>
     <main>
         <div class="container tool-container">
-            <h1>Regex Tester & Builder</h1>
-
-            <details class="regex-builder">
-                <summary><h3>Tạo Regex Tự Động (Builder)</h3></summary>
-                <div class="control-group" style="margin-top: 20px;">
-                    <label for="builder-preset">Chọn mẫu có sẵn:</label>
-                    <select id="builder-preset">
-                        <option value="">-- Tự chọn --</option>
-                        <option value="email">Email</option>
-                        <option value="url">URL (http/https)</option>
-                        <option value="phone_vn">Số điện thoại VN</option>
-                        <option value="ipv4">Địa chỉ IPv4</option>
-                    </select>
-                </div>
-                 <button id="generate-regex-btn">Tạo Regex</button>
-            </details>
+            <h1>Regex Generator & Tester</h1>
             
+            <div class="regex-generator">
+                <h3>1. Dán dữ liệu mẫu của bạn vào đây</h3>
+                <textarea id="data-input" class="regex-textarea" placeholder="Ví dụ: dán một danh sách email, số điện thoại, hoặc đường link vào đây..."></textarea>
+                <button id="analyze-btn">Phân tích và Tạo Regex</button>
+                <div id="analyze-status" class="regex-status"></div>
+            </div>
+
             <div class="regex-tool-container">
+                <h3>2. Kiểm tra và Tinh chỉnh Regex</h3>
                 <div>
-                    <label for="regex-pattern">Biểu thức Regex:</label>
+                    <label for="regex-pattern">Biểu thức Regex (đã tạo):</label>
                     <input type="text" id="regex-pattern" class="regex-input" placeholder="/pattern/flags">
                     <div id="regex-error" class="regex-error"></div>
                 </div>
                 <div>
                     <label for="test-string">Chuỗi kiểm tra:</label>
-                    <textarea id="test-string" class="regex-textarea" placeholder="Dán văn bản của bạn vào đây..."></textarea>
+                    <textarea id="test-string" class="regex-textarea" placeholder="Dữ liệu mẫu của bạn sẽ được tự động sao chép vào đây để kiểm tra..."></textarea>
                 </div>
                 <div>
                     <label>Kết quả (kết quả trùng khớp sẽ được tô sáng):</label>
