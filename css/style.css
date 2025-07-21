@@ -1,4 +1,15 @@
-/* --- Cài đặt chung & Reset --- */
+/* --- Google Fonts & Global Styles --- */
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
+
+:root {
+    --bg-color: #0a192f;        /* Navy Blue */
+    --text-color: #ccd6f6;      /* Light Blue/Gray */
+    --accent-color: #64ffda;    /* Bright Cyan */
+    --menu-bg-color: #112240;   /* Lighter Navy */
+    --shadow-color: rgba(100, 255, 218, 0.2);
+    --font-mono: 'Roboto Mono', monospace;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -6,95 +17,126 @@
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background-color: #f4f4f9;
-    color: #333;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow-x: hidden; /* Ngăn scroll ngang khi menu hiện */
 }
 
-/* --- Header & Logo --- */
-.header {
-    background-color: #fff;
-    padding: 1rem 1.5rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-    position: relative; /* Quan trọng cho menu */
-    z-index: 1000;
-}
-
-.logo {
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: #2c3e50;
-    text-decoration: none;
-}
-
-/* --- Nút Hamburger --- */
+/* --- Nút Hamburger Tròn (Fixed) --- */
 .hamburger-btn {
-    display: flex; /* Sử dụng flexbox để căn giữa các span */
-    flex-direction: column;
-    justify-content: space-around;
-    width: 2rem;
-    height: 1.75rem;
-    background: transparent;
-    border: none;
+    position: fixed;
+    bottom: 2rem;
+    left: 2rem;
+    width: 60px;
+    height: 60px;
+    background-color: var(--menu-bg-color);
+    border-radius: 50%;
+    border: 1px solid var(--accent-color);
     cursor: pointer;
-    padding: 0;
-    z-index: 10;
+    z-index: 1001; /* Luôn nổi lên trên cùng */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 5px; /* Khoảng cách giữa các gạch */
+    transition: all 0.3s ease;
+    box-shadow: 0 0 15px var(--shadow-color);
+}
+
+.hamburger-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 0 25px var(--shadow-color);
 }
 
 .hamburger-btn span {
     display: block;
-    width: 1.75rem;
-    height: 0.2rem;
-    background-color: #333;
-    border-radius: 10px;
-    transition: all 0.3s ease-in-out;
+    width: 28px;
+    height: 3px;
+    background-color: var(--accent-color);
+    border-radius: 3px;
+    transition: all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55);
 }
 
-/* --- Menu điều hướng (ẩn mặc định) --- */
+/* Hiệu ứng chuyển thành dấu 'X' khi active */
+.hamburger-btn.active span:nth-child(1) {
+    transform: rotate(45deg) translate(6px, 6px);
+}
+
+.hamburger-btn.active span:nth-child(2) {
+    opacity: 0;
+}
+
+.hamburger-btn.active span:nth-child(3) {
+    transform: rotate(-45deg) translate(6px, -6px);
+}
+
+/* --- Menu Điều hướng (Trượt từ bên trái) --- */
 .nav-menu {
-    position: fixed; /* Hiển thị đè lên nội dung */
+    position: fixed;
     top: 0;
-    right: -100%; /* Ẩn menu ra ngoài màn hình bên phải */
-    width: 250px;
+    left: 0;
+    width: 280px;
     height: 100vh;
-    background-color: #2c3e50;
-    box-shadow: -5px 0 15px rgba(0, 0, 0, 0.2);
-    transition: right 0.4s ease-in-out;
-    padding-top: 5rem;
+    background-color: var(--menu-bg-color);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(-100%); /* Ẩn mặc định */
+    transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    box-shadow: 5px 0 20px rgba(0,0,0,0.3);
 }
 
-/* Lớp 'show' để hiện menu */
 .nav-menu.show {
-    right: 0;
+    transform: translateX(0);
+}
+
+.nav-header {
+    color: var(--accent-color);
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    padding: 1.5rem;
+    text-align: center;
+    border-bottom: 1px solid #1d2d50;
 }
 
 .nav-menu ul {
-    list-style-type: none;
+    list-style: none;
+    margin-top: 2rem;
 }
 
 .nav-menu ul li a {
     display: block;
-    padding: 1rem 1.5rem;
-    color: #ecf0f1;
+    color: var(--text-color);
     text-decoration: none;
     font-size: 1.1rem;
-    transition: background-color 0.3s;
+    padding: 1rem 1.5rem;
+    transition: all 0.3s ease;
+    font-family: var(--font-mono);
 }
 
 .nav-menu ul li a:hover {
-    background-color: #34495e;
+    background-color: rgba(100, 255, 218, 0.1);
+    color: var(--accent-color);
+    padding-left: 2rem;
 }
 
 /* --- Nội dung chính --- */
 .main-content {
-    padding: 2rem;
+    padding: 3rem;
+    max-width: 800px;
+    margin: 0 auto;
     text-align: center;
 }
 
 .main-content h1 {
+    font-family: var(--font-mono);
+    color: var(--accent-color);
+    font-size: 2.5rem;
     margin-bottom: 1rem;
-    color: #2c3e50;
+}
+
+.main-content p {
+    font-size: 1.2rem;
+    line-height: 1.6;
 }

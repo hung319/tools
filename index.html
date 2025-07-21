@@ -3,33 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trang Chủ</title>
-    <link rel="stylesheet" href="css/style.css">
+    <title>Trang Chủ - MyWebsite</title>
+    <link rel="stylesheet" href="./css/style.css">
 </head>
 <body>
+    <button id="hamburger-btn" class="hamburger-btn">
+        <span></span>
+        <span></span>
+        <span></span>
+    </button>
 
-    <header class="header">
-        <a href="index.html" class="logo">MyWebsite</a>
-        
-        <button id="hamburger-btn" class="hamburger-btn">
-            <span></span>
-            <span></span>
-            <span></span>
-        </button>
-
-        <nav id="nav-menu" class="nav-menu">
-            <ul>
-                <li><a href="tools/tool1.html">Công cụ 1</a></li>
-                <li><a href="tools/tool2.html">Công cụ 2</a></li>
-                </ul>
-        </nav>
-    </header>
+    <nav id="nav-menu" class="nav-menu">
+        <div class="nav-header">My Tools</div>
+        <ul>
+            <li><a href="/index.html">🏠 Trang Chủ</a></li>
+            <li><a href="/tools/tool1.html">🛠️ Công cụ 1</a></li>
+            <li><a href="/tools/tool2.html">⚙️ Công cụ 2</a></li>
+            </ul>
+    </nav>
 
     <main class="main-content">
-        <h1>Chào mừng bạn đến với trang web của tôi!</h1>
-        <p>Đây là trang giới thiệu chính. Hãy khám phá các công cụ hữu ích bằng cách nhấn vào menu ở góc trên bên phải.</p>
+        <h1>Welcome to the Command Center</h1>
+        <p>Your dashboard for essential tools and utilities. Use the menu at the bottom-left to navigate.</p>
     </main>
 
-    <script src="js/script.js"></script>
+    <script src="./js/script.js"></script>
 </body>
 </html>
