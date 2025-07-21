@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tải Ảnh SFW | My Tech Site</title>
+    
+    <link rel="stylesheet" href="../css/style.css">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+
+    <main>
+        <div class="container">
+            <div class="download-card">
+                <h1>SFW Image Downloader</h1>
+                <div class="input-group">
+                    <label for="imageCount">Số lượng ảnh:</label>
+                    <input type="number" id="imageCount" value="50" min="1" max="100">
+                </div>
+                
+                <div class="input-group">
+                    <label for="apiSelector">Chọn API:</label>
+                    <select id="apiSelector">
+                        <option value="waifu.pics">Waifu.pics</option>
+                        <option value="konachan">Konachan.net</option>
+                        <option value="yande.re">Yande.re</option>
+                    </select>
+                </div>
+
+                <button id="downloadBtn">DOWNLOAD & ZIP</button>
+                <div class="loading" id="loadingAnimation"></div>
+                <div id="status"></div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script src="../js/sfw-downloader.js" defer></script>
+
+</body>
+</html>
