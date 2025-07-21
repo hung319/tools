@@ -21,18 +21,8 @@ body {
     overflow-x: hidden;
 }
 
-/* --- Nút Hamburger (ĐÃ CẬP NHẬT) --- */
-.hamburger-menu {
-    position: fixed;
-    bottom: 15px; /* Thay đổi từ top sang bottom */
-    left: 15px;
-    z-index: 1001;
-    cursor: pointer;
-    background: transparent;
-    border: none;
-    padding: 15px;
-    transition: transform 0.3s ease;
-}
+/* --- Nút Hamburger --- */
+.hamburger-menu { position: fixed; bottom: 15px; left: 15px; z-index: 1001; cursor: pointer; background: transparent; border: none; padding: 15px; transition: transform 0.3s ease; }
 .hamburger-box { width: 30px; height: 24px; display: inline-block; position: relative; }
 .hamburger-inner, .hamburger-inner::before, .hamburger-inner::after { width: 30px; height: 3px; background-color: var(--primary-color); border-radius: 4px; position: absolute; transition: transform 0.25s ease-in-out; box-shadow: 0 0 8px var(--primary-color); }
 .hamburger-inner { top: 50%; transform: translateY(-50%); }
@@ -59,11 +49,11 @@ main { padding: 2rem; }
 .content { max-width: 800px; margin: 60px auto; text-align: center; }
 .content h1 { color: var(--primary-color); text-shadow: 0 0 10px var(--primary-color); }
 
-/* --- CSS cho trang Tải Ảnh SFW --- */
+/* --- CSS cho trang Tải Ảnh SFW & NSFW --- */
 .container { max-width: 800px; margin: 60px auto 20px; padding: 20px; }
 .download-card { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); transition: transform 0.3s ease, box-shadow 0.3s ease; }
 .download-card:hover { transform: translateY(-5px); box-shadow: 0 0 30px rgba(0, 247, 255, 0.2); }
-.download-card h1 { font-size: 2em; margin-bottom: 30px; }
+.download-card h1 { font-size: 2em; margin-bottom: 30px; text-align: center; /* ĐÃ CĂN GIỮA */ }
 .input-group { margin: 25px 0; text-align: center; }
 .input-group label { font-weight: 500; color: var(--text-color); display: block; margin-bottom: 10px; letter-spacing: 1px; }
 input[type="number"], select { font-family: 'Fira Code', monospace; font-size: 16px; padding: 12px 20px; background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; width: 200px; transition: all 0.3s ease; text-align: center; }
@@ -76,23 +66,19 @@ button#downloadBtn:disabled { border-color: #555; color: #555; cursor: not-allow
 .loading.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-/* --- Bổ sung style cho các mục NSFW --- */
+.menu-link-nsfw a { color: #ff5252 !important; text-shadow: 0 0 5px #ff5252; }
+.menu-link-nsfw a:hover { color: #ff8a80 !important; background-color: rgba(255, 82, 82, 0.1) !important; }
+.menu-link-nsfw .nav-icon { color: #ff5252 !important; }
+body.page-nsfw-downloader .download-card h1 { color: #ff5252; text-shadow: 0 0 10px #ff5252; }
 
-/* Màu đỏ cảnh báo cho link menu NSFW */
-.menu-link-nsfw a {
-    color: #ff5252 !important; /* Màu đỏ cảnh báo */
-    text-shadow: 0 0 5px #ff5252;
-}
-.menu-link-nsfw a:hover {
-    color: #ff8a80 !important;
-    background-color: rgba(255, 82, 82, 0.1) !important;
-}
-.menu-link-nsfw .nav-icon {
-    color: #ff5252 !important;
-}
-
-/* Màu đỏ cho tiêu đề trang NSFW Downloader */
-body.page-nsfw-downloader .download-card h1 {
-  color: #ff5252;
-  text-shadow: 0 0 10px #ff5252;
-}
+/* --- Trang Tạo Tên Ngẫu Nhiên --- */
+.rdname-container { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); }
+.rdname-container h1 { text-align: center; margin-bottom: 20px; }
+.rdname-container div { margin-bottom: 15px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+.rdname-container button { font-family: 'Fira Code', monospace; background-color: transparent; color: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 4px; padding: 10px 20px; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
+.rdname-container button:hover { background-color: var(--primary-color); color: var(--bg-color); box-shadow: 0 0 15px var(--primary-color); }
+#tenList { list-style: none; margin-top: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px; min-height: 100px; background-color: rgba(0,0,0,0.2); }
+#tenList li { padding: 8px; border-bottom: 1px dashed var(--border-color); transition: background-color 0.2s; }
+#tenList li:last-child { border-bottom: none; }
+#tenList li.copyable { cursor: pointer; }
+#tenList li.copyable:hover { background-color: rgba(0, 247, 255, 0.1); }
