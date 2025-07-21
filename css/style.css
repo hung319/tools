@@ -4,6 +4,7 @@
 :root {
     --bg-color: #0a0a1a;
     --primary-color: #00f7ff;
+    --success-color: #00ff7f; /* Màu xanh lá neon cho thông báo */
     --text-color: #e0e0e0;
     --panel-bg-color: rgba(10, 25, 47, 0.85);
     --border-color: rgba(0, 247, 255, 0.2);
@@ -53,7 +54,7 @@ main { padding: 2rem; }
 .container { max-width: 800px; margin: 60px auto 20px; padding: 20px; }
 .download-card { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); transition: transform 0.3s ease, box-shadow 0.3s ease; }
 .download-card:hover { transform: translateY(-5px); box-shadow: 0 0 30px rgba(0, 247, 255, 0.2); }
-.download-card h1 { font-size: 2em; margin-bottom: 30px; text-align: center; /* ĐÃ CĂN GIỮA */ }
+.download-card h1 { font-size: 2em; margin-bottom: 30px; text-align: center; }
 .input-group { margin: 25px 0; text-align: center; }
 .input-group label { font-weight: 500; color: var(--text-color); display: block; margin-bottom: 10px; letter-spacing: 1px; }
 input[type="number"], select { font-family: 'Fira Code', monospace; font-size: 16px; padding: 12px 20px; background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; width: 200px; transition: all 0.3s ease; text-align: center; }
@@ -71,14 +72,17 @@ button#downloadBtn:disabled { border-color: #555; color: #555; cursor: not-allow
 .menu-link-nsfw .nav-icon { color: #ff5252 !important; }
 body.page-nsfw-downloader .download-card h1 { color: #ff5252; text-shadow: 0 0 10px #ff5252; }
 
-/* --- Trang Tạo Tên Ngẫu Nhiên --- */
-.rdname-container { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); }
-.rdname-container h1 { text-align: center; margin-bottom: 20px; }
-.rdname-container div { margin-bottom: 15px; display: flex; justify-content: center; align-items: center; gap: 10px; }
-.rdname-container button { font-family: 'Fira Code', monospace; background-color: transparent; color: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 4px; padding: 10px 20px; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
-.rdname-container button:hover { background-color: var(--primary-color); color: var(--bg-color); box-shadow: 0 0 15px var(--primary-color); }
-#tenList { list-style: none; margin-top: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px; min-height: 100px; background-color: rgba(0,0,0,0.2); }
+/* --- Trang Công Cụ Chung (rdname, rdusername) --- */
+.tool-container { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); text-align: center; }
+.tool-container h1 { text-align: center; margin-bottom: 30px; }
+.tool-container div { margin-bottom: 20px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+.tool-container button { display: block; margin: 20px auto 0; font-family: 'Fira Code', monospace; background-color: transparent; color: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 4px; padding: 10px 20px; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
+.tool-container button:hover { background-color: var(--primary-color); color: var(--bg-color); box-shadow: 0 0 15px var(--primary-color); }
+#tenList { list-style: none; text-align: center; margin-top: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px; min-height: 100px; background-color: rgba(0,0,0,0.2); }
 #tenList li { padding: 8px; border-bottom: 1px dashed var(--border-color); transition: background-color 0.2s; }
 #tenList li:last-child { border-bottom: none; }
 #tenList li.copyable { cursor: pointer; }
 #tenList li.copyable:hover { background-color: rgba(0, 247, 255, 0.1); }
+#username-display { font-size: 24px; margin-top: 20px; cursor: pointer; padding: 10px 20px; background-color: rgba(0,0,0,0.2); border: 1px dashed var(--border-color); border-radius: 4px; transition: all 0.3s; word-break: break-all; }
+#username-display:hover { border-color: var(--primary-color); color: var(--primary-color); }
+#copy-message { color: var(--success-color); margin-top: 15px; display: none; }
