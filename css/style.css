@@ -2,36 +2,29 @@
 
 /* --- Biến màu và Font chữ --- */
 :root {
-    --bg-color: #0a0a1a; /* Nền xanh đen đậm */
-    --primary-color: #00f7ff; /* Xanh Cyan Neon */
-    --text-color: #e0e0e0; /* Chữ trắng ngà */
-    --panel-bg-color: rgba(10, 25, 47, 0.85); /* Nền panel có độ mờ */
+    --bg-color: #0a0a1a;
+    --primary-color: #00f7ff;
+    --text-color: #e0e0e0;
+    --panel-bg-color: rgba(10, 25, 47, 0.85);
     --border-color: rgba(0, 247, 255, 0.2);
     --panel-width: 300px;
 }
 
 /* --- Cài đặt chung --- */
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
-/* Sử dụng font monospace cho cảm giác "coder" */
+* { margin: 0; padding: 0; box-sizing: border-box; }
 @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap');
-
 body {
     font-family: 'Fira Code', monospace;
     background-color: var(--bg-color);
     color: var(--text-color);
     line-height: 1.7;
-    overflow-x: hidden; /* Tránh thanh cuộn ngang khi menu trượt */
+    overflow-x: hidden;
 }
 
-/* --- Nút Hamburger --- */
+/* --- Nút Hamburger (ĐÃ CẬP NHẬT) --- */
 .hamburger-menu {
     position: fixed;
-    top: 15px;
+    bottom: 15px; /* Thay đổi từ top sang bottom */
     left: 15px;
     z-index: 1001;
     cursor: pointer;
@@ -40,283 +33,46 @@ body {
     padding: 15px;
     transition: transform 0.3s ease;
 }
-
-.hamburger-box {
-    width: 30px;
-    height: 24px;
-    display: inline-block;
-    position: relative;
-}
-
-.hamburger-inner,
-.hamburger-inner::before,
-.hamburger-inner::after {
-    width: 30px;
-    height: 3px;
-    background-color: var(--primary-color);
-    border-radius: 4px;
-    position: absolute;
-    transition: transform 0.25s ease-in-out;
-    box-shadow: 0 0 8px var(--primary-color);
-}
-
-.hamburger-inner {
-    top: 50%;
-    transform: translateY(-50%);
-}
-
-.hamburger-inner::before,
-.hamburger-inner::after {
-    content: "";
-    display: block;
-}
-
+.hamburger-box { width: 30px; height: 24px; display: inline-block; position: relative; }
+.hamburger-inner, .hamburger-inner::before, .hamburger-inner::after { width: 30px; height: 3px; background-color: var(--primary-color); border-radius: 4px; position: absolute; transition: transform 0.25s ease-in-out; box-shadow: 0 0 8px var(--primary-color); }
+.hamburger-inner { top: 50%; transform: translateY(-50%); }
+.hamburger-inner::before, .hamburger-inner::after { content: ""; display: block; }
 .hamburger-inner::before { top: -10px; }
 .hamburger-inner::after { bottom: -10px; }
+.hamburger-menu.active .hamburger-inner { transform: rotate(45deg); }
+.hamburger-menu.active .hamburger-inner::before { top: 0; transform: rotate(90deg); }
+.hamburger-menu.active .hamburger-inner::after { bottom: 0; transform: rotate(90deg); }
 
-/* Hiệu ứng chuyển thành dấu 'X' */
-.hamburger-menu.active .hamburger-inner {
-    transform: rotate(45deg);
-}
-.hamburger-menu.active .hamburger-inner::before {
-    top: 0;
-    transform: rotate(90deg);
-}
-.hamburger-menu.active .hamburger-inner::after {
-    bottom: 0;
-    transform: rotate(90deg);
-}
-
-
-/* --- Panel Menu (Glassmorphism) --- */
-.nav-panel {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: var(--panel-width);
-    height: 100vh;
-    z-index: 1000;
-    
-    /* Hiệu ứng kính mờ */
-    background: var(--panel-bg-color);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-
-    border-right: 1px solid var(--border-color);
-    
-    /* Mặc định ẩn */
-    transform: translateX(calc(-1 * var(--panel-width)));
-    transition: transform 0.4s cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-.nav-panel.active {
-    transform: translateX(0); /* Hiện ra */
-}
-
-.nav-panel .nav-header {
-    padding: 20px;
-    text-align: center;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.nav-panel .nav-header h3 {
-    color: var(--primary-color);
-    letter-spacing: 4px;
-    text-shadow: 0 0 5px var(--primary-color);
-}
-
-.nav-panel ul {
-    list-style: none;
-    padding-top: 20px;
-}
-
-.nav-panel ul li a {
-    display: flex;
-    align-items: center;
-    padding: 15px 30px;
-    color: var(--text-color);
-    text-decoration: none;
-    font-size: 1rem;
-    transition: background-color 0.2s, color 0.2s;
-    position: relative;
-    overflow: hidden;
-}
-
-.nav-panel ul li a:hover {
-    color: var(--primary-color);
-    background-color: rgba(0, 247, 255, 0.1);
-}
-
-.nav-panel .nav-icon {
-    margin-right: 15px;
-    color: var(--primary-color);
-    transition: transform 0.2s ease;
-}
-.nav-panel ul li a:hover .nav-icon {
-    transform: translateX(5px);
-}
-
+/* --- Panel Menu --- */
+.nav-panel { position: fixed; top: 0; left: 0; width: var(--panel-width); height: 100vh; z-index: 1000; background: var(--panel-bg-color); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-right: 1px solid var(--border-color); transform: translateX(calc(-1 * var(--panel-width))); transition: transform 0.4s cubic-bezier(0.23, 1, 0.32, 1); }
+.nav-panel.active { transform: translateX(0); }
+.nav-panel .nav-header { padding: 20px; text-align: center; border-bottom: 1px solid var(--border-color); }
+.nav-panel .nav-header h3 { color: var(--primary-color); letter-spacing: 4px; text-shadow: 0 0 5px var(--primary-color); }
+.nav-panel ul { list-style: none; padding-top: 20px; }
+.nav-panel ul li a { display: flex; align-items: center; padding: 15px 30px; color: var(--text-color); text-decoration: none; font-size: 1rem; transition: background-color 0.2s, color 0.2s; position: relative; overflow: hidden; }
+.nav-panel ul li a:hover { color: var(--primary-color); background-color: rgba(0, 247, 255, 0.1); }
+.nav-panel .nav-icon { margin-right: 15px; color: var(--primary-color); transition: transform 0.2s ease; }
+.nav-panel ul li a:hover .nav-icon { transform: translateX(5px); }
 
 /* --- Nội dung chính --- */
-main {
-    padding: 2rem;
-}
+main { padding: 2rem; }
+.content { max-width: 800px; margin: 60px auto; text-align: center; }
+.content h1 { color: var(--primary-color); text-shadow: 0 0 10px var(--primary-color); }
 
-.content {
-    max-width: 800px;
-    margin: 60px auto;
-    text-align: center;
-}
-
-.content h1 {
-    color: var(--primary-color);
-    text-shadow: 0 0 10px var(--primary-color);
-}
-
-.back-link {
-    display: inline-block;
-    margin-top: 20px;
-    color: var(--primary-color);
-    text-decoration: none;
-    font-weight: bold;
-    border: 1px solid var(--border-color);
-    padding: 8px 16px;
-    border-radius: 4px;
-    transition: background-color 0.2s, box-shadow 0.2s;
-}
-
-.back-link:hover {
-    background-color: rgba(0, 247, 255, 0.1);
-    box-shadow: 0 0 10px var(--primary-color);
-}
-
-/* --- Bổ sung CSS cho trang Tải Ảnh SFW --- */
-
-.container {
-    max-width: 800px;
-    margin: 60px auto 20px;
-    padding: 20px;
-}
-
-.download-card {
-    background-color: rgba(20, 20, 40, 0.7); /* Nền tối hơn một chút */
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 30px;
-    box-shadow: 0 0 20px rgba(0, 247, 255, 0.1);
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
-}
-
-.download-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 0 30px rgba(0, 247, 255, 0.2);
-}
-
-.download-card h1 {
-    font-size: 2em;
-    margin-bottom: 30px;
-}
-
-.input-group {
-    margin: 25px 0;
-    text-align: center;
-}
-
-.input-group label {
-    font-weight: 500;
-    color: var(--text-color);
-    display: block;
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-}
-
-input[type="number"],
-select {
-    font-family: 'Fira Code', monospace;
-    font-size: 16px;
-    padding: 12px 20px;
-    background-color: var(--bg-color);
-    color: var(--text-color);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    width: 200px;
-    transition: all 0.3s ease;
-    text-align: center;
-}
-
-input[type="number"]:focus,
-select:focus {
-    outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 10px var(--primary-color);
-}
-
-button#downloadBtn {
-    font-family: 'Fira Code', monospace;
-    background-color: transparent;
-    color: var(--primary-color);
-    border: 1px solid var(--primary-color);
-    border-radius: 4px;
-    padding: 12px 30px;
-    font-size: 16px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    display: block;
-    margin: 30px auto 20px;
-    min-width: 250px;
-    text-transform: uppercase;
-}
-
-button#downloadBtn:hover:not(:disabled) {
-    background-color: var(--primary-color);
-    color: var(--bg-color);
-    box-shadow: 0 0 15px var(--primary-color);
-    transform: translateY(-2px);
-}
-
-button#downloadBtn:disabled {
-    border-color: #555;
-    color: #555;
-    cursor: not-allowed;
-    transform: none;
-    background-color: transparent;
-}
-
-#status {
-    margin-top: 20px;
-    padding: 15px;
-    border-radius: 4px;
-    background-color: rgba(0, 247, 255, 0.1);
-    border: 1px solid var(--border-color);
-    color: var(--primary-color);
-    font-weight: 500;
-    text-align: center;
-    animation: fadeIn 0.5s ease;
-    display: none; /* Ẩn ban đầu */
-}
-
-.loading {
-    display: none;
-    margin: 20px auto;
-    width: 40px;
-    height: 40px;
-    border: 4px solid var(--border-color);
-    border-top: 4px solid var(--primary-color);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-.loading.active {
-    display: block;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
+/* --- CSS cho trang Tải Ảnh SFW --- */
+.container { max-width: 800px; margin: 60px auto 20px; padding: 20px; }
+.download-card { background-color: rgba(20, 20, 40, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 30px; box-shadow: 0 0 20px rgba(0, 247, 255, 0.1); transition: transform 0.3s ease, box-shadow 0.3s ease; }
+.download-card:hover { transform: translateY(-5px); box-shadow: 0 0 30px rgba(0, 247, 255, 0.2); }
+.download-card h1 { font-size: 2em; margin-bottom: 30px; }
+.input-group { margin: 25px 0; text-align: center; }
+.input-group label { font-weight: 500; color: var(--text-color); display: block; margin-bottom: 10px; letter-spacing: 1px; }
+input[type="number"], select { font-family: 'Fira Code', monospace; font-size: 16px; padding: 12px 20px; background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; width: 200px; transition: all 0.3s ease; text-align: center; }
+input[type="number"]:focus, select:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 10px var(--primary-color); }
+button#downloadBtn { font-family: 'Fira Code', monospace; background-color: transparent; color: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 4px; padding: 12px 30px; font-size: 16px; font-weight: 500; cursor: pointer; transition: all 0.3s ease; display: block; margin: 30px auto 20px; min-width: 250px; text-transform: uppercase; }
+button#downloadBtn:hover:not(:disabled) { background-color: var(--primary-color); color: var(--bg-color); box-shadow: 0 0 15px var(--primary-color); transform: translateY(-2px); }
+button#downloadBtn:disabled { border-color: #555; color: #555; cursor: not-allowed; transform: none; background-color: transparent; }
+#status { margin-top: 20px; padding: 15px; border-radius: 4px; background-color: rgba(0, 247, 255, 0.1); border: 1px solid var(--border-color); color: var(--primary-color); font-weight: 500; text-align: center; animation: fadeIn 0.5s ease; display: none; }
+.loading { display: none; margin: 20px auto; width: 40px; height: 40px; border: 4px solid var(--border-color); border-top: 4px solid var(--primary-color); border-radius: 50%; animation: spin 1s linear infinite; }
+.loading.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
