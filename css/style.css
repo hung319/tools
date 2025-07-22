@@ -118,3 +118,77 @@ body.page-nsfw-downloader .download-card h1 { color: var(--error-color); text-sh
     margin-top: 15px;
     font-weight: 500;
 }
+/* --- Bổ sung CSS cho Network Tools --- */
+
+.tabs-container {
+    display: flex;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.tab-btn {
+    font-family: 'Fira Code', monospace;
+    padding: 10px 15px;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    color: var(--text-color);
+    opacity: 0.7;
+    transition: all 0.3s ease;
+    font-size: 0.9em;
+}
+
+.tab-btn:hover {
+    background-color: rgba(0, 247, 255, 0.1);
+    opacity: 1;
+}
+
+.tab-btn.active {
+    border-bottom-color: var(--primary-color);
+    color: var(--primary-color);
+    opacity: 1;
+}
+
+.tab-content {
+    display: none;
+    animation: fadeIn 0.5s ease;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.tool-input, .tool-select {
+    width: calc(100% - 130px);
+    margin-right: 10px;
+    display: inline-block;
+}
+.tool-button {
+    width: 120px;
+    display: inline-block;
+    margin: 0;
+}
+
+.results-box {
+    margin-top: 20px;
+    padding: 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    min-height: 100px;
+    background-color: rgba(0,0,0,0.2);
+    white-space: pre-wrap;
+    word-break: break-all;
+    text-align: left;
+}
+
+#dns-results table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#dns-results table tr td {
+    padding: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
