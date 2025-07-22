@@ -11,7 +11,6 @@ class SharedUI {
                     <div class="nav-header"><h3>MENU</h3></div>
                     <ul>
                         <li><a href="/index.html"><span class="nav-icon">▶</span> Trang Chủ</a></li>
-                        <li><a href="/tools/network-tools.html"><span class="nav-icon">▶</span> Network Tools</a></li>
                         <li><a href="/tools/rdusername.html"><span class="nav-icon">▶</span> Tạo Username</a></li>
                         <li><a href="/tools/rdname.html"><span class="nav-icon">▶</span> Tạo Tên Ngẫu Nhiên</a></li>
                         <li><a href="/tools/regex-tool.html"><span class="nav-icon">▶</span> Regex Tester</a></li>
