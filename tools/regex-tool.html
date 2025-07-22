@@ -3,31 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Regex Tool | My Tech Site</title>
+    <title>Regex Tester | My Tech Site</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body>
     <main>
         <div class="container tool-container">
-            <h1>Regex Generator & Tester</h1>
-            
-            <div class="regex-generator">
-                <h3>1. Dán dữ liệu mẫu vào đây</h3>
-                <textarea id="data-input" class="regex-textarea" placeholder="Ví dụ: dán một danh sách email, số điện thoại, hoặc đường link vào đây..."></textarea>
-                <button id="analyze-btn">Phân tích và Tạo Regex</button>
-                <div id="analyze-status" class="regex-status"></div>
-            </div>
-
+            <h1>Regex Tester</h1>
             <div class="regex-tool-container">
-                <h3>2. Kiểm tra và Tinh chỉnh Regex</h3>
                 <div>
-                    <label for="regex-pattern">Biểu thức Regex (đã tạo):</label>
+                    <label for="regex-pattern">Biểu thức Regex:</label>
                     <input type="text" id="regex-pattern" class="regex-input" placeholder="/pattern/flags">
                     <div id="regex-error" class="regex-error"></div>
                 </div>
                 <div>
                     <label for="test-string">Chuỗi kiểm tra:</label>
-                    <textarea id="test-string" class="regex-textarea" placeholder="Dữ liệu mẫu của bạn sẽ được tự động sao chép vào đây để kiểm tra..."></textarea>
+                    <textarea id="test-string" class="regex-textarea" placeholder="Dán văn bản của bạn vào đây..."></textarea>
                 </div>
                 <div>
                     <label>Kết quả (kết quả trùng khớp sẽ được tô sáng):</label>
