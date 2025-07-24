@@ -83,6 +83,17 @@ fi
 sed -i "s/^#\?port = .*/port = $PORT/" "$PG_DATA/postgresql.conf"
 sed -i "s/^#\?listen_addresses = .*/listen_addresses = '*'/" "$PG_DATA/postgresql.conf"
 
+# === Cho phép listen từ IP bên ngoài ===
+sed -i "s/^#\?listen_addresses = .*/listen_addresses = '*'/" "$PG_DATA/postgresql.conf"
+sed -i "s/^#\?port = .*/port = $PORT/" "$PG_DATA/postgresql.conf"
+
+# === Thêm quyền cho remote IP vào pg_hba.conf ===
+cat <<EOF >> "$PG_DATA/pg_hba.conf"
+
+# Cho phép remote access
+host    all             all             0.0.0.0/0               scram-sha-256
+EOF
+
 # === Start PostgreSQL ===
 "$PG_PREFIX/bin/pg_ctl" -D "$PG_DATA" -l "$PG_DIR/logfile" start
 
