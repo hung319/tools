@@ -12,6 +12,10 @@ NSS_DIR="$HOME/fakeuser"
 NSS_SRC="nss_wrapper-1.1.15"
 PORT=5432
 
+# === Tùy chỉnh user và password ===
+PG_USER="yuu"              # 👤 Username muốn tạo
+PG_PASSWORD="oniichan123"  # 🔐 Password cho user đó
+
 # === Ensure directories ===
 mkdir -p "$PG_DIR" "$NSS_DIR"
 cd "$PG_DIR"
@@ -44,21 +48,51 @@ echo "postgres:x:$gid:" > "$PG_DIR/group.fake"
 export LD_PRELOAD="$NSS_DIR/$NSS_SRC/build/src/libnss_wrapper.so"
 export NSS_WRAPPER_PASSWD="$PG_DIR/passwd.fake"
 export NSS_WRAPPER_GROUP="$PG_DIR/group.fake"
+export PATH="$PG_PREFIX/bin:$PATH"
+
+# === Detect shell config file ===
+SHELL_NAME=$(basename "$SHELL")
+if [ "$SHELL_NAME" = "bash" ]; then
+    PROFILE_FILE="$HOME/.bashrc"
+elif [ "$SHELL_NAME" = "zsh" ]; then
+    PROFILE_FILE="$HOME/.zshrc"
+else
+    PROFILE_FILE="$HOME/.profile"
+fi
+
+# === Add exports to shell config file if not already added ===
+EXPORTS=$(cat <<EOF
+
+# PostgreSQL local setup
+export LD_PRELOAD="$LD_PRELOAD"
+export NSS_WRAPPER_PASSWD="$NSS_WRAPPER_PASSWD"
+export NSS_WRAPPER_GROUP="$NSS_WRAPPER_GROUP"
+export PATH="$PG_PREFIX/bin:\$PATH"
+EOF
+)
+
+if ! grep -q "NSS_WRAPPER_PASSWD" "$PROFILE_FILE"; then
+    echo "$EXPORTS" >> "$PROFILE_FILE"
+    echo "📝 Đã thêm cấu hình vào $PROFILE_FILE"
+fi
 
 # === Initialize PostgreSQL ===
 "$PG_PREFIX/bin/initdb" -D "$PG_DATA"
 
-# === Configure port and listen_addresses ===
+# === Configure PostgreSQL ===
 sed -i "s/^#\?port = .*/port = $PORT/" "$PG_DATA/postgresql.conf"
 sed -i "s/^#\?listen_addresses = .*/listen_addresses = '*'/" "$PG_DATA/postgresql.conf"
 
 # === Start PostgreSQL ===
 "$PG_PREFIX/bin/pg_ctl" -D "$PG_DATA" -l "$PG_DIR/logfile" start
 
+# === Tạo user và đặt mật khẩu ===
+echo "CREATE USER $PG_USER WITH SUPERUSER PASSWORD '$PG_PASSWORD';" | "$PG_PREFIX/bin/psql" -U postgres -p $PORT || \
+echo "ALTER USER $PG_USER WITH PASSWORD '$PG_PASSWORD';" | "$PG_PREFIX/bin/psql" -U postgres -p $PORT
+
 # === Done ===
 echo
-echo "✅ PostgreSQL $PG_VERSION installed and running on port $PORT"
-echo "➤ To use psql, createuser, etc., export these:"
-echo "export LD_PRELOAD=$LD_PRELOAD"
-echo "export NSS_WRAPPER_PASSWD=$NSS_WRAPPER_PASSWD"
-echo "export NSS_WRAPPER_GROUP=$NSS_WRAPPER_GROUP"
+echo "✅ PostgreSQL $PG_VERSION đã được cài và chạy ở port $PORT"
+echo "👤 User: $PG_USER"
+echo "🔐 Pass: $PG_PASSWORD"
+echo "🧠 Các biến môi trường đã thêm vào $PROFILE_FILE (dùng 'source $PROFILE_FILE' để áp dụng)"
