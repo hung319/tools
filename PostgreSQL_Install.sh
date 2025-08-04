@@ -12,16 +12,14 @@ NSS_SRC="nss_wrapper-1.1.15"
 PORT=5432
 TMPDIR="${TMPDIR:-$HOME/.tmp}"
 
-# === Tùy chỉnh user và password ===
 PG_USER="yuu"
 PG_PASSWORD="oniichan123"
 
-# === Tạo thư mục cần thiết ===
 mkdir -p "$PG_DIR" "$NSS_DIR" "$TMPDIR" "$PG_PREFIX"
 
-# === Tải và cài OpenSSL (non-root) ===
-cd "$TMPDIR"
+# === Build OpenSSL ===
 OPENSSL_VERSION="1.1.1u"
+cd "$TMPDIR"
 curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz"
 tar -xzf "openssl-$OPENSSL_VERSION.tar.gz"
 cd "openssl-$OPENSSL_VERSION"
@@ -29,7 +27,17 @@ cd "openssl-$OPENSSL_VERSION"
 make -j$(nproc)
 make install
 
-# === Tải và cài PostgreSQL ===
+# === Build libxml2 ===
+LIBXML2_VERSION="2.9.12"
+cd "$TMPDIR"
+curl -LO "http://xmlsoft.org/sources/libxml2-$LIBXML2_VERSION.tar.gz"
+tar -xzf "libxml2-$LIBXML2_VERSION.tar.gz"
+cd "libxml2-$LIBXML2_VERSION"
+./configure --prefix="$PG_PREFIX/libxml2" --without-python
+make -j$(nproc)
+make install
+
+# === Download và build PostgreSQL ===
 cd "$PG_DIR"
 curl -LO "https://ftp.postgresql.org/pub/source/v$PG_VERSION/$PG_SRC.tar.gz"
 tar -xzf "$PG_SRC.tar.gz"
@@ -37,14 +45,15 @@ cd "$PG_SRC"
 
 ./configure --prefix="$PG_PREFIX" \
   --with-openssl \
-  --with-includes="$PG_PREFIX/openssl/include" \
-  --with-libraries="$PG_PREFIX/openssl/lib" \
+  --with-libxml \
+  --with-includes="$PG_PREFIX/openssl/include:$PG_PREFIX/libxml2/include/libxml2" \
+  --with-libraries="$PG_PREFIX/openssl/lib:$PG_PREFIX/libxml2/lib" \
   --without-icu
 
 make -j$(nproc)
 make install
 
-# === Build tất cả extension trong contrib/ ===
+# === Build toàn bộ extension trong contrib ===
 cd contrib
 for d in */; do
     cd "$d"
@@ -53,30 +62,30 @@ for d in */; do
     cd ..
 done
 
-# === Cài nss_wrapper ===
+# === Build nss_wrapper ===
 cd "$NSS_DIR"
 curl -LO "https://ftp.samba.org/pub/cwrap/${NSS_SRC}.tar.gz"
 tar -xzf "${NSS_SRC}.tar.gz"
 cd "$NSS_SRC"
-mkdir build && cd build
+mkdir -p build && cd build
 cmake ..
 make -j$(nproc)
 
-# === Tạo user giả mạo ===
+# === Fake passwd & group ===
 cd "$PG_DIR"
 uid=$(id -u)
 gid=$(id -g)
 echo "postgres:x:$uid:$gid:PostgreSQL User:/home/container:/bin/bash" > "$PG_DIR/passwd.fake"
 echo "postgres:x:$gid:" > "$PG_DIR/group.fake"
 
-# === Export biến môi trường ===
+# === Export env ===
 export LD_PRELOAD="$NSS_DIR/$NSS_SRC/build/src/libnss_wrapper.so"
 export NSS_WRAPPER_PASSWD="$PG_DIR/passwd.fake"
 export NSS_WRAPPER_GROUP="$PG_DIR/group.fake"
 export PATH="$PG_PREFIX/bin:$PATH"
-export LD_LIBRARY_PATH="$PG_PREFIX/openssl/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$PG_PREFIX/openssl/lib:$PG_PREFIX/libxml2/lib:$LD_LIBRARY_PATH"
 
-# === Ghi lại vào profile nếu chưa có ===
+# === Add vào shell config nếu chưa có ===
 SHELL_NAME=$(basename "$SHELL")
 if [ "$SHELL_NAME" = "bash" ]; then
     PROFILE_FILE="$HOME/.bashrc"
@@ -93,7 +102,7 @@ export LD_PRELOAD="$LD_PRELOAD"
 export NSS_WRAPPER_PASSWD="$NSS_WRAPPER_PASSWD"
 export NSS_WRAPPER_GROUP="$NSS_WRAPPER_GROUP"
 export PATH="$PG_PREFIX/bin:\$PATH"
-export LD_LIBRARY_PATH="$PG_PREFIX/openssl/lib:\$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$PG_PREFIX/openssl/lib:$PG_PREFIX/libxml2/lib:\$LD_LIBRARY_PATH"
 EOF
 )
 
@@ -102,33 +111,31 @@ if ! grep -q "NSS_WRAPPER_PASSWD" "$PROFILE_FILE"; then
     echo "📝 Đã thêm cấu hình vào $PROFILE_FILE"
 fi
 
-# === Khởi tạo database ===
+# === Init database cluster ===
 "$PG_PREFIX/bin/initdb" -D "$PG_DATA"
 
 # === Cấu hình postgresql.conf ===
 sed -i "s/^#\?port = .*/port = $PORT/" "$PG_DATA/postgresql.conf"
 sed -i "s/^#\?listen_addresses = .*/listen_addresses = '*'/" "$PG_DATA/postgresql.conf"
 
-# === Thêm quyền vào pg_hba.conf ===
+# === Cho phép remote access ===
 cat <<EOF >> "$PG_DATA/pg_hba.conf"
 
 # Cho phép remote access
 host    all             all             0.0.0.0/0               scram-sha-256
 EOF
 
-# === Khởi động PostgreSQL ===
+# === Start PostgreSQL ===
 "$PG_PREFIX/bin/pg_ctl" -D "$PG_DATA" -l "$PG_DIR/logfile" start
 
-# === Tạo user PostgreSQL và enable pgcrypto ===
+# === Tạo user PostgreSQL và bật extension ===
 echo "CREATE USER $PG_USER WITH SUPERUSER PASSWORD '$PG_PASSWORD';" | "$PG_PREFIX/bin/psql" -U postgres -p $PORT || \
 echo "ALTER USER $PG_USER WITH PASSWORD '$PG_PASSWORD';" | "$PG_PREFIX/bin/psql" -U postgres -p $PORT
 
-# === Enable pgcrypto ===
 "$PG_PREFIX/bin/psql" -U "$PG_USER" -p "$PORT" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
 
-# === Xong rồi đó Yuu Onii-chan 💖 ===
 echo
-echo "✅ PostgreSQL $PG_VERSION đã cài thành công non-root!"
-echo "📦 Extensions đã được build"
+echo "✅ PostgreSQL $PG_VERSION đã được cài thành công non-root!"
 echo "🔐 User: $PG_USER | Password: $PG_PASSWORD"
-echo "🧠 Biến môi trường đã thêm vào $PROFILE_FILE (nhớ source nhé!)"
+echo "📦 Extension: pgcrypto đã được bật"
+echo "🧠 source $PROFILE_FILE để dùng ngay"
