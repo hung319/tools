@@ -9,6 +9,7 @@ MYSQL_PORT="3307"
 MYSQL_DIR="$HOME/mysql"
 MYSQL_DATA="$MYSQL_DIR/data"
 LIB_DIR="$HOME/.local/lib"
+MY_CNF="$MYSQL_DIR/my.cnf"
 
 # ==== Detect architecture ====
 ARCH=$(uname -m)
@@ -75,32 +76,35 @@ cd "$LIB_DIR"
 ln -sf libtinfo.so.5.9 libtinfo.so.5
 cd "$MYSQL_DIR"
 
+# ==== Config file ====
+cat > "$MY_CNF" <<EOF
+[mysqld]
+basedir=$MYSQL_BASE
+datadir=$MYSQL_DATA
+port=$MYSQL_PORT
+bind-address=0.0.0.0
+EOF
+
 # ==== Init MySQL data dir ====
-"$MYSQL_BASE/bin/mysqld" --initialize-insecure \
-  --user=$(whoami) \
-  --basedir="$MYSQL_BASE" \
-  --datadir="$MYSQL_DATA" \
-  --port=$MYSQL_PORT
+"$MYSQL_BASE/bin/mysqld" --defaults-file="$MY_CNF" --initialize-insecure --user=$(whoami)
 
 # ==== Start MySQL (background) ====
-"$MYSQL_BASE/bin/mysqld" --user=$(whoami) \
-  --basedir="$MYSQL_BASE" \
-  --datadir="$MYSQL_DATA" \
-  --port=$MYSQL_PORT &
+"$MYSQL_BASE/bin/mysqld" --defaults-file="$MY_CNF" --user=$(whoami) &
 
 sleep 5
 
 # ==== Setup users ====
 "$MYSQL_BASE/bin/mysql" -u root -e "
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_PASS}';
-FLUSH PRIVILEGES;
-CREATE USER '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PASS}';
-GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_USER}'@'localhost' WITH GRANT OPTION;
+CREATE USER 'root'@'%' IDENTIFIED BY '${MYSQL_PASS}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+CREATE USER '${MYSQL_USER}'@'%' IDENTIFIED BY '${MYSQL_PASS}';
+GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_USER}'@'%' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 "
 
 echo "✅ MySQL ${MYSQL_VERSION} setup completed!"
 echo "👉 Start server with:"
-echo "   mysqld --user=\$(whoami) --basedir=$MYSQL_BASE --datadir=$MYSQL_DATA --port=$MYSQL_PORT"
+echo "   mysqld --defaults-file=$MY_CNF --user=\$(whoami)"
 echo "👉 Connect with:"
-echo "   mysql -u ${MYSQL_USER} -p${MYSQL_PASS} -P ${MYSQL_PORT}"
+echo "   mysql -u ${MYSQL_USER} -p${MYSQL_PASS} -h 127.0.0.1 -P ${MYSQL_PORT}"
