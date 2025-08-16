@@ -1,1 +1,0 @@
-mkdir -p /opt/stacks /opt/dockge && cd /opt/dockge && curl https://raw.githubusercontent.com/hung319/tools/refs/heads/main/dockge%20compose --output compose.yaml && docker compose up -d
