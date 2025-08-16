@@ -2,30 +2,30 @@
 set -e
 
 # ==== CONFIG ====
-MYSQL_DIR="$HOME/mysql"              # Folder cài MySQL
-DATA_DIR="$MYSQL_DIR/data"           # Data folder
-MYSQL_VERSION="8.0.34"               # Phiên bản MySQL
-PASS="11042006"                      # Mật khẩu root và user mới
-NEW_USER="hung319"                   # User mới
-PORT=3307                            # Port MySQL
-# =================
+MYSQL_VERSION="8.0.34"
+MYSQL_USER="hung319"
+MYSQL_PASS="11042006"
+MYSQL_PORT="3307"
+MYSQL_DIR="$HOME/mysql"
+MYSQL_DATA="$MYSQL_DIR/data"
+LIB_DIR="$HOME/.local/lib"
 
-mkdir -p "$MYSQL_DIR" "$DATA_DIR"
-cd "$MYSQL_DIR"
-
-# ==== Detect kiến trúc ====
+# ==== Detect architecture ====
 ARCH=$(uname -m)
-if [[ "$ARCH" == "x86_64" ]]; then
-    MYSQL_PKG="mysql-${MYSQL_VERSION}-linux-glibc2.12-x86_64.tar.xz"
-    LIBTINFO_DEB="libtinfo5_6.2+20201114-2+deb11u2_amd64.deb"
-elif [[ "$ARCH" == "aarch64" ]]; then
-    MYSQL_PKG="mysql-${MYSQL_VERSION}-linux-glibc2.17-aarch64.tar.xz"
-    LIBTINFO_DEB="libtinfo5_6.2+20201114-2+deb11u2_arm64.deb"
-else
-    echo "❌ Kiến trúc $ARCH chưa được hỗ trợ!"
-    exit 1
+case "$ARCH" in
+    x86_64)  MYSQL_PKG="mysql-${MYSQL_VERSION}-linux-glibc2.12-x86_64.tar.xz" ;;
+    aarch64) MYSQL_PKG="mysql-${MYSQL_VERSION}-linux-glibc2.17-aarch64.tar.xz" ;;
+    *) echo "❌ Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
+# ==== Update LD_LIBRARY_PATH in bashrc ====
+if ! grep -q "LD_LIBRARY_PATH" ~/.bashrc; then
+    echo "export LD_LIBRARY_PATH=$LIB_DIR:\$LD_LIBRARY_PATH" >> ~/.bashrc
 fi
-echo "✅ Phát hiện kiến trúc: $ARCH"
+
+# ==== Create dirs ====
+mkdir -p "$MYSQL_DIR" "$MYSQL_DATA" "$LIB_DIR"
+cd "$MYSQL_DIR"
 
 # ==== Download & extract MySQL ====
 if [ ! -f "$MYSQL_PKG" ]; then
@@ -33,67 +33,74 @@ if [ ! -f "$MYSQL_PKG" ]; then
 fi
 tar -xf "$MYSQL_PKG"
 
-MYSQL_BASE="$MYSQL_DIR/mysql-${MYSQL_VERSION}-linux-glibc2."*
+# Lấy chính xác thư mục MySQL đã giải nén
+MYSQL_BASE=$(find "$MYSQL_DIR" -maxdepth 1 -type d -name "mysql-${MYSQL_VERSION}-linux-glibc2.*" | head -n 1)
 
-# ==== Cài libaio ====
-wget -q http://ftp.de.debian.org/debian/pool/main/liba/libaio/libaio_0.3.112.orig.tar.xz
+# ==== Add MySQL bin to PATH in bashrc ====
+if ! grep -q "$MYSQL_BASE/bin" ~/.bashrc; then
+    echo "export PATH=$MYSQL_BASE/bin:\$PATH" >> ~/.bashrc
+fi
+
+# ==== Build dependencies ====
+# libaio
+wget -nc http://ftp.de.debian.org/debian/pool/main/liba/libaio/libaio_0.3.112.orig.tar.xz
 tar -xf libaio_0.3.112.orig.tar.xz
-cd libaio-0.3.112
+cd libaio-0.3.112/
 make
-cp src/libaio.so.1.* ~/.local/lib/
-cd ~/.local/lib
+cp src/libaio.so.1.* "$LIB_DIR/"
+cd "$LIB_DIR"
 ln -sf libaio.so.1.* libaio.so.1
 cd "$MYSQL_DIR"
 
-# ==== Cài ncurses ====
-wget -q https://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.4.tar.gz
+# ncurses
+wget -nc https://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.4.tar.gz
 tar -xf ncurses-6.4.tar.gz
-cd ncurses-6.4
+cd ncurses-6.4/
 ./configure --prefix=$HOME/.local --with-shared
 make
 make install
 cd "$MYSQL_DIR"
 
-# ==== Cài libtinfo phù hợp kiến trúc ====
-wget -q "http://ftp.de.debian.org/debian/pool/main/n/ncurses/$LIBTINFO_DEB"
+# libtinfo (amd64 & arm64)
+case "$ARCH" in
+    x86_64)  LIBTINFO_DEB="libtinfo5_6.2+20201114-2+deb11u2_amd64.deb" ;;
+    aarch64) LIBTINFO_DEB="libtinfo5_6.2+20201114-2+deb11u2_arm64.deb" ;;
+esac
+wget -nc "http://ftp.de.debian.org/debian/pool/main/n/ncurses/$LIBTINFO_DEB"
 ar -x "$LIBTINFO_DEB"
-tar -xf data.tar.xz
-if [[ "$ARCH" == "x86_64" ]]; then
-    cp lib/x86_64-linux-gnu/libtinfo.so.5.9 ~/.local/lib/
-elif [[ "$ARCH" == "aarch64" ]]; then
-    cp lib/aarch64-linux-gnu/libtinfo.so.5.9 ~/.local/lib/
-fi
-cd ~/.local/lib
+tar -xf data.tar.* || true
+cp lib/x86_64-linux-gnu/libtinfo.so.5.9 "$LIB_DIR/" 2>/dev/null || true
+cp lib/aarch64-linux-gnu/libtinfo.so.5.9 "$LIB_DIR/" 2>/dev/null || true
+cd "$LIB_DIR"
 ln -sf libtinfo.so.5.9 libtinfo.so.5
 cd "$MYSQL_DIR"
 
-# ==== Tạo config file ====
-cat > "$MYSQL_DIR/my.cnf" <<EOF
-[mysqld]
-basedir=$MYSQL_BASE
-datadir=$DATA_DIR
-port=$PORT
-socket=$MYSQL_DIR/mysql.sock
-EOF
+# ==== Init MySQL data dir ====
+"$MYSQL_BASE/bin/mysqld" --initialize-insecure \
+  --user=$(whoami) \
+  --basedir="$MYSQL_BASE" \
+  --datadir="$MYSQL_DATA" \
+  --port=$MYSQL_PORT
 
-# ==== Khởi tạo MySQL ====
-"$MYSQL_BASE/bin/mysqld" --defaults-file="$MYSQL_DIR/my.cnf" --initialize-insecure --user=$(whoami)
+# ==== Start MySQL (background) ====
+"$MYSQL_BASE/bin/mysqld" --user=$(whoami) \
+  --basedir="$MYSQL_BASE" \
+  --datadir="$MYSQL_DATA" \
+  --port=$MYSQL_PORT &
 
-# ==== Đổi pass root + tạo user mới ====
-"$MYSQL_BASE/bin/mysqld" --defaults-file="$MYSQL_DIR/my.cnf" --daemonize --user=$(whoami)
 sleep 5
-"$MYSQL_BASE/bin/mysql" -u root -e "
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$PASS';
-CREATE USER '$NEW_USER'@'localhost' IDENTIFIED BY '$PASS';
-GRANT ALL PRIVILEGES ON *.* TO '$NEW_USER'@'localhost' WITH GRANT OPTION;
-FLUSH PRIVILEGES;"
 
-# ==== Done ====
-echo ""
-echo "✅ MySQL $MYSQL_VERSION đã được cài đặt thành công!"
-echo "📂 Thư mục: $MYSQL_BASE"
-echo "⚙️  Config: $MYSQL_DIR/my.cnf"
-echo "🔑 Root & $NEW_USER password: $PASS"
-echo ""
-echo "👉 Lệnh chạy mysqld:"
-echo "$MYSQL_BASE/bin/mysqld --defaults-file=$MYSQL_DIR/my.cnf --user=$(whoami)"
+# ==== Setup users ====
+"$MYSQL_BASE/bin/mysql" -u root -e "
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_PASS}';
+FLUSH PRIVILEGES;
+CREATE USER '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PASS}';
+GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_USER}'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+"
+
+echo "✅ MySQL ${MYSQL_VERSION} setup completed!"
+echo "👉 Start server with:"
+echo "   mysqld --user=\$(whoami) --basedir=$MYSQL_BASE --datadir=$MYSQL_DATA --port=$MYSQL_PORT"
+echo "👉 Connect with:"
+echo "   mysql -u ${MYSQL_USER} -p${MYSQL_PASS} -P ${MYSQL_PORT}"
