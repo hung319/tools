@@ -7,13 +7,13 @@ PG_SRC="postgresql-$PG_VERSION"
 PG_DIR="$HOME/pgsql"
 PG_PREFIX="$PG_DIR/pg16local"
 PG_DATA="$PG_DIR/data"
-NSS_DIR="$HOME/fakeuser"
+NSS_DIR="$PG_DIR/fakeuser"
 NSS_SRC="nss_wrapper-1.1.15"
 PORT=5432
-TMPDIR="${TMPDIR:-$HOME/.tmp}"
+TMPDIR="${TMPDIR:-$HOME/.local/tmp}"
 
-PG_USER="yuu"
-PG_PASSWORD="oniichan123"
+PG_USER="hung319"
+PG_PASSWORD="11042006"
 
 mkdir -p "$PG_DIR" "$NSS_DIR" "$TMPDIR" "$PG_PREFIX"
 
@@ -27,11 +27,11 @@ cd "openssl-$OPENSSL_VERSION"
 make -j$(nproc)
 make install
 
-# === Build libxml2 ===
-LIBXML2_VERSION="2.9.12"
+# === Build libxml2 (2.14.5) ===
+LIBXML2_VERSION="2.14.5"
 cd "$TMPDIR"
-curl -LO "http://xmlsoft.org/sources/libxml2-$LIBXML2_VERSION.tar.gz"
-tar -xzf "libxml2-$LIBXML2_VERSION.tar.gz"
+curl -LO "https://download.gnome.org/sources/libxml2/2.14/libxml2-$LIBXML2_VERSION.tar.xz"
+tar -xf "libxml2-$LIBXML2_VERSION.tar.xz"
 cd "libxml2-$LIBXML2_VERSION"
 ./configure --prefix="$PG_PREFIX/libxml2" --without-python
 make -j$(nproc)
@@ -71,19 +71,23 @@ mkdir -p build && cd build
 cmake ..
 make -j$(nproc)
 
-# === Fake passwd & group ===
+# === Fake passwd & group dựa trên PG_USER ===
 cd "$PG_DIR"
 uid=$(id -u)
 gid=$(id -g)
-echo "postgres:x:$uid:$gid:PostgreSQL User:/home/container:/bin/bash" > "$PG_DIR/passwd.fake"
-echo "postgres:x:$gid:" > "$PG_DIR/group.fake"
+echo "$PG_USER:x:$uid:$gid:PostgreSQL User:$HOME:/bin/bash" > "$PG_DIR/passwd.fake"
+echo "$PG_USER:x:$gid:" > "$PG_DIR/group.fake"
 
-# === Export env ===
+# === Export env (runtime) ===
 export LD_PRELOAD="$NSS_DIR/$NSS_SRC/build/src/libnss_wrapper.so"
 export NSS_WRAPPER_PASSWD="$PG_DIR/passwd.fake"
 export NSS_WRAPPER_GROUP="$PG_DIR/group.fake"
 export PATH="$PG_PREFIX/bin:$PATH"
 export LD_LIBRARY_PATH="$PG_PREFIX/openssl/lib:$PG_PREFIX/libxml2/lib:$LD_LIBRARY_PATH"
+export PGUSER="$PG_USER"
+export PGPASSWORD="$PG_PASSWORD"
+export PGDATABASE="$PG_USER"
+export PGHOST="0.0.0.0"
 
 # === Add vào shell config nếu chưa có ===
 SHELL_NAME=$(basename "$SHELL")
@@ -98,11 +102,15 @@ fi
 EXPORTS=$(cat <<EOF
 
 # PostgreSQL local setup
-export LD_PRELOAD="$LD_PRELOAD"
-export NSS_WRAPPER_PASSWD="$NSS_WRAPPER_PASSWD"
-export NSS_WRAPPER_GROUP="$NSS_WRAPPER_GROUP"
-export PATH="$PG_PREFIX/bin:\$PATH"
-export LD_LIBRARY_PATH="$PG_PREFIX/openssl/lib:$PG_PREFIX/libxml2/lib:\$LD_LIBRARY_PATH"
+export LD_PRELOAD="\$HOME/pgsql/fakeuser/nss_wrapper-1.1.15/build/src/libnss_wrapper.so"
+export NSS_WRAPPER_PASSWD="\$HOME/pgsql/passwd.fake"
+export NSS_WRAPPER_GROUP="\$HOME/pgsql/group.fake"
+export PATH="\$HOME/pgsql/pg16local/bin:\$PATH"
+export LD_LIBRARY_PATH="\$HOME/pgsql/pg16local/openssl/lib:\$HOME/pgsql/pg16local/libxml2/lib:\$LD_LIBRARY_PATH"
+export PGUSER="$PG_USER"
+export PGPASSWORD="$PG_PASSWORD"
+export PGDATABASE="$PG_USER"
+export PGHOST="0.0.0.0"
 EOF
 )
 
@@ -125,17 +133,27 @@ cat <<EOF >> "$PG_DATA/pg_hba.conf"
 host    all             all             0.0.0.0/0               scram-sha-256
 EOF
 
-# === Start PostgreSQL ===
-"$PG_PREFIX/bin/pg_ctl" -D "$PG_DATA" -l "$PG_DIR/logfile" start
+# === Start PostgreSQL (wait) ===
+"$PG_PREFIX/bin/pg_ctl" -D "$PG_DATA" -l "$PG_DIR/logfile" -w start
 
-# === Tạo user PostgreSQL và bật extension ===
-echo "CREATE USER $PG_USER WITH SUPERUSER PASSWORD '$PG_PASSWORD';" | "$PG_PREFIX/bin/psql" -U postgres -p $PORT || \
-echo "ALTER USER $PG_USER WITH PASSWORD '$PG_PASSWORD';" | "$PG_PREFIX/bin/psql" -U postgres -p $PORT
+# === Tạo user PostgreSQL và DB ===
+echo "DO \$\$
+BEGIN
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$PG_USER') THEN
+      CREATE ROLE $PG_USER WITH LOGIN SUPERUSER PASSWORD '$PG_PASSWORD';
+   ELSE
+      ALTER ROLE $PG_USER WITH PASSWORD '$PG_PASSWORD';
+   END IF;
+END
+\$\$;" | "$PG_PREFIX/bin/psql" -U "$PG_USER" -p $PORT postgres
 
-"$PG_PREFIX/bin/psql" -U "$PG_USER" -p "$PORT" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+"$PG_PREFIX/bin/createdb" -U "$PG_USER" -p $PORT "$PG_USER" || true
+
+"$PG_PREFIX/bin/psql" -U "$PG_USER" -p "$PORT" -d "$PG_USER" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
 
 echo
 echo "✅ PostgreSQL $PG_VERSION đã được cài thành công non-root!"
 echo "🔐 User: $PG_USER | Password: $PG_PASSWORD"
 echo "📦 Extension: pgcrypto đã được bật"
+echo "🌐 PGHOST mặc định: 0.0.0.0"
 echo "🧠 source $PROFILE_FILE để dùng ngay"
