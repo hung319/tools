@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script để build và cài đặt Xvfb cho người dùng non-root trên Debian 11
-# PHIÊN BẢN HOÀN CHỈNH: Tự động kiểm tra dependency, sửa lỗi link, và cập nhật .bashrc thông minh.
+# PHIÊN BẢN HOÀN CHỈNH: Đã thêm libxkbfile và cập nhật link Bison.
 
 # Dừng script nếu có lỗi xảy ra
 set -e
@@ -28,37 +28,24 @@ NEEDS_HEADER=0
 
 # Kiểm tra PATH
 if ! grep -q "export PATH=\"$HOME/.local/bin:$INSTALL_DIR/bin:\$PATH\"" ~/.bashrc; then
-    echo 'export PATH="'$HOME/.local/bin:$INSTALL_DIR/bin':$PATH"' >> ~/.bashrc
-    echo "Đã thêm PATH vào .bashrc"
-    NEEDS_HEADER=1
+    echo 'export PATH="'$HOME/.local/bin:$INSTALL_DIR/bin':$PATH"' >> ~/.bashrc; NEEDS_HEADER=1
 fi
-
 # Kiểm tra PKG_CONFIG_PATH
 if ! grep -q "export PKG_CONFIG_PATH=\"$INSTALL_DIR/lib/pkgconfig:$INSTALL_DIR/share/pkgconfig:\$PKG_CONFIG_PATH\"" ~/.bashrc; then
-    echo 'export PKG_CONFIG_PATH="'$INSTALL_DIR/lib/pkgconfig:$INSTALL_DIR/share/pkgconfig':$PKG_CONFIG_PATH"' >> ~/.bashrc
-    echo "Đã thêm PKG_CONFIG_PATH vào .bashrc"
-    NEEDS_HEADER=1
+    echo 'export PKG_CONFIG_PATH="'$INSTALL_DIR/lib/pkgconfig:$INSTALL_DIR/share/pkgconfig':$PKG_CONFIG_PATH"' >> ~/.bashrc; NEEDS_HEADER=1
 fi
-
 # Kiểm tra LD_LIBRARY_PATH
 if ! grep -q "export LD_LIBRARY_PATH=\"$INSTALL_DIR/lib:\$LD_LIBRARY_PATH\"" ~/.bashrc; then
-    echo 'export LD_LIBRARY_PATH="'$INSTALL_DIR/lib':$LD_LIBRARY_PATH"' >> ~/.bashrc
-    echo "Đã thêm LD_LIBRARY_PATH vào .bashrc"
-    NEEDS_HEADER=1
+    echo 'export LD_LIBRARY_PATH="'$INSTALL_DIR/lib':$LD_LIBRARY_PATH"' >> ~/.bashrc; NEEDS_HEADER=1
 fi
-
 # Kiểm tra CFLAGS
 if ! grep -q "export CFLAGS=\"-I$INSTALL_DIR/include -I$INSTALL_DIR/include/freetype2 -I$INSTALL_DIR/include/libdrm\"" ~/.bashrc; then
-    echo 'export CFLAGS="'"-I$INSTALL_DIR/include -I$INSTALL_DIR/include/freetype2 -I$INSTALL_DIR/include/libdrm"'"' >> ~/.bashrc
-    echo "Đã thêm CFLAGS vào .bashrc"
-    NEEDS_HEADER=1
+    echo 'export CFLAGS="'"-I$INSTALL_DIR/include -I$INSTALL_DIR/include/freetype2 -I$INSTALL_DIR/include/libdrm"'"' >> ~/.bashrc; NEEDS_HEADER=1
 fi
-
 # Chỉ thêm dòng comment phân cách nếu có bất kỳ thay đổi nào và nó chưa tồn tại
 if [ "$NEEDS_HEADER" -eq 1 ] && ! grep -q "$CONFIG_BLOCK_HEADER" ~/.bashrc; then
     echo -e "\n$CONFIG_BLOCK_HEADER\n# (Các dòng trên được thêm tự động bởi script build)" >> ~/.bashrc
 fi
-
 echo "--- Hoàn tất kiểm tra .bashrc ---"
 
 
@@ -84,7 +71,7 @@ if ! command -v m4 &> /dev/null; then
 else echo "Lệnh 'm4' đã tồn tại, bỏ qua."; fi
 
 if ! command -v bison &> /dev/null; then
-    echo "--- Bắt đầu build bison ---"; wget -O bison-latest.tar.gz https://ftp.gnu.org/gnu/bison/bison-3.8.tar.xz; tar -xf bison-latest.tar.gz && cd bison-*/ && ./configure --prefix="$INSTALL_DIR" && make && make install; cd "$SRC_DIR" && rm -rf bison-*/ bison-latest.tar.gz
+    echo "--- Bắt đầu build bison ---"; wget https://ftp.gnu.org/gnu/bison/bison-3.8.tar.xz -O bison-3.8.tar.xz; tar -xf bison-3.8.tar.xz && cd bison-3.8/ && ./configure --prefix="$INSTALL_DIR" && make && make install; cd "$SRC_DIR" && rm -rf bison-*/ bison-3.8.tar.xz
 else echo "Lệnh 'bison' đã tồn tại, bỏ qua."; fi
 
 if ! command -v flex &> /dev/null; then
@@ -116,6 +103,7 @@ packages=(
     "libfontenc-1.1.4 https://www.x.org/pub/individual/lib/libfontenc-1.1.4.tar.bz2 fontenc"
     "libxfont2-2.0.5 https://www.x.org/archive/individual/lib/libXfont2-2.0.5.tar.gz xfont2"
     "xkeyboard-config-2.33 https://www.x.org/pub/individual/data/xkeyboard-config/xkeyboard-config-2.33.tar.bz2 xkeyboard-config"
+    "libxkbfile-1.1.0 https://www.x.org/pub/individual/lib/libxkbfile-1.1.0.tar.bz2 xkbfile" # <-- THÊM VÀO ĐÂY
     "xkbcomp-1.4.5 https://www.x.org/pub/individual/app/xkbcomp-1.4.5.tar.bz2 xkbcomp"
 )
 
@@ -127,7 +115,7 @@ for pkg_info in "${packages[@]}"; do
     if [ "$SHOULD_BUILD" -eq 0 ]; then echo "Thư viện/lệnh '$pkg_check_name' đã tồn tại, bỏ qua build $pkg_name_ver."; continue; fi
     echo "--- Bắt đầu build: $pkg_name_ver ---"
     pkg_filename=$(basename "$pkg_url")
-    if [ ! -f "$pkg_filename" ]; then wget "$pkg_url"; fi
+    if [ ! -f "$pkg_filename" ]; then wget "$pkg_url" -O "$pkg_filename"; fi
     pkg_dir=$(tar -tf "$pkg_filename" | head -1 | cut -f1 -d"/"); if [ -d "$pkg_dir" ]; then rm -rf "$pkg_dir"; fi
     tar -xf "$pkg_filename"; cd "$pkg_dir"
     
