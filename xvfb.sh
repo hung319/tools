@@ -84,7 +84,7 @@ if ! command -v m4 &> /dev/null; then
 else echo "Lệnh 'm4' đã tồn tại, bỏ qua."; fi
 
 if ! command -v bison &> /dev/null; then
-    echo "--- Bắt đầu build bison ---"; wget -O bison-latest.tar.gz http://ftp.gnu.org/gnu/bison/bison-latest.tar.gz; tar -xf bison-latest.tar.gz && cd bison-*/ && ./configure --prefix="$INSTALL_DIR" && make && make install; cd "$SRC_DIR" && rm -rf bison-*/ bison-latest.tar.gz
+    echo "--- Bắt đầu build bison ---"; wget -O bison-latest.tar.gz https://ftp.gnu.org/gnu/bison/bison-3.8.tar.xz; tar -xf bison-latest.tar.gz && cd bison-*/ && ./configure --prefix="$INSTALL_DIR" && make && make install; cd "$SRC_DIR" && rm -rf bison-*/ bison-latest.tar.gz
 else echo "Lệnh 'bison' đã tồn tại, bỏ qua."; fi
 
 if ! command -v flex &> /dev/null; then
