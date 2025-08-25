@@ -4,6 +4,7 @@
 # Script cài đặt MariaDB không cần quyền root (Phiên bản 10 - Tối ưu tốc độ)
 #
 # Các tính năng:
+# - Cài đặt vào ~/.local, lưu data/config ở ~/database/mariadb.
 # - Sử dụng toàn bộ lõi CPU để biên dịch nhanh hơn.
 # - Sửa lỗi "Access denied for user 'root'@'localhost'" sau khi cài đặt.
 # - Vô hiệu hóa CONNECT engine để tránh lỗi biên dịch.
@@ -15,16 +16,24 @@ set -e # Thoát ngay khi có lỗi
 set -o pipefail # Bắt lỗi trong các pipe
 
 # Phiên bản MariaDB và các thư viện phụ thuộc
-MARIADB_VERSION="10.6.12"
-ZLIB_VERSION="1.2.13"
+MARIADB_VERSION="10.6.18" # Đã cập nhật lên phiên bản ổn định gần đây
+ZLIB_VERSION="1.3.1"
 NCURSES_VERSION="6.4"
 LIBAIO_VERSION="0.3.113"
 
-# Các thư mục chính
-INSTALL_DIR="${HOME}/mariadb"
+# ### THAY ĐỔI ###: Cấu trúc thư mục mới theo yêu cầu
+# Thư mục cài đặt chính (chứa libs, binaries, etc.)
+INSTALL_DIR="${HOME}/.local"
+# Thư mục chứa nguồn code tải về để biên dịch
 SOURCE_DIR="${HOME}/src"
-DEPS_DIR="${HOME}/.local"
-DATA_DIR="${INSTALL_DIR}/data"
+# Thư mục riêng cho data và config của MariaDB
+DATABASE_DIR="${HOME}/database/mariadb"
+DATA_DIR="${DATABASE_DIR}/data"
+CONFIG_FILE="${DATABASE_DIR}/my.cnf"
+SOCKET_FILE="${DATABASE_DIR}/mysql.sock"
+# Thư mục cho các thư viện phụ thuộc (trùng với INSTALL_DIR)
+DEPS_DIR="${INSTALL_DIR}"
+
 
 # Thông tin kết nối cơ sở dữ liệu (có thể tùy chỉnh)
 export MARIADB_USER="myuser"
@@ -32,15 +41,15 @@ export MARIADB_PASSWORD="mypassword"
 export MARIADB_PORT="3307"
 
 # Tạo các thư mục cần thiết
-mkdir -p "${SOURCE_DIR}" "${INSTALL_DIR}" "${DEPS_DIR}" "${DATA_DIR}"
+mkdir -p "${SOURCE_DIR}" "${INSTALL_DIR}" "${DATABASE_DIR}" "${DATA_DIR}"
 echo "✅ Các thư mục đã được chuẩn bị."
 
 # --- Phần 2: Kiểm tra và cài đặt thư viện phụ thuộc ---
 
 # Thiết lập môi trường để ưu tiên các thư viện cục bộ
-export PKG_CONFIG_PATH="${DEPS_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+export PKG_CONFIG_PATH="${DEPS_DIR}/lib/pkgconfig:${DEPS_DIR}/lib64/pkgconfig:${PKG_CONFIG_PATH}"
 export CPPFLAGS="-I${DEPS_DIR}/include"
-export LDFLAGS="-L${DEPS_DIR}/lib"
+export LDFLAGS="-L${DEPS_DIR}/lib -L${DEPS_DIR}/lib64"
 
 # Dùng pkg-config để kiểm tra thư viện
 check_lib() {
@@ -137,49 +146,51 @@ rm -rf build
 mkdir -p build && cd build
 
 echo "⚙️ Đang cấu hình quá trình biên dịch MariaDB..."
+# ### THAY ĐỔI ###: Cập nhật đường dẫn cài đặt và dữ liệu
 cmake .. \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
     -DMYSQL_DATADIR="${DATA_DIR}" \
     -DCMAKE_PREFIX_PATH="${DEPS_DIR}" \
-    -DCMAKE_INSTALL_RPATH="${DEPS_DIR}/lib" \
+    -DCMAKE_INSTALL_RPATH="${DEPS_DIR}/lib;${DEPS_DIR}/lib64" \
     -DWITH_SSL=system \
     -DWITHOUT_TOKUDB=1 \
     -DWITHOUT_CONNECT_STORAGE_ENGINE=1
 
 echo "🛠️ Đang biên dịch MariaDB với toàn bộ CPU..."
-# TĂNG TỐC: Sử dụng toàn bộ lõi CPU
 make -j$(nproc)
 
 echo "⏳ Đang cài đặt MariaDB..."
 make install
 
 # --- Phần 5: Khởi tạo Cơ sở dữ liệu ---
+# ### THAY ĐỔI ###: Sử dụng đường dẫn mới
 cd "${INSTALL_DIR}"
 
 echo "🚀 Đang khởi tạo cơ sở dữ liệu ban đầu..."
 ./scripts/mysql_install_db --user=$(whoami) --datadir="${DATA_DIR}" --basedir="${INSTALL_DIR}"
 
-# Tạo file cấu hình my.cnf
-cat > "${INSTALL_DIR}/my.cnf" <<EOL
+# ### THAY ĐỔI ###: Tạo file cấu hình ở vị trí mới
+echo "📝 Tạo file cấu hình tại ${CONFIG_FILE}"
+cat > "${CONFIG_FILE}" <<EOL
 [mysqld]
 basedir=${INSTALL_DIR}
 datadir=${DATA_DIR}
-socket=${INSTALL_DIR}/mysql.sock
+socket=${SOCKET_FILE}
 port=${MARIADB_PORT}
 user=$(whoami)
 
 [client]
-socket=${INSTALL_DIR}/mysql.sock
+socket=${SOCKET_FILE}
 port=${MARIADB_PORT}
 EOL
 
 echo "🔑 Đang thiết lập người dùng và mật khẩu..."
-./bin/mysqld_safe --defaults-file="${INSTALL_DIR}/my.cnf" --skip-grant-tables --skip-networking --nowatch &
+./bin/mysqld_safe --defaults-file="${CONFIG_FILE}" --skip-grant-tables --skip-networking --nowatch &
 MARIADB_PID=$!
 
 echo "⏳ Chờ server khởi động để thiết lập bảo mật..."
 for i in {30..0}; do
-    if ./bin/mysqladmin ping --socket="${INSTALL_DIR}/mysql.sock" &>/dev/null; then
+    if ./bin/mysqladmin ping --socket="${SOCKET_FILE}" &>/dev/null; then
         break
     fi
     echo -n "."
@@ -191,7 +202,8 @@ if [ "$i" = 0 ]; then
 fi
 echo ""
 
-./bin/mysql --socket="${INSTALL_DIR}/mysql.sock" -u root <<-EOSQL
+# ### THAY ĐỔI ###: Kết nối tới socket mới
+./bin/mysql --socket="${SOCKET_FILE}" -u root <<-EOSQL
     FLUSH PRIVILEGES;
     ALTER USER 'root'@'localhost' IDENTIFIED BY '${MARIADB_PASSWORD}';
     CREATE USER '${MARIADB_USER}'@'localhost' IDENTIFIED BY '${MARIADB_PASSWORD}';
@@ -215,10 +227,12 @@ fi
 if [ -n "$SHELL_CONFIG_FILE" ]; then
     echo "🖋️ Đang thêm biến môi trường vào ${SHELL_CONFIG_FILE}..."
     if ! grep -q "# MariaDB Custom Install" "${SHELL_CONFIG_FILE}"; then
+        # ### THAY ĐỔI ###: Cập nhật biến môi trường và thêm biến config
         cat >> "${SHELL_CONFIG_FILE}" <<-EOL
 
 # MariaDB Custom Install
 export MARIADB_HOME="${INSTALL_DIR}"
+export MARIADB_CONFIG="${CONFIG_FILE}"
 export PATH="\$MARIADB_HOME/bin:\$PATH"
 export MARIADB_USER="${MARIADB_USER}"
 export MARIADB_PASSWORD="${MARIADB_PASSWORD}"
@@ -236,21 +250,21 @@ fi
 echo ""
 echo "🎉 Cài đặt MariaDB hoàn tất! 🎉"
 echo "======================================================"
-echo "  Thư mục cài đặt: ${INSTALL_DIR}"
-echo "  Thư mục dữ liệu: ${DATA_DIR}"
-echo "  Thư mục libs:    ${DEPS_DIR} (dùng chung)"
-echo "  Người dùng:      ${MARIADB_USER}"
-echo "  Mật khẩu:        ${MARIADB_PASSWORD}"
-echo "  Cổng:            ${MARIADB_PORT}"
+# ### THAY ĐỔI ###: Cập nhật thông tin hiển thị
+echo "  Thư mục cài đặt (bin, libs): ${INSTALL_DIR}"
+echo "  Thư mục Cấu hình & Dữ liệu: ${DATABASE_DIR}"
+echo "  Người dùng:                   ${MARIADB_USER}"
+echo "  Mật khẩu:                    ${MARIADB_PASSWORD}"
+echo "  Cổng:                        ${MARIADB_PORT}"
 echo "======================================================"
 echo ""
 echo "Để bắt đầu, hãy làm theo các bước sau:"
 echo "1. Mở một terminal mới hoặc chạy lệnh: source ${SHELL_CONFIG_FILE}"
 echo "2. Khởi động server MariaDB:"
-echo "   mysqld_safe --defaults-file=\${MARIADB_HOME}/my.cnf &"
+echo "   mysqld_safe --defaults-file=\"\${MARIADB_CONFIG}\" &"
 echo "3. Kết nối tới server:"
-echo "   mysql -u \${MARIADB_USER} -p"
+echo "   mysql -u \"\${MARIADB_USER}\" -p"
 echo "   (Nhập mật khẩu: ${MARIADB_PASSWORD})"
 echo "4. Để dừng server:"
-echo "   mysqladmin -u \${MARIADB_USER} -p shutdown"
+echo "   mysqladmin -u \"\${MARIADB_USER}\" -p shutdown"
 echo ""
