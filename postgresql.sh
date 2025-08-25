@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -e
 
 # === CONFIG ===
@@ -8,41 +9,42 @@ OPENSSL_VERSION="1.1.1u"
 LIBXML2_VERSION="2.14.5"
 NSS_WRAPPER_VERSION="1.1.15"
 
-# Đường dẫn cài đặt (MỚI)
-# Tất cả phần mềm (binary, lib, include) sẽ được cài vào ~/.local
-INSTALL_PREFIX="$HOME/.local"
+# Đường dẫn cài đặt cho các thư viện phụ thuộc (openssl, libxml2)
+# Giữ ở ~/.local để không lẫn với PostgreSQL
+DEPS_INSTALL_PREFIX="$HOME/.local"
 
-# Đường dẫn cho dữ liệu runtime (giữ nguyên cấu trúc cũ)
-# Chứa data, log, và các file fake user để không làm lộn xộn ~/.local
+# (THAY ĐỔI) Đường dẫn cho PostgreSQL và tất cả dữ liệu runtime
+# Tất cả mọi thứ của PostgreSQL (binary, lib, data, log) sẽ nằm ở đây
 PG_RUNTIME_DIR="$HOME/pgsql"
 PG_DATA="$PG_RUNTIME_DIR/data"
 NSS_DIR="$PG_RUNTIME_DIR/fakeuser"
 
 # Cấu hình khác
 PORT=5432
-TMPDIR="${TMPDIR:-$HOME/.local/tmp}" # Thư mục tạm để build
+TMPDIR="${TMPDIR:-$HOME/.tmp-build}" # Thư mục tạm để build, tách riêng
 PG_USER="hung319"
 PG_PASSWORD="11042006" # Bạn nên thay đổi mật khẩu này
 
 # === Setup ===
 # Tạo các thư mục cần thiết
-mkdir -p "$INSTALL_PREFIX/bin" "$INSTALL_PREFIX/lib" "$PG_RUNTIME_DIR" "$NSS_DIR" "$TMPDIR" "$PG_DATA"
+mkdir -p "$DEPS_INSTALL_PREFIX/bin" "$DEPS_INSTALL_PREFIX/lib" "$PG_RUNTIME_DIR" "$NSS_DIR" "$TMPDIR" "$PG_DATA"
 
-# (TỐI ƯU) Đặt các biến môi trường để trình biên dịch tự tìm thư viện
-export CFLAGS="-I$INSTALL_PREFIX/include"
-export LDFLAGS="-L$INSTALL_PREFIX/lib"
-export LD_LIBRARY_PATH="$INSTALL_PREFIX/lib:$LD_LIBRARY_PATH"
-export PATH="$INSTALL_PREFIX/bin:$PATH"
+# (TỐI ƯU) Đặt các biến môi trường để trình biên dịch và runtime tìm đúng thư viện
+# Cần cả đường dẫn của DEPS và PG sau khi cài đặt
+export CFLAGS="-I$DEPS_INSTALL_PREFIX/include"
+export LDFLAGS="-L$DEPS_INSTALL_PREFIX/lib"
+export LD_LIBRARY_PATH="$PG_RUNTIME_DIR/lib:$DEPS_INSTALL_PREFIX/lib:$LD_LIBRARY_PATH"
+export PATH="$PG_RUNTIME_DIR/bin:$DEPS_INSTALL_PREFIX/bin:$PATH"
 
 # --- Build OpenSSL ---
 echo "🔎 Kiểm tra OpenSSL..."
-if [ ! -f "$INSTALL_PREFIX/lib/libssl.so" ]; then
+if [ ! -f "$DEPS_INSTALL_PREFIX/lib/libssl.so" ]; then
     echo "🚀 OpenSSL chưa được cài đặt. Bắt đầu build v$OPENSSL_VERSION..."
     cd "$TMPDIR"
     curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz"
     tar -xzf "openssl-$OPENSSL_VERSION.tar.gz"
     cd "openssl-$OPENSSL_VERSION"
-    ./config --prefix="$INSTALL_PREFIX" --openssldir="$INSTALL_PREFIX/ssl"
+    ./config --prefix="$DEPS_INSTALL_PREFIX" --openssldir="$DEPS_INSTALL_PREFIX/ssl"
     make -j$(nproc)
     make install_sw # Chỉ cài đặt thư viện, bỏ qua docs để nhanh hơn
 else
@@ -51,13 +53,13 @@ fi
 
 # --- Build libxml2 ---
 echo "🔎 Kiểm tra libxml2..."
-if [ ! -f "$INSTALL_PREFIX/lib/libxml2.so" ]; then
+if [ ! -f "$DEPS_INSTALL_PREFIX/lib/libxml2.so" ]; then
     echo "🚀 libxml2 chưa được cài đặt. Bắt đầu build v$LIBXML2_VERSION..."
     cd "$TMPDIR"
     curl -LO "https://download.gnome.org/sources/libxml2/${LIBXML2_VERSION%.*}/libxml2-$LIBXML2_VERSION.tar.xz"
     tar -xf "libxml2-$LIBXML2_VERSION.tar.xz"
     cd "libxml2-$LIBXML2_VERSION"
-    ./configure --prefix="$INSTALL_PREFIX" --without-python
+    ./configure --prefix="$DEPS_INSTALL_PREFIX" --without-python
     make -j$(nproc)
     make install
 else
@@ -67,15 +69,17 @@ fi
 # --- Download và build PostgreSQL ---
 PG_SRC="postgresql-$PG_VERSION"
 echo "🔎 Kiểm tra PostgreSQL..."
-if [ ! -f "$INSTALL_PREFIX/bin/psql" ]; then
+# (THAY ĐỔI) Kiểm tra psql ở đường dẫn cài đặt mới
+if [ ! -f "$PG_RUNTIME_DIR/bin/psql" ]; then
     echo "🚀 PostgreSQL chưa được cài đặt. Bắt đầu build v$PG_VERSION..."
-    cd "$PG_RUNTIME_DIR" # Tải source vào thư mục runtime
+    cd "$TMPDIR" # Build trong thư mục tạm
     curl -LO "https://ftp.postgresql.org/pub/source/v$PG_VERSION/$PG_SRC.tar.gz"
     tar -xzf "$PG_SRC.tar.gz"
     cd "$PG_SRC"
 
+    # (THAY ĐỔI) --prefix trỏ thẳng vào PG_RUNTIME_DIR
     # Configure sẽ tự động sử dụng OpenSSL và libxml2 đã cài ở ~/.local nhờ các biến môi trường
-    ./configure --prefix="$INSTALL_PREFIX" \
+    ./configure --prefix="$PG_RUNTIME_DIR" \
       --with-openssl \
       --with-libxml \
       --without-icu
@@ -137,14 +141,15 @@ else
     PROFILE_FILE="$HOME/.profile"
 fi
 
+# (THAY ĐỔI) Cập nhật PATH và LD_LIBRARY_PATH cho file cấu hình shell
 EXPORTS=$(cat <<EOF
 
 # PostgreSQL local setup
 export LD_PRELOAD="\$HOME/pgsql/fakeuser/nss_wrapper-$NSS_WRAPPER_VERSION/build/src/libnss_wrapper.so"
 export NSS_WRAPPER_PASSWD="\$HOME/pgsql/passwd.fake"
 export NSS_WRAPPER_GROUP="\$HOME/pgsql/group.fake"
-export PATH="\$HOME/.local/bin:\$PATH"
-export LD_LIBRARY_PATH="\$HOME/.local/lib:\$LD_LIBRARY_PATH"
+export PATH="\$HOME/pgsql/bin:\$HOME/.local/bin:\$PATH"
+export LD_LIBRARY_PATH="\$HOME/pgsql/lib:\$HOME/.local/lib:\$LD_LIBRARY_PATH"
 export PGUSER="$PG_USER"
 export PGPASSWORD="$PG_PASSWORD"
 export PGDATABASE="$PG_USER"
@@ -189,8 +194,8 @@ psql -U "$PG_USER" -p "$PORT" -d "$PG_USER" -c "CREATE EXTENSION IF NOT EXISTS p
 
 echo
 echo "✅ PostgreSQL $PG_VERSION đã được cài đặt và cấu hình thành công!"
-echo "   - Phần mềm được cài tại: $INSTALL_PREFIX"
-echo "   - Dữ liệu và log tại: $PG_RUNTIME_DIR"
+echo "   - Toàn bộ PostgreSQL và dữ liệu được cài tại: $PG_RUNTIME_DIR"
+echo "   - Các thư viện phụ thuộc (OpenSSL,...) tại: $DEPS_INSTALL_PREFIX"
 echo "🔐 User: $PG_USER | Password: $PG_PASSWORD"
 echo "📦 Extension 'pgcrypto' đã được kích hoạt."
 echo "🌐 PGHOST mặc định: 0.0.0.0"
