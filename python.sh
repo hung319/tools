@@ -1,295 +1,214 @@
 #!/bin/bash
 
-# Script cài đặt Python và pip cho user
-# Sử dụng version cứng Python 3.13.7
+# --- Cấu hình ---
+# Phiên bản các thành phần
+PYTHON_VERSION="3.12.8"
+PYTHON_MAJOR="3.12"
+OPENSSL_VERSION="3.3.1"
+ZLIB_VERSION="1.3.1"
+LIBFFI_VERSION="3.4.6"
+BZIP2_VERSION="1.0.8"
+XZ_VERSION="5.6.2" # liblzma
+SQLITE_VERSION="3460000" # Version 3.46.0
 
-set -e  # Dừng script nếu có lỗi
+# Đường dẫn
+DEPS_PREFIX="$HOME/.local"                 # Nơi cài đặt các thư viện phụ thuộc (zlib, openssl...)
+PYTHON_PREFIX="$HOME/.local/python"        # Nơi cài đặt Python riêng biệt
+SRC_DIR="$HOME/src/py-build-deps"
 
-# Colors for output
-RED='\033[0;31m'
+# Biến môi trường để build
+# Hướng dẫn trình biên dịch tìm headers và libs trong thư mục cài đặt thư viện phụ thuộc
+export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib64/pkgconfig"
+export CPPFLAGS="-I${DEPS_PREFIX}/include"
+export LDFLAGS="-L${DEPS_PREFIX}/lib -L${DEPS_PREFIX}/lib64 -Wl,-rpath,${DEPS_PREFIX}/lib -Wl,-rpath,${DEPS_PREFIX}/lib64"
+
+
+# --- Màu sắc để thông báo ---
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Bắt đầu cài đặt Python và pip cho user...${NC}"
+# --- Bắt đầu Script ---
+set -e # Thoát ngay nếu có lỗi
+clear
 
-# Hàm hỏi người dùng Yes/No
-ask_yes_no() {
-    local prompt="$1 (y/N): "
-    local response=""
-    
-    read -rp "$prompt" response
-    case "$response" in
-        [yY][eE][sS]|[yY])
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
+echo -e "${GREEN}Bắt đầu quá trình cài đặt Python ${PYTHON_VERSION} (Không cần root, có kiểm tra thư viện).${NC}"
 
-# Version cứng
-PYTHON_VERSION="3.12.8"
-MAJOR_MINOR="3.12"
-PYTHON_TGZ="Python-${PYTHON_VERSION}.tgz"
-PYTHON_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_TGZ}"
 
-echo -e "${GREEN}✅ Sử dụng Python version cố định: $PYTHON_VERSION${NC}"
-
-# Hàm detect shell rc
-detect_shell_rc() {
-    case "$SHELL" in
-        *bash) 
-            if [ -f "$HOME/.bashrc" ]; then
-                echo "$HOME/.bashrc"
-            elif [ -f "$HOME/.bash_profile" ]; then
-                echo "$HOME/.bash_profile"
-            else
-                echo "$HOME/.bashrc"
-            fi
-            ;;
-        *zsh) 
-            if [ -f "$HOME/.zshrc" ]; then
-                echo "$HOME/.zshrc"
-            else
-                echo "$HOME/.zshrc"
-            fi
-            ;;
-        *fish) 
-            if [ -f "$HOME/.config/fish/config.fish" ]; then
-                echo "$HOME/.config/fish/config.fish"
-            else
-                echo "$HOME/.config/fish/config.fish"
-            fi
-            ;;
-        *) 
-            if [ -f "$HOME/.profile" ]; then
-                echo "$HOME/.profile"
-            else
-                echo "$HOME/.profile"
-            fi
-            ;;
-    esac
-}
-
-# Hàm kiểm tra và thêm vào shell config
-add_to_shell_config() {
-    echo -e "${YELLOW}Kiểm tra và thêm PATH vào shell config...${NC}"
-    
-    local shell_rc=$(detect_shell_rc)
-    local shell_name=$(basename "$SHELL")
-    
-    echo -e "${BLUE}Phát hiện shell: $shell_name${NC}"
-    echo -e "${BLUE}File config: $shell_rc${NC}"
-    
-    # Tạo file nếu không tồn tại
-    if [ ! -f "$shell_rc" ]; then
-        echo -e "${YELLOW}Tạo file config mới: $shell_rc${NC}"
-        mkdir -p "$(dirname "$shell_rc")"
-        touch "$shell_rc"
-    fi
-    
-    local add_line='export PATH="$HOME/.local/bin:$PATH"'
-    local fish_line='set -gx PATH "$HOME/.local/bin" $PATH'
-    
-    # Kiểm tra xem PATH đã được thêm chưa
-    if ! grep -q "\.local/bin" "$shell_rc"; then
-        echo -e "${YELLOW}Thêm PATH vào $shell_rc...${NC}"
-        echo "" >> "$shell_rc"
-        echo "# User local bin directory" >> "$shell_rc"
-        
-        if [[ "$shell_rc" == *"fish"* ]]; then
-            echo "$fish_line" >> "$shell_rc"
-        else
-            echo "$add_line" >> "$shell_rc"
-        fi
-        
-        echo -e "${GREEN}✅ Đã thêm PATH vào $shell_rc${NC}"
-    else
-        echo -e "${YELLOW}✅ PATH đã có trong $shell_rc${NC}"
-    fi
-    
-    # Thêm vào PATH hiện tại
-    export PATH="$HOME/.local/bin:$PATH"
-    echo -e "${GREEN}✅ Đã thêm PATH vào session hiện tại${NC}"
-}
-
-# Tạo thư mục cài đặt
-PREFIX="$HOME/.local"
-SRC_DIR="$HOME/src"
-BIN_DIR="$PREFIX/bin"
-
-mkdir -p "$SRC_DIR"
-mkdir -p "$BIN_DIR"
-
-echo -e "${YELLOW}Thư mục cài đặt: $PREFIX${NC}"
-echo -e "${YELLOW}Thư mục source: $SRC_DIR${NC}"
-
-# Kiểm tra xem Python đã được cài đặt chưa
-CURRENT_PYTHON=""
-CURRENT_PIP=""
-NEEDS_UPGRADE=0
-
-if [ -f "$BIN_DIR/python" ]; then
-    CURRENT_PYTHON=$("$BIN_DIR/python" --version 2>&1 | awk '{print $2}')
-    echo -e "${GREEN}Đã phát hiện Python $CURRENT_PYTHON đã cài đặt${NC}"
-fi
-
-if [ -f "$BIN_DIR/pip" ]; then
-    CURRENT_PIP=$("$BIN_DIR/pip" --version 2>&1 | awk '{print $2}')
-    echo -e "${GREEN}Đã phát hiện pip $CURRENT_PIP đã cài đặt${NC}"
-fi
-
-# Hỏi người dùng nếu đã có cài đặt
-if [ -n "$CURRENT_PYTHON" ]; then
-    echo -e "${CYAN}Python $CURRENT_PYTHON đã được cài đặt${NC}"
-    
-    if [ "$CURRENT_PYTHON" = "$PYTHON_VERSION" ]; then
-        echo -e "${GREEN}Bạn đã sử dụng phiên bản $PYTHON_VERSION${NC}"
-        
-        if ask_yes_no "Bạn có muốn cài đặt lại Python?"; then
-            echo -e "${YELLOW}Chuẩn bị cài đặt lại Python...${NC}"
-        else
-            echo -e "${GREEN}Giữ nguyên cài đặt hiện tại${NC}"
-            
-            # Vẫn kiểm tra và thêm PATH nếu cần
-            add_to_shell_config
-            
-            echo -e "${GREEN}Python: $($BIN_DIR/python --version 2>&1)${NC}"
-            echo -e "${GREEN}Pip: $($BIN_DIR/pip --version 2>&1)${NC}"
-            exit 0
-        fi
-    else
-        echo -e "${YELLOW}Phiên bản hiện tại: $CURRENT_PYTHON${NC}"
-        echo -e "${YELLOW}Phiên bản sẽ cài: $PYTHON_VERSION${NC}"
-        
-        if ask_yes_no "Bạn có muốn nâng cấp lên Python $PYTHON_VERSION?"; then
-            NEEDS_UPGRADE=1
-            echo -e "${YELLOW}Chuẩn bị nâng cấp Python...${NC}"
-        elif ask_yes_no "Bạn có muốn cài đặt lại Python $PYTHON_VERSION?"; then
-            echo -e "${YELLOW}Chuẩn bị cài đặt lại Python...${NC}"
-        else
-            echo -e "${GREEN}Giữ nguyên cài đặt hiện tại${NC}"
-            exit 0
-        fi
-    fi
-fi
-
-# Tải và cài đặt Python
-cd "$SRC_DIR"
-echo -e "${YELLOW}Đang tải Python $PYTHON_VERSION...${NC}"
-echo -e "${BLUE}URL: $PYTHON_URL${NC}"
-
-# Hàm tải Python
-download_python() {
-    echo -e "${BLUE}Đang tải $PYTHON_TGZ...${NC}"
-    
-    if command -v wget &> /dev/null; then
-        if wget --spider -q "$PYTHON_URL" 2>/dev/null; then
-            wget -q --show-progress "$PYTHON_URL"
-            return 0
-        fi
-    elif command -v curl &> /dev/null; then
-        if curl --output /dev/null --silent --head --fail "$PYTHON_URL"; then
-            curl -LO --progress-bar "$PYTHON_URL"
-            return 0
-        fi
-    fi
-    
-    echo -e "${RED}Không thể tải Python $PYTHON_VERSION${NC}"
-    return 1
-}
-
-# Kiểm tra xem file đã tồn tại chưa
-if [ -f "$PYTHON_TGZ" ]; then
-    echo -e "${GREEN}✅ File $PYTHON_TGZ đã tồn tại, bỏ qua tải về${NC}"
-else
-    if ! download_python; then
-        echo -e "${RED}❌ Lỗi: Không thể tải Python $PYTHON_VERSION${NC}"
-        echo -e "${YELLOW}Vui lòng kiểm tra kết nối internet${NC}"
+# --- Bước 0: Kiểm tra công cụ cơ bản và tạo thư mục ---
+echo -e "\n${YELLOW}Bước 0: Kiểm tra công cụ và chuẩn bị thư mục...${NC}"
+for tool in gcc make wget curl tar; do
+    if ! command -v $tool &> /dev/null; then
+        echo -e "${RED}Lỗi: Không tìm thấy công cụ '$tool'. Vui lòng cài đặt nó trước.${NC}"
         exit 1
     fi
-fi
+done
 
-# Kiểm tra kích thước file
-FILE_SIZE=$(stat -c%s "$PYTHON_TGZ" 2>/dev/null || stat -f%z "$PYTHON_TGZ" 2>/dev/null || echo 0)
-if [ "$FILE_SIZE" -lt 1000000 ]; then
-    echo -e "${RED}❌ File tải về có vẻ bị lỗi (kích thước: $FILE_SIZE bytes)${NC}"
-    echo -e "${YELLOW}Xóa file và thử tải lại...${NC}"
-    rm -f "$PYTHON_TGZ"
-    
-    if ! download_python; then
-        echo -e "${RED}❌ Lỗi: Không thể tải Python $PYTHON_VERSION${NC}"
-        exit 1
+mkdir -p "${SRC_DIR}"
+mkdir -p "${DEPS_PREFIX}/bin"
+mkdir -p "${PYTHON_PREFIX}"
+cd "${SRC_DIR}"
+
+
+# --- Bước 1: Biên dịch các thư viện phụ thuộc (nếu cần) ---
+echo -e "\n${YELLOW}Bước 1: Kiểm tra và biên dịch các thư viện phụ thuộc...${NC}"
+
+# Hàm trợ giúp để tải và giải nén
+download_and_extract() {
+    url=$1
+    filename=$(basename "$url")
+    dirname=${filename%.tar.gz}
+    dirname=${dirname%.tgz}
+    dirname=${dirname%.tar.xz}
+    dirname=${dirname%.tar.bz2}
+
+    if [ ! -d "$dirname" ]; then
+        if [ ! -f "$filename" ]; then
+            echo "   -> Đang tải $filename..."
+            wget -q --show-progress "$url"
+        fi
+        echo "   -> Đang giải nén $filename..."
+        tar -xf "$filename"
     fi
-fi
+    cd "$dirname"
+}
 
-# Giải nén
-echo -e "${YELLOW}Đang giải nén Python...${NC}"
-if [ -f "$PYTHON_TGZ" ]; then
-    tar -xzf "$PYTHON_TGZ"
-    cd "Python-$PYTHON_VERSION"
+# 1.1. zlib
+if [ -f "${DEPS_PREFIX}/lib/libz.so" ]; then
+    echo -e "${CYAN}- Zlib đã được cài đặt, bỏ qua.${NC}"
 else
-    echo -e "${RED}❌ File $PYTHON_TGZ không tồn tại${NC}"
-    exit 1
+    echo -e "${CYAN}- Bắt đầu build ZLIB...${NC}"
+    cd "${SRC_DIR}"
+    download_and_extract "https://www.zlib.net/zlib-${ZLIB_VERSION}.tar.gz"
+    ./configure --prefix="${DEPS_PREFIX}"
+    make -j$(nproc) > /dev/null 2>&1 && make install > /dev/null 2>&1
+    echo -e "${GREEN}  ==> Build ZLIB thành công!${NC}"
 fi
 
-# Cấu hình và biên dịch
-echo -e "${YELLOW}Đang cấu hình Python...${NC}"
-./configure --prefix="$PREFIX" --enable-optimizations --with-ensurepip=install
-
-echo -e "${YELLOW}Đang biên dịch Python...${NC}"
-CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-echo -e "${BLUE}Sử dụng $CORES cores để biên dịch${NC}"
-make -j$CORES
-
-# Cài đặt
-echo -e "${YELLOW}Đang cài đặt Python...${NC}"
-make install
-
-# Tạo symbolic links
-echo -e "${YELLOW}Tạo symbolic links...${NC}"
-ln -sf "$PREFIX/bin/python3" "$BIN_DIR/python"
-ln -sf "$PREFIX/bin/pip3" "$BIN_DIR/pip"
-
-# Đảm bảo pip hoạt động
-if [ ! -f "$BIN_DIR/pip" ]; then
-    echo -e "${YELLOW}Đảm bảo pip được cài đặt...${NC}"
-    "$BIN_DIR/python" -m ensurepip --default-pip
-    "$BIN_DIR/python" -m pip install --upgrade pip
-fi
-
-# Kiểm tra và thêm vào shell config
-add_to_shell_config
-
-# Kiểm tra cài đặt
-echo -e "${YELLOW}Kiểm tra cài đặt...${NC}"
-if [ -f "$BIN_DIR/python" ] && [ -f "$BIN_DIR/pip" ]; then
-    echo -e "${GREEN}✅ Cài đặt thành công!${NC}"
-    echo "Python: $($BIN_DIR/python --version 2>&1)"
-    echo "Pip: $($BIN_DIR/pip --version 2>&1)"
-    echo ""
-    echo -e "${YELLOW}Để sử dụng ngay lập tức, chạy:${NC}"
-    echo "source $(detect_shell_rc)"
-    echo ""
-    echo -e "${YELLOW}Hoặc khởi động lại terminal${NC}"
+# 1.2. OpenSSL
+if [ -f "${DEPS_PREFIX}/lib/libssl.so" ]; then
+    echo -e "${CYAN}- OpenSSL đã được cài đặt, bỏ qua.${NC}"
 else
-    echo -e "${RED}❌ Cài đặt thất bại!${NC}"
-    exit 1
+    echo -e "${CYAN}- Bắt đầu build OPENSSL (quan trọng cho pip)...${NC}"
+    cd "${SRC_DIR}"
+    download_and_extract "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+    # Build shared library (bỏ no-shared), thêm zlib để nén
+    ./config shared --prefix="${DEPS_PREFIX}" --openssldir="${DEPS_PREFIX}" zlib
+    make -j$(nproc)
+    make install_sw
+    echo -e "${GREEN}  ==> Build OPENSSL thành công!${NC}"
 fi
 
-# Dọn dẹp
-if ask_yes_no "Bạn có muốn dọn dẹp file source đã giải nén?"; then
-    echo -e "${YELLOW}Dọn dẹp file tạm...${NC}"
-    rm -rf "$SRC_DIR/Python-$PYTHON_VERSION"
-    echo -e "${GREEN}✅ Đã dọn dẹp file source${NC}"
+# 1.3. libffi
+if [ -f "${DEPS_PREFIX}/lib/libffi.so" ]; then
+    echo -e "${CYAN}- libffi đã được cài đặt, bỏ qua.${NC}"
 else
-    echo -e "${YELLOW}📁 Giữ lại file source trong $SRC_DIR/${NC}"
+    echo -e "${CYAN}- Bắt đầu build LIBFFI (quan trọng cho ctypes)...${NC}"
+    cd "${SRC_DIR}"
+    download_and_extract "https://github.com/libffi/libffi/releases/download/v${LIBFFI_VERSION}/libffi-${LIBFFI_VERSION}.tar.gz"
+    ./configure --prefix="${DEPS_PREFIX}" --disable-static
+    make -j$(nproc) && make install
+    echo -e "${GREEN}  ==> Build LIBFFI thành công!${NC}"
 fi
 
-echo -e "${GREEN}🎉 Hoàn thành! Python $PYTHON_VERSION đã được cài đặt thành công!${NC}"
-echo -e "${BLUE}📍 Python được cài tại: $PREFIX/bin/python${NC}"
-echo -e "${BLUE}📍 Pip được cài tại: $PREFIX/bin/pip${NC}"
+# 1.4. bzip2
+if [ -f "${DEPS_PREFIX}/lib/libbz2.so" ]; then
+    echo -e "${CYAN}- bzip2 đã được cài đặt, bỏ qua.${NC}"
+else
+    echo -e "${CYAN}- Bắt đầu build BZIP2...${NC}"
+    cd "${SRC_DIR}"
+    download_and_extract "https://sourceware.org/pub/bzip2/bzip2-${BZIP2_VERSION}.tar.gz"
+    # === SỬA LỖI: Thêm CFLAGS="-fPIC" để tạo Position-Independent Code ===
+    make CFLAGS="-fPIC" -j$(nproc)
+    make install CFLAGS="-fPIC" PREFIX="${DEPS_PREFIX}"
+    # ====================================================================
+    echo -e "${GREEN}  ==> Build BZIP2 thành công!${NC}"
+fi
+
+# 1.5. xz (liblzma)
+if [ -f "${DEPS_PREFIX}/lib/liblzma.so" ]; then
+    echo -e "${CYAN}- xz (liblzma) đã được cài đặt, bỏ qua.${NC}"
+else
+    echo -e "${CYAN}- Bắt đầu build XZ (liblzma)...${NC}"
+    cd "${SRC_DIR}"
+    download_and_extract "https://github.com/tukaani-project/xz/releases/download/v${XZ_VERSION}/xz-${XZ_VERSION}.tar.gz"
+    ./configure --prefix="${DEPS_PREFIX}" --disable-static
+    make -j$(nproc) && make install
+    echo -e "${GREEN}  ==> Build XZ thành công!${NC}"
+fi
+
+# 1.6. SQLite3
+if [ -f "${DEPS_PREFIX}/lib/libsqlite3.so" ]; then
+    echo -e "${CYAN}- SQLite3 đã được cài đặt, bỏ qua.${NC}"
+else
+    echo -e "${CYAN}- Bắt đầu build SQLITE3...${NC}"
+    cd "${SRC_DIR}"
+    download_and_extract "https://www.sqlite.org/2024/sqlite-autoconf-${SQLITE_VERSION}.tar.gz"
+    # Thêm CFLAGS="-fPIC" để đảm bảo tính tương thích
+    CFLAGS="-fPIC" ./configure --prefix="${DEPS_PREFIX}"
+    make -j$(nproc) && make install
+    echo -e "${GREEN}  ==> Build SQLITE3 thành công!${NC}"
+fi
+
+
+# --- Bước 2: Biên dịch và cài đặt Python ---
+echo -e "\n${YELLOW}Bước 2: Biên dịch và cài đặt Python vào ${PYTHON_PREFIX}...${NC}"
+cd "${SRC_DIR}"
+download_and_extract "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz"
+
+# Cấu hình với prefix của Python, nhưng vẫn dùng các biến env để link tới prefix của thư viện
+./configure --prefix="${PYTHON_PREFIX}" \
+            --enable-optimizations \
+            --with-openssl="${DEPS_PREFIX}" \
+            --with-ensurepip=install
+
+make -j$(nproc)
+make altinstall
+echo -e "${GREEN}==> Cài đặt Python thành công!${NC}"
+
+
+# --- Bước 3: Tạo symbolic links và cấu hình môi trường ---
+echo -e "\n${YELLOW}Bước 3: Tạo symbolic links và cấu hình Shell...${NC}"
+
+# Tạo links trong thư mục bin của Python
+ln -sf "${PYTHON_PREFIX}/bin/python${PYTHON_MAJOR}" "${PYTHON_PREFIX}/bin/python"
+ln -sf "${PYTHON_PREFIX}/bin/pip${PYTHON_MAJOR}" "${PYTHON_PREFIX}/bin/pip"
+echo "Đã tạo links trong ${PYTHON_PREFIX}/bin"
+
+# Cấu hình shell
+SHELL_CONFIG_FILE=""
+CURRENT_SHELL=$(basename "$SHELL")
+if [ "$CURRENT_SHELL" = "bash" ]; then SHELL_CONFIG_FILE="$HOME/.bashrc";
+elif [ "$CURRENT_SHELL" = "zsh" ]; then SHELL_CONFIG_FILE="$HOME/.zshrc";
+fi
+
+NEW_PATH_STR="export PATH=\"${PYTHON_PREFIX}/bin:\$PATH\""
+if [ -n "$SHELL_CONFIG_FILE" ]; then
+    echo "Phát hiện shell: $CURRENT_SHELL. Cập nhật file: $SHELL_CONFIG_FILE"
+    if ! grep -q "${PYTHON_PREFIX}/bin" "$SHELL_CONFIG_FILE"; then
+        echo -e "\n# Thêm Python local vào PATH" >> "$SHELL_CONFIG_FILE"
+        echo "$NEW_PATH_STR" >> "$SHELL_CONFIG_FILE"
+        echo "Đã thêm đường dẫn vào $SHELL_CONFIG_FILE."
+    else
+        echo "Đường dẫn Python đã có trong $SHELL_CONFIG_FILE."
+    fi
+else
+    echo "Không thể tự động phát hiện file cấu hình cho shell: $CURRENT_SHELL"
+    echo "Vui lòng tự thêm dòng sau vào file cấu hình của bạn:"
+    echo -e "\n  ${NEW_PATH_STR}\n"
+fi
+echo -e "${GREEN}==> Cấu hình môi trường thành công!${NC}"
+
+
+# --- Hoàn tất ---
+echo -e "\n\n${GREEN}**************************************************${NC}"
+echo -e "${GREEN}  CÀI ĐẶT PYTHON ${PYTHON_VERSION} HOÀN TẤT! 🎉${NC}"
+echo -e "${GREEN}**************************************************${NC}"
+echo -e "\nVui lòng ${YELLOW}khởi động lại terminal${NC} hoặc chạy lệnh sau để cập nhật:"
+echo -e "  ${YELLOW}source ${SHELL_CONFIG_FILE}${NC}"
+echo -e "\nSau đó, kiểm tra phiên bản:"
+echo -e "  ${YELLOW}python --version${NC}"
+echo -e "  ${YELLOW}pip --version${NC}"
+echo -e "  ${YELLOW}which python${NC} # Phải trỏ tới ${PYTHON_PREFIX}/bin/python"
