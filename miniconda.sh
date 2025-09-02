@@ -46,7 +46,7 @@ bash "${MINICONDA_FILE}" -b -p "${INSTALL_DIR}"
 echo "Đang dọn dẹp file cài đặt..."
 rm "${MINICONDA_FILE}"
 
-# --- Bước 7: Tự động phát hiện Shell và khởi tạo Conda ---
+# --- Bước 7: Tự động phát hiện Shell và cập nhật config ---
 CONDA_EXEC="${INSTALL_DIR}/bin/conda"
 SHELL_NAME=$(basename "$SHELL")
 echo "Shell hiện tại của bạn là: ${SHELL_NAME}"
@@ -54,6 +54,29 @@ echo "Shell hiện tại của bạn là: ${SHELL_NAME}"
 if [ -f "$CONDA_EXEC" ]; then
     echo "Đang khởi tạo Conda cho shell '${SHELL_NAME}'..."
     "$CONDA_EXEC" init "${SHELL_NAME}"
+
+    # Xác định file config phù hợp
+    case "$SHELL_NAME" in
+        bash) CONFIG_FILE="$HOME/.bashrc" ;;
+        zsh)  CONFIG_FILE="$HOME/.zshrc" ;;
+        fish) CONFIG_FILE="$HOME/.config/fish/config.fish" ;;
+        *)    CONFIG_FILE="$HOME/.profile" ;;
+    esac
+
+    echo "Đang thêm PATH và env vào ${CONFIG_FILE}..."
+    {
+        echo ""
+        echo "# >>> Miniconda custom env >>>"
+        echo "export PATH=\"${INSTALL_DIR}/bin:\$PATH\""
+        echo "export LD_LIBRARY_PATH=\"${INSTALL_DIR}/lib:\$LD_LIBRARY_PATH\""
+        echo "export C_INCLUDE_PATH=\"${INSTALL_DIR}/include:\$C_INCLUDE_PATH\""
+        echo "export CPLUS_INCLUDE_PATH=\"${INSTALL_DIR}/include:\$CPLUS_INCLUDE_PATH\""
+        echo "export LIBRARY_PATH=\"${INSTALL_DIR}/lib:\$LIBRARY_PATH\""
+        echo "export PKG_CONFIG_PATH=\"${INSTALL_DIR}/lib/pkgconfig:${INSTALL_DIR}/share/pkgconfig:\$PKG_CONFIG_PATH\""
+        echo "export MANPATH=\"${INSTALL_DIR}/share/man:\$MANPATH\""
+        echo "# <<< Miniconda custom env <<<"
+    } >> "$CONFIG_FILE"
+
 else
     echo "Lỗi: Không tìm thấy file thực thi của Conda tại ${CONDA_EXEC}."
     exit 1
@@ -62,4 +85,4 @@ fi
 # --- Hoàn tất ---
 echo ""
 echo "✅ Cài đặt Miniconda hoàn tất!"
-echo "Vui lòng KHỞI ĐỘNG LẠI TERMINAL để các thay đổi có hiệu lực."
+echo "👉 Vui lòng KHỞI ĐỘNG LẠI TERMINAL hoặc chạy: source ${CONFIG_FILE}"
