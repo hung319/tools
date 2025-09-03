@@ -18,12 +18,15 @@ if [ ! -f "harfbuzz-$HARFBUZZ_VERSION.tar.xz" ]; then
 fi
 
 # --- Extract ---
+rm -rf "harfbuzz-$HARFBUZZ_VERSION"
 tar -xf "harfbuzz-$HARFBUZZ_VERSION.tar.xz"
 cd "harfbuzz-$HARFBUZZ_VERSION"
 
 # --- Build & Install ---
-echo "⚙️  Configuring Harfbuzz..."
-meson setup _build --prefix="$PREFIX" --libdir=lib
+echo "⚙️  Configuring Harfbuzz (with gobject)..."
+meson setup _build --prefix="$PREFIX" --libdir=lib \
+    -Dglib=enabled \
+    -Dgobject=enabled
 
 echo "🔨 Building Harfbuzz..."
 ninja -C _build
@@ -40,3 +43,4 @@ if ! grep -q 'export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig' ~/.bashrc; then
 fi
 
 echo "✅ Harfbuzz $HARFBUZZ_VERSION installed successfully in $PREFIX"
+echo "   → Check with: pkg-config --modversion harfbuzz-gobject"
