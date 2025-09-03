@@ -21,8 +21,15 @@ fi
 tar -xf "glib-$GLIB_VERSION.tar.xz"
 cd "glib-$GLIB_VERSION"
 
+# --- Clean old build ---
+rm -rf _build
+
 # --- Build & Install ---
 echo "⚙️  Configuring with meson..."
+# export ngay tại chỗ để khi build tool, nó dùng lib mới chứ ko dính lib cũ
+export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+
 meson setup _build --prefix="$PREFIX"
 
 echo "🔨 Building..."
@@ -31,7 +38,7 @@ ninja -C _build
 echo "📦 Installing into $PREFIX..."
 ninja -C _build install
 
-# --- Update LD_LIBRARY_PATH & PKG_CONFIG_PATH ---
+# --- Update ~/.bashrc để lần sau login vẫn nhận lib mới ---
 if ! grep -q 'export LD_LIBRARY_PATH=$HOME/.local/lib' ~/.bashrc; then
     echo 'export LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
     echo 'export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH' >> ~/.bashrc
