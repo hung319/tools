@@ -4,8 +4,8 @@ set -e
 # --- Config ---
 PREFIX="$HOME/.local"
 SRC_DIR="$HOME/src"
-PANGO_VERSION="1.90.0"
-PANGO_URL="https://download.gnome.org/sources/pango/1.90/pango-$PANGO_VERSION.tar.xz"
+PANGO_VERSION="1.50.14"
+PANGO_URL="https://download.gnome.org/sources/pango/1.50/pango-$PANGO_VERSION.tar.xz"
 
 # --- Prepare ---
 mkdir -p "$SRC_DIR"
