@@ -4,7 +4,7 @@ set -e
 # --- Config ---
 PREFIX="$HOME/.local"
 SRC_DIR="$HOME/src"
-GLIB_VERSION="2.80.4"
+GLIB_VERSION="2.85.4"
 GLIB_URL="https://download.gnome.org/sources/glib/${GLIB_VERSION%.*}/glib-$GLIB_VERSION.tar.xz"
 
 # --- Prepare ---
@@ -24,25 +24,26 @@ cd "glib-$GLIB_VERSION"
 # --- Clean old build ---
 rm -rf _build
 
-# --- Build & Install ---
+# --- Config ---
 echo "⚙️  Configuring with meson..."
-# export ngay tại chỗ để khi build tool, nó dùng lib mới chứ ko dính lib cũ
-export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
-export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+meson setup _build --prefix="$PREFIX" --wipe \
+                   -Dintrospection=enabled \
+                   -Dbuildtype=release
 
-meson setup _build --prefix="$PREFIX"
-
+# --- Build (ép dùng lib trong _build/glib để tránh xung đột .local cũ) ---
 echo "🔨 Building..."
-ninja -C _build
+LD_LIBRARY_PATH="$PWD/_build/glib:$LD_LIBRARY_PATH" \
+    ninja -C _build
 
+# --- Install ---
 echo "📦 Installing into $PREFIX..."
 ninja -C _build install
 
-# --- Update ~/.bashrc để lần sau login vẫn nhận lib mới ---
+# --- Update ~/.bashrc ---
 if ! grep -q 'export LD_LIBRARY_PATH=$HOME/.local/lib' ~/.bashrc; then
     echo 'export LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
     echo 'export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH' >> ~/.bashrc
     echo "✨ Added GLib paths to ~/.bashrc"
 fi
 
-echo "✅ Done! gobject-2.0 (libgobject-2.0.so) is now in $PREFIX/lib"
+echo "✅ GLib $GLIB_VERSION updated and installed into $PREFIX/lib"
