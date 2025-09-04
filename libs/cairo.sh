@@ -4,7 +4,7 @@ set -e
 # --- Config ---
 PREFIX="$HOME/.local"
 SRC_DIR="$HOME/src"
-CAIRO_VERSION="1.18.0"
+CAIRO_VERSION="1.18.2"
 CAIRO_URL="https://www.cairographics.org/releases/cairo-$CAIRO_VERSION.tar.xz"
 
 # --- Prepare ---
