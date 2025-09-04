@@ -10,10 +10,11 @@ LIBFFI_VERSION="3.4.6"
 BZIP2_VERSION="1.0.8"
 XZ_VERSION="5.6.2" # liblzma
 SQLITE_VERSION="3460000" # Version 3.46.0
+SETUPTOOLS_VERSION="70.0.0" # Thêm setuptools để cung cấp distutils
 
 # Đường dẫn
-DEPS_PREFIX="$HOME/.local"                 # Nơi cài đặt các thư viện phụ thuộc (zlib, openssl...)
-PYTHON_PREFIX="$HOME/.local/python"        # Nơi cài đặt Python riêng biệt
+DEPS_PREFIX="$HOME/.local"              # Nơi cài đặt các thư viện phụ thuộc (zlib, openssl...)
+PYTHON_PREFIX="$HOME/.local/python"     # Nơi cài đặt Python riêng biệt
 SRC_DIR="$HOME/src/py-build-deps"
 
 # Biến môi trường để build
@@ -61,10 +62,10 @@ download_and_extract() {
 
     if [ ! -d "$dirname" ]; then
         if [ ! -f "$filename" ]; then
-            echo "   -> Đang tải $filename..."
+            echo "    -> Đang tải $filename..."
             wget -q --show-progress "$url"
         fi
-        echo "   -> Đang giải nén $filename..."
+        echo "    -> Đang giải nén $filename..."
         tar -xf "$filename"
     fi
     cd "$dirname"
@@ -128,7 +129,7 @@ else
     download_and_extract "https://github.com/tukaani-project/xz/releases/download/v${XZ_VERSION}/xz-${XZ_VERSION}.tar.gz"
     ./configure --prefix="${DEPS_PREFIX}" --disable-static
     make -j$(nproc) && make install
-    echo -e "${GREEN}  ==> Build XZ thành công!${NC}"
+    echo -e "${GREEN}  ==> Build XZ (liblzma) thành công!${NC}"
 fi
 
 # 1.6. SQLite3
@@ -154,6 +155,18 @@ download_and_extract "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python
 make -j$(nproc)
 make altinstall
 echo -e "${GREEN}==> Cài đặt Python thành công!${NC}"
+
+# ==============================================================================
+# --- Bước 2.5: Cài đặt Setuptools (để cung cấp distutils cho Python >= 3.12) ---
+# ==============================================================================
+echo -e "\n${YELLOW}Bước 2.5: Cài đặt Setuptools (để cung cấp distutils)...${NC}"
+cd "${SRC_DIR}"
+download_and_extract "https://pypi.io/packages/source/s/setuptools/setuptools-${SETUPTOOLS_VERSION}.tar.gz"
+echo "    -> Cài đặt setuptools bằng Python vừa build..."
+# Dùng python vừa cài đặt để chạy setup.py, không cần root
+"${PYTHON_PREFIX}/bin/python${PYTHON_MAJOR}" setup.py install > /dev/null 2>&1
+echo -e "${GREEN}  ==> Cài đặt Setuptools thành công!${NC}"
+
 
 # --- Bước 3: Tạo symbolic links và cấu hình PATH ---
 echo -e "\n${YELLOW}Bước 3: Tạo symbolic links và cấu hình PATH...${NC}"
@@ -199,15 +212,15 @@ done
 
 if [ -z "$CA_BUNDLE_PATH" ]; then
     echo -e "${YELLOW}CẢNH BÁO: Không tìm thấy CA bundle của hệ thống.${NC}"
-    echo "   -> Sẽ tải xuống CA bundle tin cậy từ curl.se..."
+    echo "    -> Sẽ tải xuống CA bundle tin cậy từ curl.se..."
     LOCAL_CERT_DIR="$HOME/.local/ssl"
     LOCAL_CERT_FILE="$LOCAL_CERT_DIR/cacert.pem"
     mkdir -p "$LOCAL_CERT_DIR"
     if [ -f "$LOCAL_CERT_FILE" ]; then
-        echo "   -> File cacert.pem đã tồn tại, bỏ qua tải xuống."
+        echo "    -> File cacert.pem đã tồn tại, bỏ qua tải xuống."
     else
         curl -Lo "$LOCAL_CERT_FILE" https://curl.se/ca/cacert.pem
-        echo "   -> Tải xong và lưu tại $LOCAL_CERT_FILE"
+        echo "    -> Tải xong và lưu tại $LOCAL_CERT_FILE"
     fi
     CA_BUNDLE_PATH="$LOCAL_CERT_FILE"
 fi
