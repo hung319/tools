@@ -31,7 +31,7 @@ esac
 # Clone Homebrew
 if [ ! -d "$BREW_PREFIX" ]; then
   echo "🍺 Đang cài Homebrew vào $BREW_PREFIX ..."
-  git clone --depth=1 "$BREW_REPO" "$BREW_PREFIX"
+  git clone "$BREW_REPO" "$BREW_PREFIX"
 else
   echo "✅ Homebrew đã tồn tại tại $BREW_PREFIX"
 fi
