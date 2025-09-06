@@ -1,46 +1,57 @@
 #!/usr/bin/env bash
 set -e
 
-# --- Cấu hình ---
-LIBEDIT_VERSION="20240517-3.1"
-LIBEDIT_URL="https://thrysoee.dk/editline/libedit-${LIBEDIT_VERSION}.tar.gz"
-ARCHIVE_NAME=$(basename "$LIBEDIT_URL")
-EXTRACTED_DIR="libedit-${LIBEDIT_VERSION}"
-
-# --- Đường dẫn ---
 PREFIX="$HOME/.local"
 SRC_DIR="$HOME/src"
+LIBEDIT_VERSION="20240517-3.1"
+LIBEDIT_URL="https://thrysoee.dk/editline/libedit-$LIBEDIT_VERSION.tar.gz"
 
-# --- Chuẩn bị ---
-echo "▶️  Chuẩn bị môi trường..."
-mkdir -p "$PREFIX" "$SRC_DIR"
+mkdir -p "$SRC_DIR" "$PREFIX/lib" "$PREFIX/include"
 cd "$SRC_DIR"
 
-# --- Tải mã nguồn ---
-if [ ! -f "$ARCHIVE_NAME" ]; then
-    echo "📥 Đang tải libedit ${LIBEDIT_VERSION}..."
-    wget -O "$ARCHIVE_NAME" "$LIBEDIT_URL"
+# --- Tải libedit ---
+if [ ! -f "libedit-$LIBEDIT_VERSION.tar.gz" ]; then
+    echo "📥 Đang tải libedit..."
+    wget "$LIBEDIT_URL"
 else
-    echo "☑️  Đã có file nén libedit."
+    echo "☑️ Đã có file nén libedit."
 fi
 
 # --- Giải nén ---
-if [ ! -d "$EXTRACTED_DIR" ]; then
-    echo "📦 Đang giải nén..."
-    tar -xzf "$ARCHIVE_NAME"
-else
-    echo "☑️  Đã có thư mục mã nguồn libedit."
+tar -xzf "libedit-$LIBEDIT_VERSION.tar.gz"
+
+# Tự động phát hiện thư mục
+EDIT_DIR=$(tar -tzf "libedit-$LIBEDIT_VERSION.tar.gz" | head -1 | cut -f1 -d"/")
+echo "➡️ Giải nén vào: $EDIT_DIR"
+
+# --- Symlink headers từ ncursesw ---
+echo "🔗 Đang xử lý symlink header..."
+cd "$PREFIX/include"
+if [ ! -e ncurses.h ] && [ -e ncursesw/ncurses.h ]; then
+    ln -s ncursesw/ncurses.h ncurses.h
+fi
+for hdr in curses.h termcap.h term.h; do
+    if [ ! -e $hdr ] && [ -e ncursesw/$hdr ]; then
+        ln -s ncursesw/$hdr $hdr
+    fi
+done
+
+# --- Symlink libtinfo ---
+cd "$PREFIX/lib"
+if [ ! -e "libtinfo.so" ] && [ -e libtinfow.so ]; then
+    ln -s libtinfow.so libtinfo.so
 fi
 
-cd "$EXTRACTED_DIR"
+# --- Build & cài đặt ---
+cd "$SRC_DIR/$EDIT_DIR"
+echo "⚙️ Đang configure..."
+export CPPFLAGS="-I$PREFIX/include"
+export LDFLAGS="-L$PREFIX/lib"
 
-# --- Build và cài đặt ---
-echo "⚙️  Đang cấu hình libedit..."
 ./configure --prefix="$PREFIX"
 
-echo "🚀 Đang build và cài đặt libedit..."
+echo "🚀 Đang build..."
 make -j"$(nproc)"
 make install
 
-echo ""
-echo "✅ libedit ${LIBEDIT_VERSION} đã được cài đặt vào $PREFIX"
+echo "✅ libedit $LIBEDIT_VERSION đã được cài vào $PREFIX"
