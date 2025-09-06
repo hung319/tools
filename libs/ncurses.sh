@@ -36,12 +36,13 @@ cd "$EXTRACTED_DIR"
 
 # --- Build và cài đặt ---
 echo "⚙️  Đang cấu hình ncurses..."
-# Các cờ này đảm bảo build thư viện shared và tạo file .pc cho pkg-config
+# Các cờ này đảm bảo build shared, có file .pc và sinh libtinfo
 ./configure --prefix="$PREFIX" \
             --with-shared \
             --without-debug \
             --enable-pc-files \
-            --with-pkg-config-libdir="$PREFIX/lib/pkgconfig"
+            --with-pkg-config-libdir="$PREFIX/lib/pkgconfig" \
+            --with-termlib
 
 echo "🚀 Đang build và cài đặt ncurses..."
 make -j"$(nproc)"
@@ -49,3 +50,4 @@ make install
 
 echo ""
 echo "✅ ncurses ${NCURSES_VERSION} đã được cài đặt vào $PREFIX"
+echo "👉 Kiểm tra libtinfo: ls $PREFIX/lib | grep tinfo"
