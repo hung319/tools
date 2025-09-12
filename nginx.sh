@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
 set -e
 
-# Thư mục cài đặt
 PREFIX="$HOME/nginx"
-
-# Phiên bản Nginx
 NGINX_VERSION=1.26.2
+PCRE_VERSION=8.45
 
-# Thư mục tạm
 TMPDIR=$(mktemp -d)
 cd "$TMPDIR"
 
-echo "Tải Nginx $NGINX_VERSION..."
+echo "Tải PCRE ${PCRE_VERSION}..."
+curl -L "https://downloads.sourceforge.net/project/pcre/pcre/${PCRE_VERSION}/pcre-${PCRE_VERSION}.tar.gz" -o pcre.tar.gz
+tar xzf pcre.tar.gz
+
+echo "Tải Nginx ${NGINX_VERSION}..."
 curl -L "http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" -o nginx.tar.gz
 tar xzf nginx.tar.gz
+
 cd nginx-${NGINX_VERSION}
 
-echo "Biên dịch Nginx với gzip..."
+echo "Biên dịch Nginx với PCRE + gzip..."
 ./configure \
   --prefix="$PREFIX" \
   --with-http_ssl_module \
+  --with-http_v2_module \
   --with-http_gzip_static_module \
-  --with-http_v2_module
+  --with-pcre=../pcre-${PCRE_VERSION}
 
 make -j"$(nproc)"
 make install
@@ -29,7 +32,6 @@ make install
 echo "Đã cài Nginx vào $PREFIX"
 echo "Chạy thử: $PREFIX/sbin/nginx -v"
 
-# Thêm vào PATH
 if ! grep -q 'nginx/sbin' "$HOME/.bashrc"; then
   echo 'export PATH="$HOME/nginx/sbin:$PATH"' >> "$HOME/.bashrc"
 fi
