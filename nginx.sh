@@ -24,6 +24,7 @@ echo "Biên dịch Nginx với PCRE + gzip..."
   --with-http_ssl_module \
   --with-http_v2_module \
   --with-http_gzip_static_module \
+  --with-http_stub_status_module \
   --with-pcre=../pcre-${PCRE_VERSION}
 
 make -j"$(nproc)"
