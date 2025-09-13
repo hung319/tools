@@ -20,14 +20,18 @@ PREFIX="$HOME/.local/guix"
 echo "🔹 Kiến trúc: $ARCH → gói: $GUIX_ARCH"
 echo "🔹 Phiên bản Guix mới nhất: $GUIX_VERSION"
 
-# --- Tải Guix binary ---
-mkdir -p "$PREFIX"
-cd /tmp
+# --- Tạo thư mục tạm rộng rãi & tự xóa khi xong ---
+mkdir -p "$HOME/.local/tmp"
+TMPDIR=$(mktemp -d "$HOME/.local/tmp/guix.XXXXXX")
+trap 'rm -rf "$TMPDIR"' EXIT
+cd "$TMPDIR"
+
+# --- Tải Guix binary vào TMPDIR ---
 wget -c "https://ftp.gnu.org/gnu/guix/$LATEST_URL"
 
-# --- Giải nén vào ~/.local/guix ---
-tar -xf "$LATEST_URL"
-cd "guix-binary-${GUIX_VERSION}.${GUIX_ARCH}"
+# --- Giải nén vào TMPDIR rồi cài ---
+tar -xf "$LATEST_URL" -C "$TMPDIR"
+cd "$TMPDIR/guix-binary-${GUIX_VERSION}.${GUIX_ARCH}"
 ./install --prefix="$PREFIX"
 
 # --- Thiết lập PATH và profile ---
@@ -39,7 +43,6 @@ cat <<'EOF' > "$ENV_FILE"
 export PATH="$HOME/.local/guix/.guix-profile/bin:$PATH"
 export GUIX_PROFILE="$HOME/.local/guix/.guix-profile"
 source "$GUIX_PROFILE/etc/profile"
-# Luôn dùng cache server chính thức
 export GUIX_SUBSTITUTE_URLS="https://ci.guix.gnu.org"
 EOF
 
@@ -64,4 +67,5 @@ fi
 source "$ENV_FILE"
 
 echo "✅ Guix $GUIX_VERSION ($GUIX_ARCH) đã được cài vào $PREFIX"
+echo "📦 Thư mục tạm $TMPDIR sẽ tự động xóa sau khi script kết thúc."
 echo "Mở terminal mới để dùng Guix luôn nha Yuu Onii-chan 💻✨"
