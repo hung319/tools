@@ -1,97 +1,82 @@
-#!/bin/bash
-
-# Exit immediately if a command exits with a non-zero status.
+#!/usr/bin/env bash
 set -e
 
-# --- Cấu hình ---
-# Bạn có thể thay đổi phiên bản CMake tại đây
-# Truy cập https://cmake.org/download/ để xem phiên bản mới nhất
-CMAKE_VERSION="3.30.1" 
-# -----------------
+# ========================
+# Homebrew no-root installer + custom cache/temp
+# ========================
 
-# Nơi cài đặt (chuẩn FHS cho user-space)
-INSTALL_PREFIX="$HOME/.local"
+BREW_PREFIX="$HOME/.local/homebrew"
+BREW_REPO="https://github.com/Homebrew/brew"
 
-# Tự động xác định kiến trúc hệ thống
-ARCH=$(uname -m)
-if [[ "$ARCH" == "aarch64" ]]; then
-    CMAKE_ARCH="aarch64"
-elif [[ "$ARCH" == "x86_64" ]]; then
-    CMAKE_ARCH="x86_64"
+# 📝 Thêm các đường dẫn cache/temp Onii-chan muốn
+HOMEBREW_CACHE="$BREW_PREFIX/homebrew-cache"
+HOMEBREW_TEMP="$BREW_PREFIX/homebrew-tmp"
+HOMEBREW_LOGS="$BREW_PREFIX/homebrew-logs"
+
+# Kiểm tra nếu tệp brew đã tồn tại trong thư mục bin
+if [ ! -f "$BREW_PREFIX/bin/brew" ]; then
+  # Clone Homebrew nếu chưa tồn tại
+  echo "🍺 Đang cài Homebrew vào $BREW_PREFIX ..."
+  git clone "$BREW_REPO" "$BREW_PREFIX" || { echo "❌ Không thể clone Homebrew"; exit 1; }
 else
-    echo "Lỗi: Kiến trúc '$ARCH' không được hỗ trợ bởi script này."
-    exit 1
+  # Nếu Homebrew đã tồn tại, cập nhật bằng git pull
+  echo "✅ Homebrew đã tồn tại tại $BREW_PREFIX. Đang cập nhật..."
+  cd "$BREW_PREFIX" || { echo "❌ Không thể vào thư mục Homebrew"; exit 1; }
+  git pull origin master || { echo "❌ Không thể cập nhật Homebrew"; exit 1; }
 fi
 
-# Tạo thư mục tạm để làm việc, script sẽ tự xoá khi kết thúc
-WORK_DIR=$(mktemp -d)
-trap 'echo "Đang dọn dẹp thư mục tạm..."; rm -rf "$WORK_DIR"' EXIT
+# Tạo thư mục cache, temp, logs sau khi clone hoặc update
+mkdir -p "$HOMEBREW_CACHE" "$HOMEBREW_TEMP" "$HOMEBREW_LOGS" || { echo "❌ Không thể tạo thư mục"; exit 1; }
 
-# Trích xuất phiên bản chính và phụ (ví dụ: 3.30 từ 3.30.1)
-CMAKE_MAJOR_MINOR=$(echo "$CMAKE_VERSION" | cut -d. -f1,2)
-CMAKE_PACKAGE_NAME="cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}"
-DOWNLOAD_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/${CMAKE_PACKAGE_NAME}.tar.gz"
+# Detect shell
+SHELL_NAME=$(basename "$SHELL")
+CONFIG_FILE=""
 
-echo "=========================================================="
-echo "Cài đặt CMake phiên bản: ${CMAKE_VERSION} (dùng cp)"
-echo "Kiến trúc hệ thống:     ${ARCH}"
-echo "Thư mục cài đặt:        ${INSTALL_PREFIX}"
-echo "URL tải về:             ${DOWNLOAD_URL}"
-echo "=========================================================="
+case "$SHELL_NAME" in
+  bash) CONFIG_FILE="$HOME/.bashrc" ;;
+  zsh)  CONFIG_FILE="$HOME/.zshrc" ;;
+  fish) CONFIG_FILE="$HOME/.config/fish/config.fish" ;;
+  *)    echo "⚠️ Không nhận diện được shell ($SHELL_NAME). Onii-chan cần add PATH thủ công." ;;
+esac
 
-# Tạo thư mục cài đặt nếu chưa có
-mkdir -p "$INSTALL_PREFIX"
-
-cd "$WORK_DIR"
-
-echo ""
-echo "⏳ Đang tải CMake..."
-wget -q --show-progress -O cmake.tar.gz "${DOWNLOAD_URL}"
-
-echo ""
-echo "📦 Đang giải nén..."
-tar -zxf cmake.tar.gz
-
-echo ""
-echo "🚀 Đang cài đặt vào ${INSTALL_PREFIX}..."
-# Sử dụng 'cp -a' (archive) để sao chép đệ quy, giữ nguyên thuộc tính file.
-# Đây là phương án thay thế cho rsync, có sẵn trên mọi hệ thống.
-# Dấu '.' ở cuối source path đảm bảo sao chép nội dung bên trong thư mục.
-cp -a "${CMAKE_PACKAGE_NAME}/." "${INSTALL_PREFIX}/"
-
-echo ""
-echo "🔧 Cấu hình môi trường (PATH)..."
-
-# Kiểm tra xem ~/.local/bin đã có trong PATH chưa
-# và thêm vào file cấu hình shell phù hợp nếu cần
-SHELL_CONFIG_FILE=""
-CURRENT_SHELL=$(basename "$SHELL")
-
-if [[ "$CURRENT_SHELL" == "bash" ]]; then
-    SHELL_CONFIG_FILE="$HOME/.bashrc"
-elif [[ "$CURRENT_SHELL" == "zsh" ]]; then
-    SHELL_CONFIG_FILE="$HOME/.zshrc"
-else
-    # Fallback cho các shell khác (sh, dash, etc.)
-    SHELL_CONFIG_FILE="$HOME/.profile"
+# Thêm PATH và export biến môi trường cache/temp vào cấu hình shell
+if [ -n "$CONFIG_FILE" ]; then
+  echo "🔧 Đang thêm PATH + env vào $CONFIG_FILE ..."
+  if ! grep -q "export PATH=\"$BREW_PREFIX/bin:\$PATH\"" "$CONFIG_FILE"; then
+    if [ "$SHELL_NAME" = "fish" ]; then
+      echo "set -Ux PATH $BREW_PREFIX/bin \$PATH" >> "$CONFIG_FILE"
+      echo "set -Ux HOMEBREW_CACHE $HOMEBREW_CACHE" >> "$CONFIG_FILE"
+      echo "set -Ux HOMEBREW_TEMP $HOMEBREW_TEMP" >> "$CONFIG_FILE"
+      echo "set -Ux HOMEBREW_LOGS $HOMEBREW_LOGS" >> "$CONFIG_FILE"
+    else
+      {
+        echo ""
+        echo "# Homebrew"
+        echo "export PATH=\"$BREW_PREFIX/bin:\$PATH\""
+        echo "export HOMEBREW_CACHE=\"$HOMEBREW_CACHE\""
+        echo "export HOMEBREW_TEMP=\"$HOMEBREW_TEMP\""
+        echo "export HOMEBREW_LOGS=\"$HOMEBREW_LOGS\""
+      } >> "$CONFIG_FILE"
+    fi
+  else
+    echo "✅ Các biến đã được thêm vào $CONFIG_FILE rồi."
+  fi
 fi
 
-EXPORT_PATH_CMD='export PATH="$HOME/.local/bin:$PATH"'
+# Export ngay trong session này để dùng luôn
+export HOMEBREW_CACHE="$HOMEBREW_CACHE"
+export HOMEBREW_TEMP="$HOMEBREW_TEMP"
+export HOMEBREW_LOGS="$HOMEBREW_LOGS"
+export PATH="$BREW_PREFIX/bin:$PATH"
 
-if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$SHELL_CONFIG_FILE"; then
-    echo "Thêm '$HOME/.local/bin' vào PATH trong file $SHELL_CONFIG_FILE"
-    echo "" >> "$SHELL_CONFIG_FILE"
-    echo "# Add local binaries to PATH" >> "$SHELL_CONFIG_FILE"
-    echo "$EXPORT_PATH_CMD" >> "$SHELL_CONFIG_FILE"
-    echo "Cấu hình PATH đã được thêm. Vui lòng chạy lệnh sau hoặc mở lại terminal:"
-    echo "  source ${SHELL_CONFIG_FILE}"
-else
-    echo "Cấu hình PATH đã tồn tại. Không cần thay đổi."
+# Reload shell config
+echo "🔄 Reload config..."
+if [ "$SHELL_NAME" = "bash" ] || [ "$SHELL_NAME" = "zsh" ]; then
+  source "$CONFIG_FILE"
+elif [ "$SHELL_NAME" = "fish" ]; then
+  source "$CONFIG_FILE" >/dev/null 2>&1 || true
 fi
 
-echo ""
-echo "✅ Cài đặt CMake thành công!"
-echo "Phiên bản vừa cài đặt:"
-# Trỏ trực tiếp đến binary vừa cài để xác nhận
-"${INSTALL_PREFIX}/bin/cmake" --version
-echo "=========================================================="
+# Test Homebrew version
+echo "🍹 Homebrew version:"
+"$BREW_PREFIX/bin/brew" --version
