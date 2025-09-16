@@ -2,11 +2,11 @@
 set -e
 
 # ========================
-# Homebrew no-root installer + custom cache/temp
+# Homebrew no-root installer + custom cache/temp (tarball version)
 # ========================
 
 BREW_PREFIX="$HOME/.local/homebrew"
-BREW_REPO="https://github.com/Homebrew/brew"
+BREW_REPO_TARBALL="https://github.com/Homebrew/brew/tarball/main"
 
 # 📝 Thêm các đường dẫn cache/temp Onii-chan muốn
 HOMEBREW_CACHE="$BREW_PREFIX/homebrew-cache"
@@ -15,17 +15,18 @@ HOMEBREW_LOGS="$BREW_PREFIX/homebrew-logs"
 
 # Kiểm tra nếu tệp brew đã tồn tại trong thư mục bin
 if [ ! -f "$BREW_PREFIX/bin/brew" ]; then
-  # Clone Homebrew nếu chưa tồn tại
-  echo "🍺 Đang cài Homebrew vào $BREW_PREFIX ..."
-  git clone "$BREW_REPO" "$BREW_PREFIX" || { echo "❌ Không thể clone Homebrew"; exit 1; }
+  # Tạo thư mục Homebrew nếu chưa có
+  echo "🍺 Đang cài Homebrew (tarball) vào $BREW_PREFIX ..."
+  mkdir -p "$BREW_PREFIX"
+  curl -L "$BREW_REPO_TARBALL" \
+    | tar xz --strip-components 1 -C "$BREW_PREFIX" \
+    || { echo "❌ Không thể tải & giải nén Homebrew"; exit 1; }
 else
-  # Nếu Homebrew đã tồn tại, cập nhật bằng git pull
-  echo "✅ Homebrew đã tồn tại tại $BREW_PREFIX. Đang cập nhật..."
-  cd "$BREW_PREFIX" || { echo "❌ Không thể vào thư mục Homebrew"; exit 1; }
-  git pull origin master || { echo "❌ Không thể cập nhật Homebrew"; exit 1; }
+  echo "✅ Homebrew đã tồn tại tại $BREW_PREFIX."
+  echo "🔄 Đang update bằng brew update..."
 fi
 
-# Tạo thư mục cache, temp, logs sau khi clone hoặc update
+# Tạo thư mục cache, temp, logs
 mkdir -p "$HOMEBREW_CACHE" "$HOMEBREW_TEMP" "$HOMEBREW_LOGS" || { echo "❌ Không thể tạo thư mục"; exit 1; }
 
 # Detect shell
@@ -81,5 +82,6 @@ fi
 echo "🍹 Homebrew version:"
 "$BREW_PREFIX/bin/brew" --version
 
-# Update repo
+# Update repo + fix perms zsh
 "$BREW_PREFIX/bin/brew" update --force --quiet
+chmod -R go-w "$("$BREW_PREFIX/bin/brew" --prefix)/share/zsh" || true
