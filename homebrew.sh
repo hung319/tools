@@ -80,3 +80,6 @@ fi
 # Test Homebrew version
 echo "🍹 Homebrew version:"
 "$BREW_PREFIX/bin/brew" --version
+
+# Update repo
+"$BREW_PREFIX/bin/brew" update --force --quiet
