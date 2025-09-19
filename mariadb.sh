@@ -146,7 +146,7 @@ rm -rf build
 mkdir -p build && cd build
 
 echo "⚙️ Đang cấu hình quá trình biên dịch MariaDB..."
-# ### THAY ĐỔI ###: Cập nhật đường dẫn cài đặt và dữ liệu
+# ### SỬA LỖI ###: Thêm đường dẫn trực tiếp tới thư viện và header của ncurses
 cmake .. \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
     -DMYSQL_DATADIR="${DATA_DIR}" \
@@ -154,7 +154,9 @@ cmake .. \
     -DCMAKE_INSTALL_RPATH="${DEPS_DIR}/lib;${DEPS_DIR}/lib64" \
     -DWITH_SSL=system \
     -DWITHOUT_TOKUDB=1 \
-    -DWITHOUT_CONNECT_STORAGE_ENGINE=1
+    -DWITHOUT_CONNECT_STORAGE_ENGINE=1 \
+    -DCURSES_LIBRARY="${DEPS_DIR}/lib/libncursesw.so" \
+    -DCURSES_INCLUDE_PATH="${DEPS_DIR}/include"
 
 echo "🛠️ Đang biên dịch MariaDB với toàn bộ CPU..."
 make -j$(nproc)
