@@ -171,7 +171,9 @@ echo -e "${GREEN}  ==> Cài đặt Setuptools thành công!${NC}"
 # --- Bước 3: Tạo symbolic links và cấu hình PATH ---
 echo -e "\n${YELLOW}Bước 3: Tạo symbolic links và cấu hình PATH...${NC}"
 ln -sf "${PYTHON_PREFIX}/bin/python${PYTHON_MAJOR}" "${PYTHON_PREFIX}/bin/python"
+ln -sf "${PYTHON_PREFIX}/bin/python${PYTHON_MAJOR}" "${PYTHON_PREFIX}/bin/python3"
 ln -sf "${PYTHON_PREFIX}/bin/pip${PYTHON_MAJOR}" "${PYTHON_PREFIX}/bin/pip"
+ln -sf "${PYTHON_PREFIX}/bin/pip${PYTHON_MAJOR}" "${PYTHON_PREFIX}/bin/pip3"
 echo "Đã tạo links trong ${PYTHON_PREFIX}/bin"
 SHELL_CONFIG_FILE=""
 CURRENT_SHELL=$(basename "$SHELL")
