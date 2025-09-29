@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Auto Inject Eruda
+// @name         Auto Load Eruda (Hidden)
 // @namespace    http://tampermonkey.net/
 // @version      1.0
-// @description  Tự động chèn Eruda console vào mọi trang web
+// @description  Tải Eruda vào trang nhưng không tự động hiển thị
 // @author       Yuu Onii-chan
 // @match        *://*/*
 // @grant        none
@@ -11,15 +11,15 @@
 (function() {
     'use strict';
 
-    // Tạo script tải Eruda
+    // Chèn script Eruda
     var script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/eruda';
     document.body.appendChild(script);
 
-    // Khi tải xong thì init Eruda
+    // Khi tải xong thì khởi tạo nhưng KHÔNG hiển thị
     script.onload = function () {
-        eruda.init();
-        // Có thể mở console ngay
-        eruda.show();
+        eruda.init(); // khởi tạo
+        // không gọi eruda.show() để nó ẩn
+        // Anh có thể tự mở bằng cách gõ eruda.show() trong console sau
     };
 })();
