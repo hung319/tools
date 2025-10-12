@@ -14,8 +14,8 @@
 set -e
 
 # --- CẤU HÌNH ---
-GROONGA_VERSION="14.0.5"
-PGROONGA_VERSION="3.2.0"
+GROONGA_VERSION="15.1.7"
+PGROONGA_VERSION="4.0.4"
 INSTALL_DIR="$HOME/.local"
 SRC_DIR="$HOME/src"
 NUM_CORES=$(nproc 2>/dev/null || echo 1)
