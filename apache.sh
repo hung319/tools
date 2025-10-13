@@ -3,10 +3,10 @@
 # Dừng script ngay lập tức nếu có lỗi.
 set -e
 
-# --- CÁC BIẾN CẤU HÌNH (ĐÃ CẬP NHẬT THEO YÊU CẦU) ---
+# --- CÁC BIẾN CẤU HÌNH ---
 APACHE_VERSION="2.4.65"
 APR_VERSION="1.7.6"
-APR_UTIL_VERSION="1.6.3" # Giữ nguyên
+APR_UTIL_VERSION="1.6.3"
 
 # Các thư viện phụ thuộc khác
 PCRE2_VERSION="10.43"
@@ -19,8 +19,6 @@ INSTALL_PREFIX="$HOME/.local/apache"
 SOURCE_DIR="$HOME/src"
 
 # --- HÀM HỖ TRỢ ---
-
-# Hàm để tải và giải nén một tệp
 download_and_extract() {
     local url=$1
     local filename=$(basename "$url")
@@ -35,58 +33,39 @@ download_and_extract() {
     tar -xzf "$filename"
 }
 
-
 # --- BẮT ĐẦU SCRIPT ---
 
-echo "🚀 Bắt đầu quá trình cài đặt Apache phiên bản tùy chỉnh (không cần root)."
-echo "   - httpd: ${APACHE_VERSION}"
-echo "   - apr: ${APR_VERSION}"
-echo "   - apr-util: ${APR_UTIL_VERSION}"
+echo "🚀 Bắt đầu quá trình cài đặt Apache tự động hoàn chỉnh (không cần root)."
 
-
-# 1. Kiểm tra các công cụ biên dịch cơ bản
+# 1. Kiểm tra các công cụ biên dịch
 if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
-    echo "❌ Lỗi: Không tìm thấy 'gcc' hoặc 'make'."
-    echo "Vui lòng cài đặt các công cụ build cơ bản (build-essential, base-devel) trước."
+    echo "❌ Lỗi: Không tìm thấy 'gcc' hoặc 'make'. Vui lòng cài đặt các công cụ build cơ bản."
     exit 1
 fi
 
-# 2. Tạo các thư mục cần thiết
-echo ">> Tạo các thư mục tại $SOURCE_DIR và $DEPS_PREFIX..."
+# 2. Tạo các thư mục
+echo ">> Tạo các thư mục cần thiết..."
 mkdir -p "$SOURCE_DIR"
 mkdir -p "$DEPS_PREFIX"
 cd "$SOURCE_DIR"
 
 # 3. KIỂM TRA VÀ CÀI ĐẶT CÁC THƯ VIỆN PHỤ THUỘC
-echo ">> Bắt đầu kiểm tra và cài đặt các thư viện phụ thuộc..."
-
-# --- ZLIB ---
-if [ -f "$DEPS_PREFIX/include/zlib.h" ] && [ -f "$DEPS_PREFIX/lib/libz.a" ]; then
-    echo "✅ Zlib đã được cài đặt. Bỏ qua."
-else
-    echo "⚠️ Zlib chưa được cài đặt. Bắt đầu cài đặt..."
+echo ">> Kiểm tra và cài đặt các thư viện phụ thuộc..."
+if ! [ -f "$DEPS_PREFIX/include/zlib.h" ]; then
+    echo "   -> Cài đặt Zlib..."
     download_and_extract "https://www.zlib.net/zlib-${ZLIB_VERSION}.tar.gz"
     cd "zlib-${ZLIB_VERSION}" && ./configure --prefix="$DEPS_PREFIX" && make -j$(nproc) && make install && cd "$SOURCE_DIR"
-fi
-
-# --- PCRE2 ---
-if [ -f "$DEPS_PREFIX/include/pcre2.h" ] && [ -f "$DEPS_PREFIX/lib/libpcre2-8.a" ]; then
-    echo "✅ PCRE2 đã được cài đặt. Bỏ qua."
-else
-    echo "⚠️ PCRE2 chưa được cài đặt. Bắt đầu cài đặt..."
+else echo "✅ Zlib đã tồn tại. Bỏ qua."; fi
+if ! [ -f "$DEPS_PREFIX/include/pcre2.h" ]; then
+    echo "   -> Cài đặt PCRE2..."
     download_and_extract "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz"
     cd "pcre2-${PCRE2_VERSION}" && ./configure --prefix="$DEPS_PREFIX" && make -j$(nproc) && make install && cd "$SOURCE_DIR"
-fi
-
-# --- OPENSSL ---
-if [ -f "$DEPS_PREFIX/include/openssl/ssl.h" ] && [ -f "$DEPS_PREFIX/lib/libssl.a" ]; then
-    echo "✅ OpenSSL đã được cài đặt. Bỏ qua."
-else
-    echo "⚠️ OpenSSL chưa được cài đặt. Bắt đầu cài đặt..."
+else echo "✅ PCRE2 đã tồn tại. Bỏ qua."; fi
+if ! [ -f "$DEPS_PREFIX/include/openssl/ssl.h" ]; then
+    echo "   -> Cài đặt OpenSSL..."
     download_and_extract "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
     cd "openssl-${OPENSSL_VERSION}" && ./config --prefix="$DEPS_PREFIX" --openssldir="$DEPS_PREFIX/ssl" no-shared && make -j$(nproc) && make install_sw && cd "$SOURCE_DIR"
-fi
-
+else echo "✅ OpenSSL đã tồn tại. Bỏ qua."; fi
 
 # 4. CÀI ĐẶT APACHE HTTP SERVER
 echo ">> Bắt đầu quá trình cài đặt Apache HTTP Server..."
@@ -107,12 +86,26 @@ CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" ./configure \
     --with-ssl="$DEPS_PREFIX" \
     --with-zlib="$DEPS_PREFIX"
 
-echo "   -> Bắt đầu biên dịch và cài đặt Apache (có thể mất vài phút)..."
+echo "   -> Bắt đầu biên dịch và cài đặt Apache..."
 make -j$(nproc)
 make install
 cd "$SOURCE_DIR"
 
-# 5. CẬP NHẬT CẤU HÌNH SHELL
+# 5. TỰ ĐỘNG SỬA LỖI "bad user name daemon"
+echo ">> Tự động cấu hình User và Group trong httpd.conf..."
+CURRENT_USER=$(whoami)
+CURRENT_GROUP=$(id -gn)
+CONFIG_FILE="$INSTALL_PREFIX/conf/httpd.conf"
+
+if [ -f "$CONFIG_FILE" ]; then
+    sed -i "s/User daemon/User $CURRENT_USER/" "$CONFIG_FILE"
+    sed -i "s/Group daemon/Group $CURRENT_GROUP/" "$CONFIG_FILE"
+    echo "✅ Đã tự động cập nhật User thành '$CURRENT_USER' và Group thành '$CURRENT_GROUP'."
+else
+    echo "⚠️ Không tìm thấy tệp cấu hình tại $CONFIG_FILE. Vui lòng kiểm tra lại."
+fi
+
+# 6. CẬP NHẬT CẤU HÌNH SHELL
 echo ">> Cập nhật cấu hình shell..."
 CURRENT_SHELL=$(basename "$SHELL")
 SHELL_CONFIG_FILE=""
