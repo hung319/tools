@@ -50,7 +50,6 @@ def load_config():
             config.setdefault('vipig_token', '')
             config.setdefault('failure_threshold', 7)
             config.setdefault('stop_after_tasks', 0)
-            # Thêm các key nghỉ giữa chừng nếu chưa có
             config.setdefault('tasks_before_break', 20)
             config.setdefault('break_duration', 300)
             return config
@@ -64,9 +63,10 @@ def load_config():
 
 # --- API CLIENT CHO VIPIG.NET ---
 class VipIgClient:
+    # === [MỚI] Cập nhật User-Agent Mobile ===
+    USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36"
     BASE_URL = "https://vipig.net"
-    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36"
-
+    
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": self.USER_AGENT})
@@ -132,8 +132,12 @@ def get_configuration():
         token = config.get('vipig_token', '')
         stop_after = config.get('stop_after_tasks', 0)
         
+        # === [FIX] Căn chỉnh lại hiển thị menu ===
         print(f'{Cyan}--- TOOL VIPIG.NET (Đăng nhập bằng Token) ---{Defaut}')
-        print(f" [Access Token VIPIG]: {Yellow}{token[:15]}...{Defaut}" if token else f"{Red}Chưa có{Defaut}")
+        
+        token_display = f"{Yellow}{token[:15]}...{Defaut}" if token else f"{Red}Chưa có{Defaut}"
+        print(f" [Access Token VIPIG]: {token_display}")
+        
         print(f" [Cookies IG]        : {Yellow}{len(config.get('ig_cookies', []))} tài khoản{Defaut}")
         print(f" [Cài đặt]           : Nhiệm vụ {Yellow}{config.get('tasks')}{Defaut}, Delay {Yellow}{config.get('delay_between_tasks')}s{Defaut}")
         print(f" [Nghỉ ngơi]         : {Yellow}Nghỉ {config.get('break_duration')}s sau mỗi {config.get('tasks_before_break')} nhiệm vụ{Defaut}")
@@ -166,7 +170,6 @@ def get_configuration():
         elif choice == '3':
             config['tasks'] = input(f'{Cyan}Chọn nhiệm vụ (1:Follow, 2:Like, 12:Cả hai): {Red}').strip()
             config['delay_between_tasks'] = int(input(f'{Cyan}Delay giữa các nhiệm vụ (giây): {Red}'))
-            # === [MỚI] Thêm câu hỏi cho tính năng nghỉ ngơi ===
             config['tasks_before_break'] = int(input(f'{Cyan}Sau bao nhiêu nhiệm vụ thì nghỉ?: {Red}'))
             config['break_duration'] = int(input(f'{Cyan}Thời gian nghỉ (giây): {Red}'))
             config['failure_threshold'] = int(input(f'{Cyan}Ngưỡng lỗi (thất bại liên tiếp): {Red}'))
@@ -217,9 +220,8 @@ def job(config):
         client.set_active_account(ds_user_id)
         
         account_is_dead = False
-        tasks_this_session = 0 # Bộ đếm nhiệm vụ cho phiên nghỉ ngơi
+        tasks_this_session = 0
         
-        # LOGIC CHẠY NHIỆM VỤ
         job_types_to_run = []
         if '1' in config['tasks']: job_types_to_run.append({'name': 'FOLLOW', 'type': 'sub', 'color': Yellow})
         if '2' in config['tasks']: job_types_to_run.append({'name': 'LIKE', 'type': 'tym', 'color': Cyan})
@@ -260,7 +262,6 @@ def job(config):
                     
                     animated_delay(config['delay_between_tasks'])
                     
-                    # === [MỚI] Logic nghỉ giữa chừng ===
                     if tasks_this_session > 0 and tasks_this_session % tasks_before_break == 0:
                         animated_delay(break_duration, f"Tạm nghỉ")
 
