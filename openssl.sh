@@ -2,7 +2,7 @@
 set -e
 
 # --- Cấu hình ---
-OPENSSL_VERSION="3.5.4" # Một phiên bản LTS (hỗ trợ lâu dài) ổn định
+OPENSSL_VERSION="3.5.4"
 OPENSSL_URL="https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
 ARCHIVE_NAME=$(basename "$OPENSSL_URL")
 EXTRACTED_DIR="openssl-${OPENSSL_VERSION}"
@@ -35,13 +35,39 @@ fi
 cd "$EXTRACTED_DIR"
 
 # --- Build và cài đặt ---
-# OpenSSL có hệ thống build riêng, không phải CMake hay configure chuẩn
 echo "⚙️  Đang cấu hình OpenSSL..."
 ./config shared --prefix="$PREFIX" --openssldir="$PREFIX/ssl"
 
-echo "🚀 Đang build và cài đặt OpenSSL (có thể mất một lúc)..."
+echo "🚀 Đang build và cài đặt OpenSSL..."
 make -j"$(nproc)"
 make install
 
+# --- Tạo file pkg-config (openssl.pc) nếu thiếu ---
+PKGCONFIG_DIR="$PREFIX/lib/pkgconfig"
+mkdir -p "$PKGCONFIG_DIR"
+OPENSSL_PC="$PKGCONFIG_DIR/openssl.pc"
+
+if [ ! -f "$OPENSSL_PC" ]; then
+    echo "🧩 Đang tạo file openssl.pc để hỗ trợ pkg-config..."
+    cat > "$OPENSSL_PC" <<EOF
+prefix=$PREFIX
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: OpenSSL
+Description: Secure Sockets Layer and cryptography libraries
+Version: ${OPENSSL_VERSION}
+Libs: -L\${libdir} -lssl -lcrypto
+Cflags: -I\${includedir}
+EOF
+    echo "✅ Đã tạo file $OPENSSL_PC"
+else
+    echo "☑️  Đã có file openssl.pc."
+fi
+
+# --- Hoàn tất ---
 echo ""
 echo "✅ OpenSSL ${OPENSSL_VERSION} (bao gồm libcrypto) đã được cài đặt vào $PREFIX"
+echo "Bạn có thể kiểm tra bằng:"
+echo "PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig pkg-config --libs --cflags openssl"
