@@ -1,48 +1,50 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 PREFIX="$HOME/.local"
-SRC_DIR="$HOME/src"
+SRC="$HOME/src"
+mkdir -p "$SRC" "$PREFIX/lib/pkgconfig"
 
-mkdir -p "$SRC_DIR"
-cd "$SRC_DIR"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
+export CPPFLAGS="-I$PREFIX/include"
+export LDFLAGS="-L$PREFIX/lib"
 
-# =======================
-# Build libxml2 (no python)
-# =======================
+# =========================
+# 🧱 Build libxml2
+# =========================
+cd "$SRC"
 if [ ! -d libxml2 ]; then
-  echo "📦 Downloading libxml2..."
-  curl -L -o libxml2.tar.gz https://gitlab.gnome.org/GNOME/libxml2/-/archive/v2.13.0/libxml2-v2.13.0.tar.gz
-  tar xf libxml2.tar.gz
-  mv libxml2-* libxml2
+  git clone --depth=1 https://gitlab.gnome.org/GNOME/libxml2.git
 fi
-
 cd libxml2
-echo "⚙️ Building libxml2..."
-make distclean >/dev/null 2>&1 || true
-./autogen.sh --prefix="$PREFIX" --without-python --disable-python --enable-static --enable-shared
-make -j"$(nproc)"
+./autogen.sh --prefix="$PREFIX" --with-python=no
+make -j$(nproc)
 make install
-cd ..
 
-# =======================
-# Build libxslt
-# =======================
+# =========================
+# 🧱 Build libxslt (disable Python)
+# =========================
+cd "$SRC"
 if [ ! -d libxslt ]; then
-  echo "📦 Downloading libxslt..."
-  curl -L -o libxslt.tar.gz https://gitlab.gnome.org/GNOME/libxslt/-/archive/v1.1.41/libxslt-v1.1.41.tar.gz
-  tar xf libxslt.tar.gz
-  mv libxslt-* libxslt
+  git clone --depth=1 https://gitlab.gnome.org/GNOME/libxslt.git
+fi
+cd libxslt
+
+# Nếu không có autogen.sh thì tự sinh ra
+if [ ! -f ./autogen.sh ]; then
+  echo "⚙️ autogen.sh not found — generating with autoreconf..."
+  autoreconf -fi
+  ./configure --prefix="$PREFIX" \
+    --with-libxml-prefix="$PREFIX" \
+    --without-python
+else
+  ./autogen.sh --prefix="$PREFIX" \
+    --with-libxml-prefix="$PREFIX" \
+    --without-python
 fi
 
-cd libxslt
-echo "⚙️ Building libxslt..."
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
-CFLAGS="-I$PREFIX/include" \
-LDFLAGS="-L$PREFIX/lib" \
-./autogen.sh --prefix="$PREFIX" --with-libxml-prefix="$PREFIX" --enable-static --enable-shared
-make -j"$(nproc)"
+make -j$(nproc)
 make install
-cd ..
 
-echo "✅ Installed libxml2 & libxslt into $PREFIX"
+echo "✅ Done! Installed libxml2 and libxslt (no Python) into $PREFIX"
