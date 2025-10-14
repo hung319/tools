@@ -48,22 +48,22 @@ def load_config():
         with open('config_vipig.json', 'r', encoding='utf-8') as f:
             config = json.load(f)
             config.setdefault('vipig_token', '')
-            config.setdefault('failure_threshold', 7)
             config.setdefault('stop_after_tasks', 0)
             config.setdefault('tasks_before_break', 20)
             config.setdefault('break_duration', 300)
+            # Xóa key cũ nếu tồn tại
+            if 'failure_threshold' in config:
+                del config['failure_threshold']
             return config
     except (FileNotFoundError, json.JSONDecodeError):
         return {
             'vipig_token': '', 'ig_cookies': [], 'tasks': '12',
             'delay_between_tasks': 15, 'tasks_before_break': 20,
-            'break_duration': 300, 'use_proxy': 'off', 'proxy_file': '',
-            'failure_threshold': 7, 'stop_after_tasks': 0
+            'break_duration': 300, 'stop_after_tasks': 0
         }
 
 # --- API CLIENT CHO VIPIG.NET ---
 class VipIgClient:
-    # === [MỚI] Cập nhật User-Agent Mobile ===
     USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36"
     BASE_URL = "https://vipig.net"
     
@@ -132,23 +132,18 @@ def get_configuration():
         token = config.get('vipig_token', '')
         stop_after = config.get('stop_after_tasks', 0)
         
-        # === [FIX] Căn chỉnh lại hiển thị menu ===
         print(f'{Cyan}--- TOOL VIPIG.NET (Đăng nhập bằng Token) ---{Defaut}')
-        
-        token_display = f"{Yellow}{token[:15]}...{Defaut}" if token else f"{Red}Chưa có{Defaut}"
-        print(f" [Access Token VIPIG]: {token_display}")
-        
+        print(f" [Access Token VIPIG]: {Yellow}{token[:15]}...{Defaut}" if token else f"{Red}Chưa có{Defaut}")
         print(f" [Cookies IG]        : {Yellow}{len(config.get('ig_cookies', []))} tài khoản{Defaut}")
         print(f" [Cài đặt]           : Nhiệm vụ {Yellow}{config.get('tasks')}{Defaut}, Delay {Yellow}{config.get('delay_between_tasks')}s{Defaut}")
         print(f" [Nghỉ ngơi]         : {Yellow}Nghỉ {config.get('break_duration')}s sau mỗi {config.get('tasks_before_break')} nhiệm vụ{Defaut}")
-        print(f" [Ngưỡng Lỗi]       : {Yellow}{config.get('failure_threshold')} lần thất bại liên tiếp{Defaut}")
         print(f" [Dừng tool]        : {Yellow}{'Chạy vô hạn' if stop_after == 0 else f'Dừng sau {stop_after} nhiệm vụ'}{Defaut}")
         print(f'{Cyan}--------------------------------------------------{Defaut}\n')
         
         print(f'{Green}[s] Bắt đầu chạy{Defaut}')
         print(f'{Yellow}[1] Cấu hình Access Token VIPIG{Defaut}')
         print(f'{Yellow}[2] Cấu hình Cookies Instagram{Defaut}')
-        print(f'{Yellow}[3] Tùy chỉnh Nhiệm vụ, Delay, Nghỉ & Dừng tool{Defaut}')
+        print(f'{Yellow}[3] Tùy chỉnh Nhiệm vụ, Delay & Dừng tool{Defaut}')
         print(f'{Red}[q] Thoát{Defaut}\n')
         
         choice = input(f'{Cyan}Nhập lựa chọn: {Red}').lower()
@@ -172,7 +167,6 @@ def get_configuration():
             config['delay_between_tasks'] = int(input(f'{Cyan}Delay giữa các nhiệm vụ (giây): {Red}'))
             config['tasks_before_break'] = int(input(f'{Cyan}Sau bao nhiêu nhiệm vụ thì nghỉ?: {Red}'))
             config['break_duration'] = int(input(f'{Cyan}Thời gian nghỉ (giây): {Red}'))
-            config['failure_threshold'] = int(input(f'{Cyan}Ngưỡng lỗi (thất bại liên tiếp): {Red}'))
             config['stop_after_tasks'] = int(input(f'{Cyan}Dừng hẳn sau bao nhiêu nhiệm vụ (nhập 0 để chạy vô hạn): {Red}'))
         elif choice == 's':
             if not config.get('vipig_token') or not config.get('ig_cookies'):
@@ -185,11 +179,9 @@ def get_configuration():
 def job(config):
     client = VipIgClient()
     list_acc = config['ig_cookies']
-    failure_threshold = config['failure_threshold']
     stop_after_tasks = config.get('stop_after_tasks', 0)
     tasks_before_break = config.get('tasks_before_break', 20)
     break_duration = config.get('break_duration', 300)
-    failure_counts = {i: 0 for i in range(len(list_acc))}
     
     print(f"{Yellow}Đang xác thực Access Token...{Defaut}")
     success, data = client.login_with_token(config['vipig_token'])
@@ -214,12 +206,12 @@ def job(config):
         
         try: ds_user_id = current_cookie.split('ds_user_id=')[1].split(';')[0]
         except IndexError:
-            list_acc.pop(account_index); config['ig_cookies'] = list_acc; save_config(config); continue
+            print(f"{Red}Cookie #{account_index+1} không hợp lệ, bỏ qua...{Defaut}")
+            account_index += 1; continue
 
         print(f'\n{Purple}➤ ACC {account_index + 1}/{len(list_acc)} <> ID: {Green}{ds_user_id} | Đang đặt cấu hình...{Defaut}')
         client.set_active_account(ds_user_id)
         
-        account_is_dead = False
         tasks_this_session = 0
         
         job_types_to_run = []
@@ -227,7 +219,6 @@ def job(config):
         if '2' in config['tasks']: job_types_to_run.append({'name': 'LIKE', 'type': 'tym', 'color': Cyan})
         
         for job_info in job_types_to_run:
-            if account_is_dead: break
             while True:
                 if stop_after_tasks > 0 and total_task_count >= stop_after_tasks: break
                 tasks = client.get_tasks(job_info['type'])
@@ -254,12 +245,6 @@ def job(config):
                             reward_info = client.claim_like_reward(task["idpost"])
                             if 'mess' in reward_info: print(f"   {Green}↳ {reward_info['mess']}{Defaut}")
 
-                    if result == 1: failure_counts[account_index] = 0
-                    else: failure_counts[account_index] = failure_counts.get(account_index, 0) + 1
-                    
-                    if failure_counts.get(account_index, 0) >= failure_threshold:
-                         account_is_dead=True; break
-                    
                     animated_delay(config['delay_between_tasks'])
                     
                     if tasks_this_session > 0 and tasks_this_session % tasks_before_break == 0:
@@ -269,13 +254,9 @@ def job(config):
                     reward_info = client.claim_follow_rewards(completed_follow_ids)
                     if 'mess' in reward_info: print(f"   {Green}↳ {reward_info['mess']}{Defaut}")
                 
-                if account_is_dead or not tasks: break
-
-        if not account_is_dead: account_index += 1
-        else:
-            print(f"{Red}CẢNH BÁO: Cookie tài khoản {ds_user_id} đã bị xóa do thất bại liên tiếp.{Defaut}")
-            list_acc.pop(account_index); config['ig_cookies'] = list_acc; save_config(config)
-
+                if not tasks: break
+        
+        account_index += 1
         if not list_acc: print(f"{Yellow}Đã hết cookie để chạy."); break
         if not (stop_after_tasks > 0 and total_task_count >= stop_after_tasks):
             print(f"\n{Cyan}Chuyển tài khoản tiếp theo...{Defaut}"); sleep(3)
