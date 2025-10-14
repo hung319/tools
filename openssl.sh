@@ -2,7 +2,7 @@
 set -e
 
 # --- Cấu hình ---
-OPENSSL_VERSION="3.0.14" # Một phiên bản LTS (hỗ trợ lâu dài) ổn định
+OPENSSL_VERSION="3.5.4" # Một phiên bản LTS (hỗ trợ lâu dài) ổn định
 OPENSSL_URL="https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
 ARCHIVE_NAME=$(basename "$OPENSSL_URL")
 EXTRACTED_DIR="openssl-${OPENSSL_VERSION}"
