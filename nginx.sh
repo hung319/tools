@@ -4,36 +4,42 @@ set -e
 PREFIX="$HOME/nginx"
 NGINX_VERSION=1.26.2
 PCRE_VERSION=8.45
+OPENSSL_VERSION=1.1.1w   # hoặc 3.0.15 nếu bạn cần OpenSSL 3
 
 TMPDIR=$(mktemp -d)
 cd "$TMPDIR"
 
-echo "Tải PCRE ${PCRE_VERSION}..."
+echo "📦 Tải PCRE..."
 curl -L "https://downloads.sourceforge.net/project/pcre/pcre/${PCRE_VERSION}/pcre-${PCRE_VERSION}.tar.gz" -o pcre.tar.gz
 tar xzf pcre.tar.gz
 
-echo "Tải Nginx ${NGINX_VERSION}..."
+echo "📦 Tải OpenSSL..."
+curl -L "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" -o openssl.tar.gz
+tar xzf openssl.tar.gz
+
+echo "📦 Tải Nginx..."
 curl -L "http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" -o nginx.tar.gz
 tar xzf nginx.tar.gz
 
 cd nginx-${NGINX_VERSION}
 
-echo "Biên dịch Nginx với PCRE + gzip..."
+echo "⚙️ Biên dịch Nginx với PCRE + OpenSSL + gzip..."
 ./configure \
   --prefix="$PREFIX" \
   --with-http_ssl_module \
   --with-http_v2_module \
   --with-http_gzip_static_module \
   --with-http_stub_status_module \
-  --with-pcre=../pcre-${PCRE_VERSION}
+  --with-pcre=../pcre-${PCRE_VERSION} \
+  --with-openssl=../openssl-${OPENSSL_VERSION} \
+  --with-openssl-opt=no-tests
 
 make -j"$(nproc)"
 make install
 
-echo "Đã cài Nginx vào $PREFIX"
-echo "Chạy thử: $PREFIX/sbin/nginx -v"
+echo "✅ Đã cài Nginx vào $PREFIX"
+echo "➡️ Chạy thử: $PREFIX/sbin/nginx -v"
 
 if ! grep -q 'nginx/sbin' "$HOME/.bashrc"; then
   echo 'export PATH="$HOME/nginx/sbin:$PATH"' >> "$HOME/.bashrc"
 fi
-echo "Đã thêm Nginx vào PATH. Đăng nhập lại shell để dùng lệnh nginx."
