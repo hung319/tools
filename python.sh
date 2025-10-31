@@ -153,7 +153,7 @@ download_and_extract "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python
             --with-openssl="${DEPS_PREFIX}" \
             --with-ensurepip=install
 make -j$(nproc)
-make altinstall
+make install
 echo -e "${GREEN}==> Cài đặt Python thành công!${NC}"
 
 # ==============================================================================
