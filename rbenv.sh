@@ -231,22 +231,33 @@ info "Bắt đầu cài đặt rbenv vào $RBENV_DIR..."
 # Cài đặt hoặc cập nhật rbenv
 if [ -d "$RBENV_DIR" ]; then
   info "Thư mục rbenv đã tồn tại. Đang cập nhật (git pull)..."
-  (cd "$RBENV_DIR" && git pull)
+  # SỬA LỖI 1: Thêm --rebase=false để tắt hint
+  (cd "$RBENV_DIR" && git pull --rebase=false)
 else
   info "Đang clone rbenv từ GitHub..."
   git clone https://github.com/rbenv/rbenv.git "$RBENV_DIR"
 fi
 
+# Thêm rbenv vào PATH của script HIỆN TẠI để lệnh 'rbenv root' hoạt động
+export PATH="$RBENV_DIR/bin:$PATH"
+
 # Cài đặt hoặc cập nhật plugin ruby-build
-RB_BUILD_DIR="$RBENV_DIR/plugins/ruby-build"
+# Sử dụng `rbenv root` để xác định đường dẫn (theo yêu cầu của bạn)
+
+# SỬA LỖI 2: Bỏ từ khóa 'local' vì chúng ta không ở trong một hàm
+declare RB_BUILD_DIR # Dùng 'declare' thay 'local' cho an toàn
+RB_BUILD_DIR="$(rbenv root)/plugins/ruby-build"
+
 info "Cài đặt plugin ruby-build vào $RB_BUILD_DIR..."
-mkdir -p "$(dirname "$RB_BUILD_DIR")"
+mkdir -p "$(dirname "$RB_BUILD_DIR")" # Đảm bảo thư mục plugins tồn tại
 
 if [ -d "$RB_BUILD_DIR" ]; then
   info "Thư mục ruby-build đã tồn tại. Đang cập nhật (git pull)..."
-  (cd "$RB_BUILD_DIR" && git pull)
+  # SỬA LỖI 1: Thêm --rebase=false để tắt hint
+  (cd "$RB_BUILD_DIR" && git pull --rebase=false)
 else
   info "Đang clone ruby-build từ GitHub..."
+  # Git clone vào đường dẫn đã được xác định bằng 'rbenv root'
   git clone https://github.com/rbenv/ruby-build.git "$RB_BUILD_DIR"
 fi
 
