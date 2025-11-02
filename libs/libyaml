@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# --- Cấu hình ---
+# Đổi số phiên bản nếu cần
+LIBYAML_VERSION="0.2.5" 
+LIBYAML_TARBALL="yaml-${LIBYAML_VERSION}.tar.gz"
+LIBYAML_URL="https://pyyaml.org/download/libyaml/${LIBYAML_TARBALL}"
+INSTALL_DIR="$HOME/.local"
+BUILD_DIR="$HOME/tmp_build_libyaml"
+
+# Kiểm tra công cụ cần thiết (ví dụ: make, gcc)
+if ! command -v make &> /dev/null || ! command -v gcc &> /dev/null; then
+    echo "LỖI: Cần có 'make' và 'gcc' để biên dịch mã nguồn."
+    echo "Nếu bạn đang ở môi trường hạn chế, hãy đảm bảo các công cụ này khả dụng."
+    exit 1
+fi
+
+# Tạo thư mục cài đặt và build tạm thời
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+echo "Bắt đầu cài đặt LibYAML phiên bản ${LIBYAML_VERSION} vào ${INSTALL_DIR}"
+echo "----------------------------------------------------"
+
+# 1. Tải mã nguồn
+echo "1. Đang tải mã nguồn..."
+if command -v wget &> /dev/null; then
+    wget -q "$LIBYAML_URL"
+elif command -v curl &> /dev/null; then
+    curl -s -O "$LIBYAML_URL"
+else
+    echo "LỖI: Không tìm thấy wget hoặc curl. Vui lòng cài đặt một trong hai."
+    exit 1
+fi
+
+if [ ! -f "$LIBYAML_TARBALL" ]; then
+    echo "LỖI: Tải xuống thất bại. Tệp ${LIBYAML_TARBALL} không tồn tại hoặc URL đã sai."
+    exit 1
+fi
+
+# 2. Giải nén
+echo "2. Đang giải nén..."
+tar -xzf "$LIBYAML_TARBALL"
+cd "yaml-${LIBYAML_VERSION}"
+
+# 3. Cấu hình, Biên dịch và Cài đặt
+echo "3. Đang cấu hình (chỉ định --prefix=${INSTALL_DIR})..."
+# Dùng --prefix để chỉ định thư mục cài đặt tùy chỉnh
+./configure --prefix="$INSTALL_DIR"
+
+if [ $? -ne 0 ]; then
+    echo "LỖI: Cấu hình thất bại."
+    exit 1
+fi
+
+echo "4. Đang biên dịch..."
+make -j$(nproc)
+
+if [ $? -ne 0 ]; then
+    echo "LỖI: Biên dịch thất bại."
+    exit 1
+fi
+
+echo "5. Đang cài đặt..."
+# make install sẽ cài đặt vào thư mục đã cấu hình (không cần sudo)
+make install
+
+if [ $? -ne 0 ]; then
+    echo "LỖI: Cài đặt thất bại."
+    exit 1
+fi
+
+# 6. Dọn dẹp
+echo "6. Dọn dẹp thư mục build tạm thời..."
+cd "$HOME"
+rm -rf "$BUILD_DIR"
+
+# 7. Hướng dẫn cập nhật PATH và LD_LIBRARY_PATH (Quan trọng)
+echo ""
+echo "✅ Cài đặt LibYAML thành công vào ${INSTALL_DIR}"
+echo "----------------------------------------------------"
+echo "⭐ ĐỂ SỬ DỤNG THƯ VIỆN NÀY, BẠN CẦN CẬP NHẬT BIẾN MÔI TRƯỜNG."
+echo "   Nếu bạn chưa làm điều này sau khi cài đặt libreadline, hãy thêm các dòng sau"
+echo "   VÀO TỆP CẤU HÌNH SHELL CỦA BẠN (ví dụ: ~/.bashrc hoặc ~/.zshrc):"
+echo ""
+echo 'export PATH="$HOME/.local/bin:$PATH"'
+echo 'export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"'
+echo ""
+echo "   Sau đó chạy: source ~/.bashrc (hoặc tệp tương ứng) để áp dụng các thay đổi."
