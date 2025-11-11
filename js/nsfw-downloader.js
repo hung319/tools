@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Logic tải file được giữ nguyên theo yêu cầu.
 
     const CONCURRENT_LIMIT = 1000000;
-    const PROXY_URL = 'https://proxy.h4rs.io.vn/cors?url=';
+    const PROXY_URL = 'https://proxy.onii.pp.ua/cors?url=';
     const API_URLS = {
         'waifu.pics': 'https://api.waifu.pics/nsfw/waifu',
         'konachan(questionable)': 'https://konachan.net/post.json?tags=order:random+rating:questionable&limit=1',
