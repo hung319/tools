@@ -4,7 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const CONCURRENT_LIMIT = 1000000;
     
     // Sử dụng proxy gốc của bạn
-    const PROXY_URL = 'https://proxy.h4rs.io.vn/cors?url=';
+    const PROXY_URL = 'https://proxy.onii.pp.ua/cors?url=';
     const API_URLS = {
         'waifu.pics': 'https://waifu.pics/api/sfw/waifu',
         'konachan': 'https://konachan.net/post.json?tags=order:random+rating:safe&limit=1',
