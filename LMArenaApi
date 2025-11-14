@@ -1,0 +1,30 @@
+# Dockerfile cho LMArenaBridge (fix python-multipart)
+FROM python:3.11-slim
+
+# Cài các công cụ hệ thống cần thiết (git + build tools cho pip)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       git \
+       build-essential \
+       ca-certificates \
+       libffi-dev \
+       && rm -rf /var/lib/apt/lists/*
+
+# Tạo thư mục app và clone repo
+WORKDIR /app
+RUN git clone https://github.com/CloudWaddie/LMArenaBridge.git /app
+
+# Cài dependencies (bao gồm python-multipart trực tiếp để chắc chắn)
+# Nếu bạn muốn, có thể thêm python-multipart vào requirements.txt thay vì cài ở đây.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir python-multipart
+
+# Tạo file config.json với token -- có thể truyền ARG khi build
+ARG AUTH_TOKEN="YOUR_AUTH_TOKEN"
+RUN printf '{\n  "auth_token": "%s"\n}\n' "${AUTH_TOKEN}" > /app/config.json
+
+# Expose port
+EXPOSE 8000
+
+# Command mặc định: chạy script chính
+CMD ["python", "src/main.py"]
