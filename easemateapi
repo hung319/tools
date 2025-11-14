@@ -9,15 +9,11 @@ WORKDIR /app
 ENV API_MASTER_KEY=11042006
 
 # 复制依赖文件并安装
-COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # 关键修正：重新加回 Playwright 浏览器实例的安装命令
 RUN playwright install --with-deps
-
-# 复制所有项目文件到工作目录
-COPY . .
 
 # 切换到 Playwright 镜像提供的非 root 用户
 USER pwuser
