@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Công cụ | Tạo Port Ngẫu Nhiên</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    
+    <main>
+        <div class="container">
+            <div class="tool-container">
+                <h1>Tạo Port Ngẫu Nhiên</h1>
+                <p>Tạo một port ngẫu nhiên trong dải 0 - 65535</p>
+
+                <div id="port-display" title="Click để sao chép">...</div>
+
+                <div class="button-group-row">
+                    <button id="generate-port-btn">Tạo mới</button>
+                    <button id="copy-port-btn">Sao chép</button>
+                </div>
+                
+                <div id="copy-message">Đã sao chép vào clipboard!</div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const portDisplay = document.getElementById('port-display');
+            const generateBtn = document.getElementById('generate-port-btn');
+            const copyBtn = document.getElementById('copy-port-btn');
+            const copyMessage = document.getElementById('copy-message');
+
+            let currentPort = null;
+            let copyTimeout = null;
+
+            function generateRandomPort() {
+                // Tạo port ngẫu nhiên từ 0 đến 65535
+                const min = 0;
+                const max = 65535;
+                currentPort = Math.floor(Math.random() * (max - min + 1)) + min;
+                portDisplay.textContent = currentPort;
+            }
+
+            async function copyToClipboard() {
+                if (currentPort === null) return;
+                if (copyTimeout) clearTimeout(copyTimeout);
+                copyMessage.style.display = 'none';
+
+                try {
+                    await navigator.clipboard.writeText(currentPort.toString());
+                    copyMessage.style.display = 'block';
+                    copyTimeout = setTimeout(() => {
+                        copyMessage.style.display = 'none';
+                        copyTimeout = null;
+                    }, 1500);
+                } catch (err) {
+                    console.error('Không thể sao chép: ', err);
+                }
+            }
+
+            // Gán sự kiện
+            generateBtn.addEventListener('click', generateRandomPort);
+            copyBtn.addEventListener('click', copyToClipboard);
+            portDisplay.addEventListener('click', copyToClipboard);
+
+            // Tạo ngay một port khi tải trang
+            generateRandomPort();
+        });
+    </script>
+</body>
+</html>

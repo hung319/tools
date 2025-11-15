@@ -98,3 +98,53 @@ body.page-nsfw-downloader .download-card h1 { color: var(--error-color); text-sh
 .regex-error { color: var(--error-color); text-shadow: 0 0 5px var(--error-color); }
 .regex-results { text-align: left; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px; background-color: rgba(0,0,0,0.2); min-height: 150px; white-space: pre-wrap; word-break: break-all; }
 .regex-results .match { background-color: rgba(0, 255, 127, 0.3); box-shadow: 0 0 8px var(--success-color); color: #fff; border-radius: 3px; }
+/* --- THÊM MỚI: CSS cho Trang Tạo Port --- */
+
+/* * Style cho ô hiển thị port (#port-display)
+ * được viết để trông GIỐNG HỆT #username-display
+ * mà không đụng chạm gì đến #username-display
+ */
+#port-display {
+    font-size: 2.5rem; /* Chữ to, rõ ràng */
+    font-weight: 700;
+    color: var(--primary-color);
+    text-shadow: 0 0 8px var(--primary-color);
+    margin: 25px auto;
+    cursor: pointer;
+    padding: 20px 30px;
+    background-color: rgba(0,0,0,0.3); /* Dùng nền giống các tool khác */
+    border: 1px dashed var(--border-color); /* Dùng border giống các tool khác */
+    border-radius: 4px;
+    transition: all 0.3s;
+    word-break: break-all;
+    min-height: 80px; 
+    
+    /* Căn giữa số port cho đẹp */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#port-display:hover {
+    border-color: var(--primary-color);
+    background-color: rgba(0, 247, 255, 0.05); /* Hiệu ứng hover giống các tool khác */
+}
+
+/* * Style cho nhóm nút (Tạo mới, Sao chép)
+ * để chúng nằm ngang hàng (class .button-group-row)
+ */
+.button-group-row {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 20px;
+}
+
+/* * Vì .tool-container button đang có "margin: auto", 
+ * chúng ta cần ghi đè nó về 0 cho các nút bên trong .button-group-row
+ * để chúng xếp hàng ngang chính xác.
+ */
+.button-group-row button {
+    margin: 0; 
+    min-width: 150px;
+}
