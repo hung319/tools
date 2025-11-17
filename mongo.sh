@@ -2,13 +2,18 @@
 set -e # Thoát ngay khi có lỗi
 
 # --- Cấu hình các biến ---
-MONGO_SERVER_VERSION="6.0.15" 
+MONGO_SERVER_VERSION="6.0.15"
 # Chọn phiên bản mongosh mới nhất, tương thích ngược
-MONGO_SHELL_VERSION="2.2.10" 
+MONGO_SHELL_VERSION="2.2.10"
 MONGO_USER="myuser"
 MONGO_PASS="mypassword"
 MONGO_PORT="27017"
-INSTALL_DIR="$(pwd)/mongo"
+
+# --- THAY ĐỔI YÊU CẦU ---
+# Cài đặt vào thư mục ~/database/mongodb
+INSTALL_DIR="$HOME/database/mongodb" 
+# --- KẾT THÚC THAY ĐỔI ---
+
 DATA_DIR="$INSTALL_DIR/data"
 LOG_DIR="$INSTALL_DIR/log"
 LOG_FILE="$LOG_DIR/mongod.log"
@@ -42,6 +47,7 @@ detect_arch
 
 # 1. CÀI ĐẶT MONGODB SERVER
 echo "🚀 Bắt đầu cài đặt MongoDB Server v${MONGO_SERVER_VERSION}..."
+echo "📂 Thư mục cài đặt: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$LOG_DIR"
 
 MONGO_PLATFORM="debian11"
@@ -103,19 +109,59 @@ EOL
 
 $MONGOD_BIN --config $CONFIG_FILE
 
-echo "   Chờ server khởi động trong 5 giây..."
+echo "    Chờ server khởi động trong 5 giây..."
 sleep 5
 $MONGOSH_BIN --port $MONGO_PORT < "$INIT_JS_FILE"
 
 if [ $? -eq 0 ]; then
-    echo "   ✅ Tạo người dùng '$MONGO_USER' thành công!"
+    echo "    ✅ Tạo người dùng '$MONGO_USER' thành công!"
 else
-    echo "   ❌ Lỗi: Không thể tạo người dùng. Vui lòng kiểm tra log tại $LOG_FILE"
+    echo "    ❌ Lỗi: Không thể tạo người dùng. Vui lòng kiểm tra log tại $LOG_FILE"
 fi
 
-echo "   Dừng server để hoàn tất quá trình cài đặt..."
+echo "    Dừng server để hoàn tất quá trình cài đặt..."
 $MONGOD_BIN --config $CONFIG_FILE --shutdown
 sleep 2
+rm "$INIT_JS_FILE" # Xóa file js khởi tạo cho sạch
+
+# --- THAY ĐỔI YÊU CẦU: TẠO SCRIPT START/STOP ---
+echo ""
+echo "🤖 Đang tạo script 'start.sh' và 'stop.sh'..."
+
+START_SCRIPT="$INSTALL_DIR/start.sh"
+STOP_SCRIPT="$INSTALL_DIR/stop.sh"
+
+# --- Tạo start.sh ---
+# Các biến $MONGOD_BIN, $CONFIG_FILE, $LOG_FILE sẽ được thay thế bằng giá trị thực
+# tại thời điểm chạy script cài đặt này.
+cat > "$START_SCRIPT" << EOL
+#!/bin/bash
+echo "🚀 Đang khởi động MongoDB..."
+"$MONGOD_BIN" --config "$CONFIG_FILE"
+if [ \$? -eq 0 ]; then
+    echo "✅ MongoDB đã khởi động. Kiểm tra log tại: $LOG_FILE"
+else
+    echo "❌ Lỗi: Không thể khởi động. Kiểm tra log tại: $LOG_FILE"
+fi
+EOL
+
+# --- Tạo stop.sh ---
+cat > "$STOP_SCRIPT" << EOL
+#!/bin/bash
+echo "🛑 Đang dừng MongoDB..."
+"$MONGOD_BIN" --config "$CONFIG_FILE" --shutdown
+if [ \$? -eq 0 ]; then
+    echo "✅ Đã gửi lệnh dừng."
+else
+    echo "❌ Lỗi: Không thể dừng. Server có đang chạy không?"
+fi
+EOL
+
+# Cấp quyền thực thi
+chmod +x "$START_SCRIPT" "$STOP_SCRIPT"
+echo "✅ Đã tạo $START_SCRIPT và $STOP_SCRIPT"
+# --- KẾT THÚC THAY ĐỔI ---
+
 
 # --- Hoàn tất ---
 echo ""
@@ -124,11 +170,13 @@ echo "🎉 Mọi thứ đã sẵn sàng!"
 echo "❗️ QUAN TRỌNG: Vui lòng chạy 'source ~/.bashrc' (hoặc .zshrc/.profile) hoặc MỞ LẠI TERMINAL để cập nhật PATH."
 echo ""
 echo "--- HƯỚNG DẪN SỬ DỤNG ---"
+echo "Các script quản lý đã được tạo trong: $INSTALL_DIR"
+echo ""
 echo "1. Khởi động MongoDB:"
-echo "   mongod --config $CONFIG_FILE"
+echo "   $START_SCRIPT"
 echo ""
 echo "2. Kết nối với MongoDB shell:"
 echo "   mongosh --port $MONGO_PORT -u '$MONGO_USER' -p '$MONGO_PASS' --authenticationDatabase admin"
 echo ""
 echo "3. Dừng MongoDB:"
-echo "   mongod --config $CONFIG_FILE --shutdown"
+echo "   $STOP_SCRIPT"
