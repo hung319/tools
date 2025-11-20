@@ -43,7 +43,9 @@ echo "▶️ Biên dịch và cài đặt CUPS vào $INSTALL_PREFIX..."
     --disable-gssapi \
     --with-systemd=no \
     --with-initd=no \
-    --without-ssl
+    --without-ssl \
+    --disable-gui \
+    --disable-manpages
 
 # Kiểm tra lỗi cấu hình
 if [ $? -ne 0 ]; then
