@@ -84,7 +84,7 @@ storage:
   dbPath: "$DATA_DIR"
 net:
   port: $MONGO_PORT
-  bindIp: 127.0.0.1
+  bindIp: 0.0.0.0
 systemLog:
   destination: file
   path: "$LOG_FILE"
