@@ -2,9 +2,9 @@
 set -e # Thoát ngay khi có lỗi
 
 # --- Cấu hình các biến ---
-MONGO_SERVER_VERSION="6.0.15"
+MONGO_SERVER_VERSION="8.2.2"
 # Chọn phiên bản mongosh mới nhất, tương thích ngược
-MONGO_SHELL_VERSION="2.2.10"
+MONGO_SHELL_VERSION="2.5.10"
 MONGO_USER="myuser"
 MONGO_PASS="mypassword"
 MONGO_PORT="27017"
@@ -50,7 +50,7 @@ echo "🚀 Bắt đầu cài đặt MongoDB Server v${MONGO_SERVER_VERSION}..."
 echo "📂 Thư mục cài đặt: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$LOG_DIR"
 
-MONGO_PLATFORM="debian11"
+MONGO_PLATFORM="debian12"
 SERVER_URL="https://fastdl.mongodb.org/linux/mongodb-linux-${MONGO_ARCH}-${MONGO_PLATFORM}-${MONGO_SERVER_VERSION}.tgz"
 
 echo "📥 Đang tải Server từ: $SERVER_URL"
