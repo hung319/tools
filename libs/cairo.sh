@@ -1,49 +1,61 @@
 #!/bin/bash
+
+# Dừng script nếu gặp lỗi
 set -e
 
-# --- Config ---
-PREFIX="$HOME/.local"
-SRC_DIR="$HOME/src"
-CAIRO_VERSION="1.18.2"
-CAIRO_URL="https://www.cairographics.org/releases/cairo-$CAIRO_VERSION.tar.xz"
+# 1. Cấu hình đường dẫn
+export PREFIX="$HOME/.local"
+export PATH="$PREFIX/bin:$PATH"
+export PKG_CONFIG_PATH="$PREFIX/lib/x86_64-linux-gnu/pkgconfig:$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="$PREFIX/lib/x86_64-linux-gnu:$PREFIX/lib:$LD_LIBRARY_PATH"
 
-# --- Prepare ---
-mkdir -p "$SRC_DIR"
-cd "$SRC_DIR"
+mkdir -p "$PREFIX/bin"
+mkdir -p ~/cairo_standalone_build
+cd ~/cairo_standalone_build
 
-# --- Download ---
-if [ ! -f "cairo-$CAIRO_VERSION.tar.xz" ]; then
-    echo "⬇️  Downloading Cairo $CAIRO_VERSION..."
-    curl -LO "$CAIRO_URL"
+echo "--- 2. Kiểm tra Meson và Ninja ---"
+# Nếu máy chưa có meson/ninja, cài qua pip (không cần root)
+if ! command -v meson &> /dev/null || ! command -v ninja &> /dev/null; then
+    echo "Không tìm thấy Meson/Ninja. Đang cài đặt qua pip..."
+    pip install --user meson ninja
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# --- Extract ---
-rm -rf "cairo-$CAIRO_VERSION"
-tar -xf "cairo-$CAIRO_VERSION.tar.xz"
-cd "cairo-$CAIRO_VERSION"
+echo "--- 3. Tải và Cài đặt Pixman 0.46.4 ---"
+curl -L https://www.cairographics.org/releases/pixman-0.46.4.tar.xz -o pixman.tar.xz
+tar -xf pixman.tar.xz
+cd pixman-0.46.4
+# Cấu hình Pixman: tắt gtk và tests để tránh phụ thuộc phức tạp
+meson setup builddir --prefix="$PREFIX" --buildtype=release -Dgtk=disabled -Dtests=disabled
+ninja -C builddir
+ninja -C builddir install
+cd ..
 
-# --- Build & Install ---
-echo "⚙️  Configuring Cairo..."
-meson setup _build --prefix="$PREFIX" --libdir=lib \
-    -Dzlib=enabled \
+echo "--- 4. Tải và Cài đặt Cairo 1.18.4 ---"
+curl -L https://www.cairographics.org/releases/cairo-1.18.4.tar.xz -o cairo.tar.xz
+tar -xf cairo.tar.xz
+cd cairo-1.18.4
+
+# Cấu hình Cairo:
+# - Dùng các tùy chọn bạn cung cấp để tối giản các phụ thuộc hệ thống (X11, Fontconfig) 
+# - Nếu bạn cần dùng font hoặc X11, hãy đổi 'disabled' thành 'auto'
+meson setup builddir --prefix="$PREFIX" --buildtype=release \
+    -Dtests=disabled \
+    -Dglib=disabled \
+    -Dfontconfig=disabled \
+    -Dfreetype=disabled \
     -Dpng=enabled \
-    -Dfreetype=enabled \
-    -Dfontconfig=enabled \
-    -Dxlib=enabled
+    -Dxcb=disabled \
+    -Dxlib=disabled \
+    -Dgtk_doc=false
 
-echo "🔨 Building Cairo..."
-ninja -C _build
+ninja -C builddir
+ninja -C builddir install
 
-echo "📦 Installing Cairo into $PREFIX..."
-ninja -C _build install
-
-# --- Update env vars ---
-if ! grep -q 'export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig' ~/.bashrc; then
-    echo 'export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH' >> ~/.bashrc
-fi
-if ! grep -q 'export LD_LIBRARY_PATH=$HOME/.local/lib' ~/.bashrc; then
-    echo 'export LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
-fi
-
-echo "✅ Cairo $CAIRO_VERSION installed successfully in $PREFIX"
-echo "   → Check with: pkg-config --modversion cairo"
+echo "--- HOÀN TẤT ---"
+echo "Hãy thêm các dòng sau vào file ~/.bashrc để hệ thống nhận diện thư viện:"
+echo "------------------------------------------------------------------"
+echo "export PATH=\"\$HOME/.local/bin:\$PATH\""
+echo "export PKG_CONFIG_PATH=\"\$HOME/.local/lib/pkgconfig:\$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:\$PKG_CONFIG_PATH\""
+echo "export LD_LIBRARY_PATH=\"\$HOME/.local/lib:\$HOME/.local/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH\""
+echo "------------------------------------------------------------------"
