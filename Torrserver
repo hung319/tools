@@ -1,0 +1,14 @@
+FROM ghcr.io/yourok/torrserver
+
+# Thiết lập các biến môi trường
+ENV TS_PORT=5665
+ENV TS_DONTKILL=1
+ENV TS_HTTPAUTH=1
+ENV TS_CONF_PATH=/opt/ts/config
+ENV TS_TORR_DIR=/opt/ts/torrents
+
+# Tạo thư mục config và file accs.db với nội dung JSON
+RUN mkdir -p /opt/ts/config && \
+    echo '{"user": "pass"}' > /opt/ts/config/accs.db
+
+EXPOSE 5665
