@@ -1,33 +1,144 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tạo Tên Ngẫu Nhiên | My Tech Site</title>
+    <title>Multi-Language Name Generator | My Tech Site</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
+
 <body>
     <main>
         <div class="container tool-container">
-            <h1>Random Vietnamese Name</h1>
+            <h1>Name Generator</h1>
+            <div id="copy-message">Copied to clipboard!</div>
+
             <div class="control-group">
-                <label for="gioiTinh">Giới tính:</label>
-                <select id="gioiTinh">
-                    <option value="nam">Nam</option>
-                    <option value="nu">Nữ</option>
+                <label for="language">Language:</label>
+                <select id="language">
+                    <option value="vi">Vietnamese</option>
+                    <option value="en">English (Western)</option>
+                    <option value="jp">Japanese (Romaji)</option>
+                    <option value="kr">Korean (Romaji)</option>
+                    <option value="in">Indian (India)</option>
+                    <option value="id">Indonesian</option>
+                    <option value="ph">Filipino</option>
                 </select>
             </div>
+
             <div class="control-group">
-                <label for="soLuong">Số lượng:</label>
-                <input type="number" id="soLuong" value="5" min="1" max="100">
+                <label for="soLuong">Quantity:</label>
+                <input type="number" id="soLuong" value="5" min="1" max="50">
             </div>
-            <button id="generateButton">Tạo Tên</button>
+
+            <div style="text-align: center; margin: 30px 0;">
+                <button id="generateButton">GENERATE NAMES</button>
+            </div>
+
+            <p style="text-align: center; color: var(--text-dim); font-size: 0.9rem; margin-bottom: 20px;">
+                Click any name below to copy
+            </p>
+
             <ul id="tenList"></ul>
         </div>
     </main>
 
     <script src="../js/components.js" defer></script>
     <script src="../js/main.js" defer></script>
-    <script src="../js/rdname.js" defer></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            const data = {
+                vi: {
+                    ho: ["Nguyễn", "Trần", "Lê", "Phạm", "Hoàng", "Huỳnh", "Võ", "Đặng", "Bùi", "Đỗ", "Hồ", "Ngô"],
+                    dem: ["Văn", "Thị", "Minh", "Quang", "Đức", "Hữu", "Ngọc", "Thu", "Bảo", "Gia"],
+                    ten: ["An", "Bình", "Chinh", "Dương", "Em", "Phúc", "Giang", "Hương", "Khánh", "Linh", "Nam", "Oanh", "Phương", "Quân", "Sơn", "Thảo", "Uyên", "Việt"]
+                },
+                en: {
+                    ho: ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"],
+                    dem: ["James", "Mary", "Robert", "Patricia", "John", "Jennifer", "Michael", "Linda", "William", "Elizabeth"],
+                    ten: ["Liam", "Olivia", "Noah", "Emma", "Oliver", "Charlotte", "Elijah", "Amelia", "James", "Sophia"]
+                },
+                jp: {
+                    ho: ["Sato", "Suzuki", "Takahashi", "Tanaka", "Watanabe", "Ito", "Nakamura", "Kobayashi", "Yamamoto", "Kato"],
+                    dem: ["Yuki", "Haru", "Aoi", "Sora", "Riku", "Hana", "Sakura", "Kaito", "Mio", "Ren"],
+                    ten: ["Kenji", "Yumi", "Takeshi", "Emi", "Hiroshi", "Keiko", "Akira", "Yoko", "Taro", "Natsumi"]
+                },
+                kr: {
+                    ho: ["Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Jang", "Lim"],
+                    dem: ["Ji", "Hye", "Min", "Seo", "Yeon", "Jun", "Hyun", "Sang", "Young", "Ha"],
+                    ten: ["Woo", "Joon", "Ah", "In", "Ho", "Suk", "Hee", "Kyung", "Soo", "Bin"]
+                },
+                in: {
+                    ho: ["Sharma", "Verma", "Gupta", "Patel", "Singh", "Kumar", "Rao", "Reddy", "Nair", "Mehta"],
+                    dem: ["Dev", "Raj", "Deep", "Chandra", "Kumar", "Lal", "Prakash", "Nath", "Das", "Mohan"],
+                    ten: ["Aarav", "Aditi", "Vihaan", "Sanya", "Arjun", "Neha", "Rohan", "Priya", "Rahul", "Anjali"]
+                },
+                id: {
+                    ho: ["Suryadi", "Susanto", "Kusuma", "Wijaya", "Santoso", "Saputra", "Hidayat", "Nugroho", "Pranoto", "Setiawan"],
+                    dem: ["Dwi", "Tri", "Eka", "Adi", "Budi", "Cahyo", "Agung", "Nur", "Dian", "Rizky"],
+                    ten: ["Putri", "Putra", "Lestari", "Pratama", "Indah", "Kurniawan", "Sari", "Fajar", "Rahayu", "Bayu"]
+                },
+                ph: {
+                    ho: ["Garcia", "Santos", "Reyes", "Cruz", "Bautista", "Ocampo", "Ramos", "Lopez", "Hernandez", "Gonzales"],
+                    dem: ["De La", "Del", "San", "Villa", "Sta", "Al", "Mont", "De", "Los", "Vela"],
+                    ten: ["Juan", "Maria", "Jose", "Anna", "Luis", "Angela", "Gabriel", "Jasmine", "Miguel", "Sofia"]
+                }
+            };
+
+            const tenList = document.getElementById("tenList");
+            const langSelect = document.getElementById("language");
+            const soLuongInput = document.getElementById("soLuong");
+            const generateButton = document.getElementById("generateButton");
+            const copyMsg = document.getElementById("copy-message");
+
+            function generateNames() {
+                const lang = langSelect.value;
+                const pool = data[lang];
+                const count = Math.min(parseInt(soLuongInput.value) || 5, 50);
+
+                tenList.innerHTML = "";
+                for (let i = 0; i < count; i++) {
+                    const h = pool.ho[Math.floor(Math.random() * pool.ho.length)];
+                    const d = pool.dem[Math.floor(Math.random() * pool.dem.length)];
+                    const t = pool.ten[Math.floor(Math.random() * pool.ten.length)];
+
+                    let fullName = "";
+                    if (lang === 'vi') fullName = `${h} ${d} ${t}`;
+                    else if (lang === 'en' || lang === 'ph') fullName = `${t} ${d} ${h}`;
+                    else if (lang === 'id') fullName = `${h} ${d} ${t}`;
+                    else if (lang === 'in') fullName = `${t} ${d} ${h}`;
+                    else fullName = `${h} ${d}${t}`; // Asian style for names
+
+                    const li = document.createElement("li");
+                    li.textContent = fullName;
+                    li.classList.add("copyable");
+                    tenList.appendChild(li);
+                }
+            }
+
+            generateButton.addEventListener("click", generateNames);
+
+            tenList.addEventListener("click", async (e) => {
+                if (e.target.tagName === "LI") {
+                    try {
+                        await navigator.clipboard.writeText(e.target.textContent);
+                        const original = e.target.textContent;
+                        e.target.textContent = "Copied!";
+                        copyMsg.style.display = 'block';
+                        setTimeout(() => {
+                            e.target.textContent = original;
+                            copyMsg.style.display = 'none';
+                        }, 1500);
+                    } catch (err) {
+                        console.error(err);
+                    }
+                }
+            });
+
+            generateNames();
+        });
+    </script>
 </body>
+
 </html>

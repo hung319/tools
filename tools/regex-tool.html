@@ -1,27 +1,29 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Regex Tester | My Tech Site</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
+
 <body>
     <main>
         <div class="container tool-container">
             <h1>Regex Tester</h1>
             <div class="regex-tool-container">
                 <div>
-                    <label for="regex-pattern">Biểu thức Regex:</label>
+                    <label for="regex-pattern">Regex Pattern:</label>
                     <input type="text" id="regex-pattern" class="regex-input" placeholder="/pattern/flags">
                     <div id="regex-error" class="regex-error"></div>
                 </div>
                 <div>
-                    <label for="test-string">Chuỗi kiểm tra:</label>
-                    <textarea id="test-string" class="regex-textarea" placeholder="Dán văn bản của bạn vào đây..."></textarea>
+                    <label for="test-string">Test String:</label>
+                    <textarea id="test-string" class="regex-textarea" placeholder="Paste your text here..."></textarea>
                 </div>
                 <div>
-                    <label>Kết quả (kết quả trùng khớp sẽ được tô sáng):</label>
+                    <label>Results (matches are highlighted):</label>
                     <div id="regex-results" class="regex-results"></div>
                 </div>
             </div>
@@ -32,4 +34,5 @@
     <script src="../js/main.js" defer></script>
     <script src="../js/regex-tool.js" defer></script>
 </body>
+
 </html>

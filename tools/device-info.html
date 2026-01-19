@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Information | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .info-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 30px;
+            margin-top: 30px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .info-item {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .info-label {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--primary-color);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+            font-weight: 700;
+        }
+
+        .info-value {
+            font-size: 1.1rem;
+            font-family: var(--font-mono);
+            word-break: break-all;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="container tool-container">
+            <h1>Device Information</h1>
+            <p>Detection of your current device hardware, software and network properties.</p>
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <div class="info-card" id="info-grid">
+                <!-- Info items will be injected here -->
+            </div>
+
+            <div class="button-group-row">
+                <button id="refresh-btn" class="refresh-btn-circle">↻</button>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const grid = document.getElementById('info-grid');
+            const copyMsg = document.getElementById('copy-message');
+
+            function getInfo() {
+                const data = [
+                    { label: "OS / Browser", value: navigator.userAgent },
+                    { label: "Platform", value: navigator.platform },
+                    { label: "Language", value: navigator.language },
+                    { label: "Screen Resolution", value: `${window.screen.width} x ${window.screen.height}` },
+                    { label: "Viewport", value: `${window.innerWidth} x ${window.innerHeight}` },
+                    { label: "Color Depth", value: `${window.screen.colorDepth} bit` },
+                    { label: "CPU Cores", value: navigator.hardwareConcurrency || "Unknown" },
+                    { label: "Memory (est)", value: navigator.deviceMemory ? navigator.deviceMemory + " GB" : "Unknown" },
+                    { label: "Connection", value: navigator.connection ? navigator.connection.effectiveType : "Unknown" },
+                    { label: "Timezone", value: Intl.DateTimeFormat().resolvedOptions().timeZone },
+                    { label: "Cookies Enabled", value: navigator.cookieEnabled ? "Yes" : "No" },
+                    { label: "Do Not Track", value: navigator.doNotTrack === "1" ? "Yes" : "No" }
+                ];
+
+                grid.innerHTML = '';
+                data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'info-item';
+                    div.innerHTML = `
+                        <span class="info-label">${item.label}</span>
+                        <div class="info-value" title="Click to copy">${item.value}</div>
+                    `;
+                    grid.appendChild(div);
+                });
+            }
+
+            document.getElementById('refresh-btn').addEventListener('click', getInfo);
+
+            grid.addEventListener('click', async (e) => {
+                if (e.target.classList.contains('info-value')) {
+                    await navigator.clipboard.writeText(e.target.textContent);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => copyMsg.style.display = 'none', 1500);
+                }
+            });
+
+            getInfo();
+        });
+    </script>
+</body>
+
+</html>

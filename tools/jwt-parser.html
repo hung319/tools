@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JWT Parser | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .jwt-textarea {
+            width: 100%;
+            height: 120px;
+            padding: 20px;
+            border-radius: 16px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            font-family: var(--font-mono);
+            resize: none;
+            margin-bottom: 20px;
+        }
+
+        .jwt-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .payload-box {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 16px;
+            min-height: 200px;
+        }
+
+        .payload-box h4 {
+            margin-top: 0;
+            color: var(--primary-color);
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 1px;
+        }
+
+        .payload-box pre {
+            white-space: pre-wrap;
+            word-break: break-all;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            margin: 0;
+        }
+
+        @media (max-width: 768px) {
+            .jwt-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="container tool-container" style="max-width: 1000px;">
+            <h1>JWT Parser</h1>
+            <p>Decode JSON Web Tokens and inspect the header and payload data.</p>
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <textarea id="jwt-input" class="jwt-textarea" placeholder="Paste JWT token here..."></textarea>
+
+            <div class="button-group-row">
+                <button id="decode-btn" class="refresh-btn-circle">↻</button>
+            </div>
+
+            <div class="jwt-grid">
+                <div class="payload-box">
+                    <h4>Header</h4>
+                    <pre id="jwt-header">Paste a token to see the header...</pre>
+                </div>
+                <div class="payload-box">
+                    <h4>Payload</h4>
+                    <pre id="jwt-payload">Paste a token to see the payload...</pre>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const input = document.getElementById('jwt-input');
+            const headerBox = document.getElementById('jwt-header');
+            const payloadBox = document.getElementById('jwt-payload');
+            const copyMsg = document.getElementById('copy-message');
+
+            function decodeJWT() {
+                const token = input.value.trim();
+                if (!token) return;
+                const parts = token.split('.');
+                if (parts.length < 2) {
+                    headerBox.textContent = "Invalid JWT Format";
+                    payloadBox.textContent = "";
+                    return;
+                }
+
+                try {
+                    const header = JSON.parse(atob(parts[0]));
+                    const payload = JSON.parse(atob(parts[1]));
+
+                    headerBox.textContent = JSON.stringify(header, null, 2);
+                    payloadBox.textContent = JSON.stringify(payload, null, 2);
+                } catch (e) {
+                    headerBox.textContent = "Decoding Error";
+                    payloadBox.textContent = e.message;
+                }
+            }
+
+            input.addEventListener('input', decodeJWT);
+            document.getElementById('decode-btn').addEventListener('click', decodeJWT);
+
+            [headerBox, payloadBox].forEach(box => {
+                box.parentElement.addEventListener('click', async () => {
+                    if (box.textContent.length < 10) return;
+                    await navigator.clipboard.writeText(box.textContent);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => copyMsg.style.display = 'none', 1500);
+                });
+            });
+        });
+    </script>
+</body>
+
+</html>

@@ -1,23 +1,125 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tạo Username Ngẫu Nhiên | My Tech Site</title>
+    <title>Username Generator | My Tech Site</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
+
 <body>
     <main>
         <div class="container tool-container">
-            <h1>Tạo Username Ngẫu Nhiên</h1>
-            <p id="username-display">Bấm nút để tạo</p>
-            <p id="copy-message">Đã sao chép vào clipboard!</p>
-            <button id="generate-btn">Tạo Mới</button>
+            <h1>Username Generator</h1>
+
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <div class="display-wrapper">
+                <div id="username-display" title="Click to copy"></div>
+                <button id="generate-btn" class="refresh-btn-circle" title="Generate New">↻</button>
+            </div>
+
+            <div class="control-group">
+                <label for="user-length">Length: <span id="length-val">8</span></label>
+                <input type="range" id="user-length" min="4" max="20" value="8">
+            </div>
+
+            <div class="control-group" style="text-align: left; max-width: 300px; margin: 20px auto;">
+                <label style="text-align: center; margin-bottom: 15px;">Characters Used</label>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <label
+                        style="text-transform: none; display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                        <span>Vowels (a, e, i, o, u)</span>
+                        <input type="checkbox" id="use-vowels" checked>
+                    </label>
+                    <label
+                        style="text-transform: none; display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                        <span>Consonants (b, c, d...)</span>
+                        <input type="checkbox" id="use-consonants" checked>
+                    </label>
+                    <label
+                        style="text-transform: none; display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                        <span>Include Numbers</span>
+                        <input type="checkbox" id="use-numbers">
+                    </label>
+                </div>
+            </div>
         </div>
     </main>
 
     <script src="../js/components.js" defer></script>
     <script src="../js/main.js" defer></script>
-    <script src="../js/rdusername.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const display = document.getElementById('username-display');
+            const generateBtn = document.getElementById('generate-btn');
+            const lengthInput = document.getElementById('user-length');
+            const lengthVal = document.getElementById('length-val');
+            const copyMsg = document.getElementById('copy-message');
+
+            const useVowels = document.getElementById('use-vowels');
+            const useConsonants = document.getElementById('use-consonants');
+            const useNumbers = document.getElementById('use-numbers');
+
+            const vowels = 'aeiou';
+            const consonants = 'bcdfghjklmnpqrstvwxyz';
+            const numbers = '0123456789';
+
+            function generateUsername() {
+                let charset = "";
+                if (useVowels.checked) charset += vowels;
+                if (useConsonants.checked) charset += consonants;
+                if (useNumbers.checked) charset += numbers;
+
+                if (charset === "") {
+                    display.textContent = "Select characters";
+                    return;
+                }
+
+                let username = "";
+                const length = parseInt(lengthInput.value);
+
+                // Better readability logic
+                let isNextVowel = Math.random() > 0.5;
+                for (let i = 0; i < length; i++) {
+                    let pool = charset;
+                    if (useVowels.checked && useConsonants.checked) {
+                        pool = isNextVowel ? vowels : consonants;
+                        if (useNumbers.checked && Math.random() < 0.2) pool = numbers;
+                    }
+
+                    username += pool.charAt(Math.floor(Math.random() * pool.length));
+                    isNextVowel = !isNextVowel;
+                }
+                display.textContent = username;
+            }
+
+            lengthInput.addEventListener('input', () => {
+                lengthVal.textContent = lengthInput.value;
+                generateUsername();
+            });
+
+            generateBtn.addEventListener('click', generateUsername);
+
+            display.addEventListener('click', async () => {
+                if (display.textContent.includes("button")) return;
+                try {
+                    await navigator.clipboard.writeText(display.textContent);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => { copyMsg.style.display = 'none'; }, 2000);
+                } catch (err) {
+                    console.error('Copy error:', err);
+                }
+            });
+
+            [useVowels, useConsonants, useNumbers].forEach(cb => {
+                cb.addEventListener('change', generateUsername);
+            });
+
+            generateUsername();
+        });
+    </script>
 </body>
+
 </html>

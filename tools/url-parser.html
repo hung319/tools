@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URL Parser | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .result-table {
+            width: 100%;
+            margin-top: 30px;
+            border-collapse: separate;
+            border-spacing: 0 10px;
+        }
+
+        .result-table td {
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+        }
+
+        .result-table td:first-child {
+            width: 150px;
+            font-weight: 700;
+            color: var(--primary-color);
+            background: rgba(0, 210, 255, 0.05);
+            border-radius: 12px 0 0 12px;
+        }
+
+        .result-table td:last-child {
+            border-radius: 0 12px 12px 0;
+            word-break: break-all;
+            font-family: var(--font-mono);
+            cursor: pointer;
+        }
+
+        .url-textarea {
+            width: 100%;
+            height: 100px;
+            padding: 20px;
+            border-radius: 16px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            font-family: var(--font-mono);
+            resize: none;
+            margin-bottom: 20px;
+        }
+
+        .url-textarea:focus {
+            border-color: var(--primary-color);
+            outline: none;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="container tool-container">
+            <h1>URL Parser</h1>
+            <p>Deconstruct any URL into its components: protocol, host, path, params, etc.</p>
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <textarea id="url-input" class="url-textarea" placeholder="Paste URL here..."></textarea>
+
+            <div class="button-group-row">
+                <button id="parse-btn" class="refresh-btn-circle">↻</button>
+            </div>
+
+            <table class="result-table" id="result-table" style="display: none;">
+                <tbody>
+                    <tr>
+                        <td>Protocol</td>
+                        <td id="res-proto"></td>
+                    </tr>
+                    <tr>
+                        <td>Hostname</td>
+                        <td id="res-host"></td>
+                    </tr>
+                    <tr>
+                        <td>Port</td>
+                        <td id="res-port"></td>
+                    </tr>
+                    <tr>
+                        <td>Path</td>
+                        <td id="res-path"></td>
+                    </tr>
+                    <tr>
+                        <td>Query</td>
+                        <td id="res-query"></td>
+                    </tr>
+                    <tr>
+                        <td>Hash</td>
+                        <td id="res-hash"></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div id="params-section" style="display: none; margin-top: 30px;">
+                <h3 style="color: var(--primary-color);">Query Parameters</h3>
+                <table class="result-table" id="params-table">
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const input = document.getElementById('url-input');
+            const parseBtn = document.getElementById('parse-btn');
+            const resultTable = document.getElementById('result-table');
+            const paramsSection = document.getElementById('params-section');
+            const paramsTable = document.getElementById('params-table').querySelector('tbody');
+            const copyMsg = document.getElementById('copy-message');
+
+            function parse() {
+                const val = input.value.trim();
+                if (!val) return;
+                try {
+                    const url = new URL(val);
+                    document.getElementById('res-proto').textContent = url.protocol;
+                    document.getElementById('res-host').textContent = url.hostname;
+                    document.getElementById('res-port').textContent = url.port || 'Default';
+                    document.getElementById('res-path').textContent = url.pathname;
+                    document.getElementById('res-query').textContent = url.search;
+                    document.getElementById('res-hash').textContent = url.hash;
+
+                    resultTable.style.display = 'table';
+
+                    // Params
+                    paramsTable.innerHTML = '';
+                    const params = new URLSearchParams(url.search);
+                    let count = 0;
+                    params.forEach((v, k) => {
+                        count++;
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `<td>${k}</td><td>${v}</td>`;
+                        paramsTable.appendChild(tr);
+                    });
+                    paramsSection.style.display = count > 0 ? 'block' : 'none';
+
+                } catch (e) {
+                    alert('Invalid URL format');
+                }
+            }
+
+            parseBtn.addEventListener('click', parse);
+            input.addEventListener('input', parse);
+
+            document.body.addEventListener('click', async (e) => {
+                const target = e.target;
+                if (target.tagName === 'TD' && target.parentElement.children[1] === target) {
+                    const text = target.textContent;
+                    if (!text) return;
+                    await navigator.clipboard.writeText(text);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => copyMsg.style.display = 'none', 2000);
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

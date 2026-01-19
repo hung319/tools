@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Utilities | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .net-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .net-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 25px;
+            border-radius: 20px;
+        }
+
+        .net-card h3 {
+            color: var(--primary-color);
+            margin-top: 0;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 20px;
+        }
+
+        .net-input {
+            width: 100%;
+            padding: 12px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            color: white;
+            font-family: var(--font-mono);
+            margin-bottom: 15px;
+        }
+
+        .net-result {
+            background: rgba(0, 210, 255, 0.05);
+            padding: 15px;
+            border-radius: 10px;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            min-height: 40px;
+            word-break: break-all;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="container" style="max-width: 1200px;">
+            <div class="tool-container">
+                <h1>Network Utilities</h1>
+                <p>Calculate subnets, convert IP formats, generate MAC addresses and more.</p>
+                <div id="copy-message">Copied to clipboard!</div>
+
+                <div class="net-grid">
+                    <!-- IPv4 Subnet Calculator -->
+                    <div class="net-card">
+                        <h3>IPv4 Subnet Calculator</h3>
+                        <input type="text" id="subnet-ip" class="net-input" placeholder="IP (e.g. 192.168.1.1)">
+                        <input type="number" id="subnet-mask" class="net-input" placeholder="Mask (e.g. 24)" min="0"
+                            max="32">
+                        <div id="subnet-res" class="net-result">Result will appear here...</div>
+                    </div>
+
+                    <!-- IPv4 Address Converter -->
+                    <div class="net-card">
+                        <h3>IPv4 Converter (to Binary/Hex)</h3>
+                        <input type="text" id="conv-ip" class="net-input" placeholder="IP (e.g. 10.0.0.1)">
+                        <div id="conv-res" class="net-result">Result will appear here...</div>
+                    </div>
+
+                    <!-- MAC Generator -->
+                    <div class="net-card">
+                        <h3>MAC Address Generator</h3>
+                        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                            <button id="gen-mac-btn" class="refresh-btn-circle"
+                                style="width: 45px; height: 45px;">↻</button>
+                            <span style="display: flex; align-items: center; color: var(--text-dim);">Click to
+                                generate</span>
+                        </div>
+                        <div id="mac-res" class="net-result"></div>
+                    </div>
+
+                    <!-- IPv6 ULA Generator -->
+                    <div class="net-card">
+                        <h3>IPv6 ULA Generator</h3>
+                        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                            <button id="gen-ula-btn" class="refresh-btn-circle"
+                                style="width: 45px; height: 45px;">↻</button>
+                            <span style="display: flex; align-items: center; color: var(--text-dim);">Generate Random
+                                ULA</span>
+                        </div>
+                        <div id="ula-res" class="net-result"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const copyMsg = document.getElementById('copy-message');
+
+            // --- IPv4 Subnet ---
+            const subnetIp = document.getElementById('subnet-ip');
+            const subnetMask = document.getElementById('subnet-mask');
+            const subnetRes = document.getElementById('subnet-res');
+
+            function calcSubnet() {
+                const ip = subnetIp.value.trim();
+                const mask = parseInt(subnetMask.value);
+                if (!ip || isNaN(mask)) return;
+
+                try {
+                    const parts = ip.split('.').map(Number);
+                    if (parts.length !== 4) throw new Error();
+
+                    const ipNum = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+                    const maskNum = -1 << (32 - mask);
+                    const netNum = ipNum & maskNum;
+
+                    const network = [(netNum >>> 24) & 0xFF, (netNum >>> 16) & 0xFF, (netNum >>> 8) & 0xFF, netNum & 0xFF].join('.');
+                    const broadcast = [(netNum | ~maskNum) >>> 24 & 0xFF, (netNum | ~maskNum) >>> 16 & 0xFF, (netNum | ~maskNum) >>> 8 & 0xFF, (netNum | ~maskNum) & 0xFF].join('.');
+
+                    subnetRes.innerHTML = `Network: ${network}<br>Broadcast: ${broadcast}<br>Hosts: ${Math.pow(2, 32 - mask) - 2}`;
+                } catch (e) {
+                    subnetRes.textContent = "Invalid IP/Mask";
+                }
+            }
+            subnetIp.addEventListener('input', calcSubnet);
+            subnetMask.addEventListener('input', calcSubnet);
+
+            // --- IP Converter ---
+            const convIp = document.getElementById('conv-ip');
+            const convRes = document.getElementById('conv-res');
+
+            convIp.addEventListener('input', () => {
+                const ip = convIp.value.trim();
+                try {
+                    const parts = ip.split('.').map(Number);
+                    if (parts.length !== 4) throw new Error();
+                    const binary = parts.map(p => p.toString(2).padStart(8, '0')).join('.');
+                    const hex = parts.map(p => p.toString(16).padStart(2, '0')).join('.');
+                    convRes.innerHTML = `Binary: ${binary}<br>Hex: 0x${hex.replace(/\./g, '')}`;
+                } catch (e) {
+                    convRes.textContent = "Invalid IP";
+                }
+            });
+
+            // --- MAC Gen ---
+            const macRes = document.getElementById('mac-res');
+            function genMAC() {
+                const mac = Array.from({ length: 6 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join(':');
+                macRes.textContent = mac.toUpperCase();
+            }
+            document.getElementById('gen-mac-btn').addEventListener('click', genMAC);
+
+            // --- IPv6 ULA ---
+            const ulaRes = document.getElementById('ula-res');
+            function genULA() {
+                // fd00::/8 is ULA. Random 40 bits global ID.
+                const random40 = Array.from({ length: 5 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
+                ulaRes.textContent = `fd${random40.substring(0, 2)}:${random40.substring(2, 6)}:${random40.substring(6, 10)}::/64`;
+            }
+            document.getElementById('gen-ula-btn').addEventListener('click', genULA);
+
+            // Click to copy
+            document.body.addEventListener('click', async (e) => {
+                if (e.target.classList.contains('net-result')) {
+                    const text = e.target.innerText;
+                    if (!text || text.includes('Result')) return;
+                    await navigator.clipboard.writeText(text);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => copyMsg.style.display = 'none', 1500);
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

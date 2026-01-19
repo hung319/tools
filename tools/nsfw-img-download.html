@@ -1,26 +1,29 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tải Ảnh NSFW | My Tech Site</title>
-    
+    <title>NSFW Image Downloader | My Tech Site</title>
+
     <link rel="stylesheet" href="../css/style.css">
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
-<body class="page-nsfw-downloader"> <main>
+
+<body class="page-nsfw-downloader">
+    <main>
         <div class="container">
             <div class="download-card">
                 <h1>NSFW Image Downloader</h1>
                 <div class="input-group">
-                    <label for="imageCount">Số lượng ảnh tải xuống:</label>
+                    <label for="imageCount">Image Count:</label>
                     <input type="number" id="imageCount" value="50" min="1">
                 </div>
-                
+
                 <div class="input-group">
-                    <label for="apiSelector">Chọn API:</label>
+                    <label for="apiSelector">Select API:</label>
                     <select id="apiSelector">
                         <option value="waifu.pics">Waifu.pics</option>
                         <option value="konachan(questionable)">Konachan.net (Questionable)</option>
@@ -42,4 +45,5 @@
     <script src="../js/nsfw-downloader.js" defer></script>
 
 </body>
+
 </html>

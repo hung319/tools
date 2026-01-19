@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Basic Auth Generator | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+
+<body>
+    <main>
+        <div class="container tool-container">
+            <h1>Basic Auth Generator</h1>
+            <p>Generate a Base64-encoded Authorization header from a username and password.</p>
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <div class="control-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" placeholder="e.g. admin"
+                    style="width: 100%; padding: 15px; border-radius: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white;">
+            </div>
+
+            <div class="control-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="e.g. password123"
+                    style="width: 100%; padding: 15px; border-radius: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white;">
+            </div>
+
+            <div class="display-wrapper">
+                <div id="auth-display" title="Click to copy" style="font-size: 1.1rem; overflow-wrap: break-word;">
+                </div>
+                <button id="gen-btn" class="refresh-btn-circle">↻</button>
+            </div>
+
+            <p id="header-hint"
+                style="text-align: center; color: var(--text-dim); font-size: 0.9rem; margin-top: 10px;"></p>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const user = document.getElementById('username');
+            const pass = document.getElementById('password');
+            const display = document.getElementById('auth-display');
+            const hint = document.getElementById('header-hint');
+            const copyMsg = document.getElementById('copy-message');
+
+            function generate() {
+                const u = user.value;
+                const p = pass.value;
+                if (!u && !p) {
+                    display.textContent = "";
+                    hint.textContent = "";
+                    return;
+                }
+                const encoded = btoa(`${u}:${p}`);
+                display.textContent = encoded;
+                hint.textContent = `Full Header: Authorization: Basic ${encoded}`;
+            }
+
+            user.addEventListener('input', generate);
+            pass.addEventListener('input', generate);
+            document.getElementById('gen-btn').addEventListener('click', generate);
+
+            display.addEventListener('click', async () => {
+                if (!display.textContent) return;
+                await navigator.clipboard.writeText(`Authorization: Basic ${display.textContent}`);
+                copyMsg.style.display = 'block';
+                setTimeout(() => copyMsg.style.display = 'none', 1500);
+            });
+        });
+    </script>
+</body>
+
+</html>

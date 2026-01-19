@@ -1,5 +1,5 @@
 // js/rdname.js
-document.addEventListener("DOMContentLoaded", function() {
+document.addEventListener("DOMContentLoaded", function () {
     var hoNam = ["Nguyễn", "Trần", "Lê", "Phạm", "Hoàng", "Huỳnh", "Võ", "Đặng", "Bùi", "Đỗ", "Hồ", "Ngô", "Dương", "Lý", "Đào", "Đoàn", "Vương", "Trịnh", "Đinh", "Lưu"];
     var hoNu = ["Nguyễn Thị", "Trần Thị", "Lê Thị", "Phạm Thị", "Hoàng Thị", "Võ Thị", "Đặng Thị", "Bùi Thị", "Đỗ Thị", "Hồ Thị", "Ngô Thị", "Dương Thị"];
     var tenNam = ["Văn", "Hữu", "Đức", "Hải", "Dương", "Minh", "Quang", "Khang", "Tuấn", "Anh", "Bảo", "Duy", "Phúc", "Long", "Việt"];
@@ -25,7 +25,7 @@ document.addEventListener("DOMContentLoaded", function() {
             var tenDemNgauNhien = tenDemList[Math.floor(Math.random() * tenDemList.length)];
             var tenNgauNhien = tenListArr[Math.floor(Math.random() * tenListArr.length)];
             var tenDayDu = `${hoNgauNhien} ${tenDemNgauNhien} ${tenNgauNhien}`;
-            
+
             var listItem = document.createElement("li");
             listItem.textContent = tenDayDu;
             listItem.classList.add("copyable");
@@ -37,24 +37,22 @@ document.addEventListener("DOMContentLoaded", function() {
 
     generateButton.addEventListener("click", generateNames);
 
-    tenList.addEventListener("click", function(event) {
+    tenList.addEventListener("click", function (event) {
         if (event.target.tagName === "LI") {
             var textToCopy = event.target.textContent;
-            navigator.clipboard.writeText(textToCopy).then(function() {
-                // Thay đổi tạm thời nội dung để báo đã copy
+            navigator.clipboard.writeText(textToCopy).then(function () {
                 const originalText = event.target.textContent;
-                event.target.textContent = "Đã sao chép!";
+                event.target.textContent = "Copied!";
                 setTimeout(() => {
                     event.target.textContent = originalText;
                 }, 1000);
-            }, function(err) {
-                console.error('Lỗi khi sao chép: ', err);
+            }, function (err) {
+                console.error('Failed to copy: ', err);
             });
         }
     });
 
-    // Vẫn giữ logic chặn chuột phải theo code gốc
-    document.addEventListener("contextmenu", function(event) {
+    document.addEventListener("contextmenu", function (event) {
         event.preventDefault();
     });
 });

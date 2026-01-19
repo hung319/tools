@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Agent Parser | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+
+<body>
+    <main>
+        <div class="container tool-container">
+            <h1>User Agent Parser</h1>
+            <p>Parse a User-Agent string to get browser, engine, OS and device information.</p>
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <textarea id="ua-input"
+                style="width: 100%; height: 100px; padding: 20px; border-radius: 16px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; font-family: var(--font-mono); resize: none; margin-bottom: 20px;"
+                placeholder="Paste User-Agent string here..."></textarea>
+
+            <div class="button-group-row">
+                <button id="parse-btn" class="refresh-btn-circle">↻</button>
+            </div>
+
+            <div id="ua-results" style="margin-top: 30px; display: none;">
+                <div
+                    style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); padding: 25px; border-radius: 20px;">
+                    <div id="ua-grid"
+                        style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                        <!-- Results injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <p style="text-align: center; color: var(--text-dim); margin-top: 20px; cursor: pointer;" id="my-ua-btn">Use
+                my current User-Agent</p>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <!-- Using a lightweight UA parser lib if possible, or simple regex for common ones -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const input = document.getElementById('ua-input');
+            const results = document.getElementById('ua-results');
+            const grid = document.getElementById('ua-grid');
+            const copyMsg = document.getElementById('copy-message');
+
+            function parseUA() {
+                const ua = input.value.trim();
+                if (!ua) return;
+
+                // Extremely simplified parsing logic for common browsers/OS
+                const getBrowser = (u) => {
+                    if (u.includes("Firefox/")) return "Firefox";
+                    if (u.includes("Edg/")) return "Edge";
+                    if (u.includes("Chrome/")) return "Chrome";
+                    if (u.includes("Safari/")) return "Safari";
+                    if (u.includes("MSIE ") || u.includes("Trident/")) return "Internet Explorer";
+                    return "Unknown";
+                };
+
+                const getOS = (u) => {
+                    if (u.includes("Windows NT 10.0")) return "Windows 10/11";
+                    if (u.includes("Windows NT 6.1")) return "Windows 7";
+                    if (u.includes("Android")) return "Android";
+                    if (u.includes("iPhone") || u.includes("iPad")) return "iOS";
+                    if (u.includes("Macintosh")) return "macOS";
+                    if (u.includes("Linux")) return "Linux";
+                    return "Unknown";
+                };
+
+                const data = [
+                    { label: "Browser", value: getBrowser(ua) },
+                    { label: "Operating System", value: getOS(ua) },
+                    { label: "Engine", value: ua.includes("AppleWebKit") ? "WebKit / Blink" : "Gecko" },
+                    { label: "Mobile Device", value: /Mobi|Android/i.test(ua) ? "Yes" : "No" }
+                ];
+
+                grid.innerHTML = '';
+                data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.style.cssText = "padding: 15px; background: rgba(0,0,0,0.2); border-radius: 12px; border-left: 4px solid var(--primary-color);";
+                    div.innerHTML = `
+                        <span style="display: block; font-size: 0.7rem; color: var(--primary-color); text-transform: uppercase; font-weight: 700; margin-bottom: 5px;">${item.label}</span>
+                        <div style="font-family: var(--font-mono); font-size: 1.1rem; cursor: pointer;">${item.value}</div>
+                    `;
+                    grid.appendChild(div);
+                });
+                results.style.display = 'block';
+            }
+
+            document.getElementById('parse-btn').addEventListener('click', parseUA);
+            input.addEventListener('input', parseUA);
+            document.getElementById('my-ua-btn').addEventListener('click', () => {
+                input.value = navigator.userAgent;
+                parseUA();
+            });
+
+            grid.addEventListener('click', async (e) => {
+                if (e.target.parentElement.children[1] === e.target) {
+                    await navigator.clipboard.writeText(e.target.textContent);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => copyMsg.style.display = 'none', 1500);
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

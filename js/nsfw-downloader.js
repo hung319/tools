@@ -1,9 +1,6 @@
 // js/nsfw-downloader.js
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Lưu ý: Logic date/time gốc đã được lược bỏ vì phần HTML hiển thị nó không còn trong template.
-    // Logic tải file được giữ nguyên theo yêu cầu.
-
     const CONCURRENT_LIMIT = 1000000;
     const PROXY_URL = 'https://proxy.onii.pp.ua/cors?url=';
     const API_URLS = {
@@ -13,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'yande.re(questionable)': 'https://yande.re/post.json?tags=order:random+rating:questionable&limit=1',
         'yande.re(explicit)': 'https://yande.re/post.json?tags=order:random+rating:explicit&limit=1'
     };
-    
+
     const downloadBtn = document.getElementById('downloadBtn');
     const imageCountInput = document.getElementById('imageCount');
     const apiSelector = document.getElementById('apiSelector');
@@ -47,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 imageUrl = data[0]?.file_url;
             }
 
-            if (!imageUrl) throw new Error("URL ảnh không xác định!");
+            if (!imageUrl) throw new Error("Image URL not found!");
 
             const imageResponse = await fetchWithRetry(imageUrl);
             const imageBlob = await imageResponse.blob();
@@ -72,36 +69,36 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (result && result.imageBlob) {
                     zip.file(result.fileName, result.imageBlob);
                     completed++;
-                    statusDiv.textContent = `Đã tải ${completed}/${count} ảnh`;
+                    statusDiv.textContent = `Downloaded ${completed}/${count} images`;
                 }
             }));
         }
         await Promise.all(promises);
-        statusDiv.textContent = 'Đang nén file ZIP...';
+        statusDiv.textContent = 'Generating ZIP file...';
         return zip.generateAsync({ type: 'blob' });
     };
 
     downloadBtn.addEventListener('click', async () => {
         const imageCount = Math.max(parseInt(imageCountInput.value), 1) || 50;
-        
+
         downloadBtn.disabled = true;
         loadingAnimation.classList.add('active');
         statusDiv.style.display = 'block';
-        statusDiv.textContent = 'Đang tải ảnh...';
+        statusDiv.textContent = 'Downloading images...';
 
         try {
             const zipBlob = await downloadImages(imageCount);
             const fileName = `images-${generateRandomString(6)}.zip`;
             saveAs(zipBlob, fileName);
-            statusDiv.textContent = 'Tải về hoàn tất!';
+            statusDiv.textContent = 'Download Complete!';
         } catch (error) {
             console.error("Download process error:", error);
-            statusDiv.textContent = 'Lỗi khi tải ảnh!';
+            statusDiv.textContent = 'Error downloading images!';
         } finally {
             downloadBtn.disabled = false;
             loadingAnimation.classList.remove('active');
         }
     });
-    
+
     statusDiv.style.display = 'none';
 });

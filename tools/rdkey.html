@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Key Generator | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .format-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            background: rgba(0, 210, 255, 0.1);
+            border: 1px solid var(--primary-color);
+            border-radius: 12px;
+            font-size: 0.8rem;
+            color: var(--primary-color);
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="container tool-container">
+            <h1>Random Key Generator</h1>
+            <p>Generate secure random keys, tokens, and hashes.</p>
+
+            <div id="copy-message">Copied to clipboard!</div>
+
+            <!-- Format Badge to show current mode -->
+            <div style="text-align: center;">
+                <span id="current-format" class="format-badge">Format: Base64 (32 bytes)</span>
+            </div>
+
+            <div class="display-wrapper">
+                <div id="key-display" title="Click to copy" style="font-size: 1.4rem; overflow-wrap: break-word;"></div>
+                <button id="generate-btn" class="refresh-btn-circle" title="Generate New">↻</button>
+            </div>
+
+            <div class="control-group">
+                <label for="key-type">Key Format:</label>
+                <select id="key-type">
+                    <option value="base64">OpenSSL Base64 (Safe)</option>
+                    <option value="hex">OpenSSL Hex</option>
+                    <option value="uuid">UUID v4 (GUID)</option>
+                    <option value="alphanum">Alphanumeric String</option>
+                </select>
+            </div>
+
+            <div class="control-group" id="length-control">
+                <label for="key-length">Byte/Char Length: <span id="length-val">32</span></label>
+                <input type="range" id="key-length" min="8" max="128" value="32" step="4">
+                <p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 5px;" id="length-desc">Length in bytes
+                    (before encoding)</p>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const display = document.getElementById('key-display');
+            const generateBtn = document.getElementById('generate-btn');
+            const keyType = document.getElementById('key-type');
+            const lengthInput = document.getElementById('key-length');
+            const lengthVal = document.getElementById('length-val');
+            const lengthDesc = document.getElementById('length-desc');
+            const formatBadge = document.getElementById('current-format');
+            const lengthControl = document.getElementById('length-control');
+            const copyMsg = document.getElementById('copy-message');
+
+            function generateRandomBytes(length) {
+                const array = new Uint8Array(length);
+                window.crypto.getRandomValues(array);
+                return array;
+            }
+
+            function bytesToHex(bytes) {
+                return Array.from(bytes)
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+            }
+
+            function bytesToBase64(bytes) {
+                let binary = '';
+                const len = bytes.byteLength;
+                for (let i = 0; i < len; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                return window.btoa(binary);
+            }
+
+            // UUID v4 implementation
+            function generateUUID() {
+                return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
+                    (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
+                );
+            }
+
+            function generateAlphanumeric(length) {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                let result = '';
+                const randomValues = new Uint32Array(length);
+                window.crypto.getRandomValues(randomValues);
+                for (let i = 0; i < length; i++) {
+                    result += chars[randomValues[i] % chars.length];
+                }
+                return result;
+            }
+
+            function generateKey() {
+                const type = keyType.value;
+                const length = parseInt(lengthInput.value);
+                let result = "";
+                let desc = "";
+
+                if (type === 'base64') {
+                    const bytes = generateRandomBytes(length);
+                    result = bytesToBase64(bytes);
+                    desc = `Base64 string from ${length} random bytes`;
+
+                } else if (type === 'hex') {
+                    const bytes = generateRandomBytes(length);
+                    result = bytesToHex(bytes);
+                    desc = `Hex string from ${length} random bytes`;
+
+                } else if (type === 'uuid') {
+                    result = generateUUID();
+                    desc = "Standard UUID v4 (36 chars)";
+
+                } else if (type === 'alphanum') {
+                    result = generateAlphanumeric(length);
+                    desc = `Alphanumeric string (${length} chars)`;
+                }
+
+                display.textContent = result;
+                formatBadge.textContent = desc;
+
+                // Adjust font size based on length
+                if (result.length > 100) display.style.fontSize = "1rem";
+                else if (result.length > 60) display.style.fontSize = "1.2rem";
+                else display.style.fontSize = "1.4rem";
+            }
+
+            function updateUI() {
+                const type = keyType.value;
+                if (type === 'uuid') {
+                    lengthControl.style.opacity = '0.3';
+                    lengthControl.style.pointerEvents = 'none';
+                } else {
+                    lengthControl.style.opacity = '1';
+                    lengthControl.style.pointerEvents = 'auto';
+
+                    if (type === 'alphanum') {
+                        lengthDesc.textContent = "Length in characters";
+                        lengthInput.step = 1;
+                        if (parseInt(lengthInput.value) % 4 !== 0) lengthInput.value = 32; // reset if messy
+                    } else {
+                        lengthDesc.textContent = "Length in bytes (before encoding)";
+                        lengthInput.step = 4; // Keep standard steps for bytes
+                    }
+                }
+                lengthVal.textContent = lengthInput.value;
+                generateKey();
+            }
+
+            keyType.addEventListener('change', updateUI);
+            lengthInput.addEventListener('input', () => {
+                lengthVal.textContent = lengthInput.value;
+                generateKey();
+            });
+            generateBtn.addEventListener('click', generateKey);
+
+            display.addEventListener('click', async () => {
+                if (display.textContent === "...") return;
+                try {
+                    await navigator.clipboard.writeText(display.textContent);
+                    copyMsg.style.display = 'block';
+                    setTimeout(() => { copyMsg.style.display = 'none'; }, 2000);
+                } catch (err) {
+                    console.error('Copy error:', err);
+                }
+            });
+
+            // Initial setup without generation
+            const type = keyType.value;
+            if (type === 'uuid') {
+                lengthControl.style.opacity = '0.3';
+                lengthControl.style.pointerEvents = 'none';
+            }
+            lengthVal.textContent = lengthInput.value;
+        });
+    </script>
+</body>
+
+</html>

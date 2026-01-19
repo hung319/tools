@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTTP Status Codes | My Tech Site</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .filter-input {
+            width: 100%;
+            padding: 15px 25px;
+            border-radius: 50px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            color: white;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 1rem;
+        }
+
+        .filter-input:focus {
+            border-color: var(--primary-color);
+            outline: none;
+            box-shadow: 0 0 15px rgba(0, 210, 255, 0.2);
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .status-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 16px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .status-card:hover {
+            border-color: var(--primary-color);
+            background: rgba(0, 210, 255, 0.05);
+            transform: translateY(-3px);
+        }
+
+        .status-code {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 5px;
+            display: block;
+        }
+
+        .status-msg {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .status-desc {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            line-height: 1.4;
+        }
+
+        /* Category colors */
+        .sc-1xx {
+            color: #aaa;
+        }
+
+        .sc-2xx {
+            color: var(--success-color);
+        }
+
+        .sc-3xx {
+            color: var(--primary-color);
+        }
+
+        .sc-4xx {
+            color: #f90;
+        }
+
+        .sc-5xx {
+            color: var(--error-color);
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="container" style="max-width: 1200px;">
+            <div class="tool-container">
+                <h1>HTTP Status Codes</h1>
+                <p>A complete list of HTTP response status codes with descriptions.</p>
+                <div id="copy-message">Copied to clipboard!</div>
+
+                <input type="text" id="status-filter" class="filter-input"
+                    placeholder="Search by code or message (e.g. 404 or Not Found)">
+
+                <div class="status-grid" id="status-grid">
+                    <!-- Cards injected here -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="../js/components.js" defer></script>
+    <script src="../js/main.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const grid = document.getElementById('status-grid');
+            const filter = document.getElementById('status-filter');
+            const copyMsg = document.getElementById('copy-message');
+
+            const statusCodes = [
+                { code: 100, msg: "Continue", desc: "The server has received the request headers and the client should proceed to send the request body." },
+                { code: 101, msg: "Switching Protocols", desc: "The requester has asked the server to switch protocols." },
+                { code: 200, msg: "OK", desc: "Standard response for successful HTTP requests." },
+                { code: 201, msg: "Created", desc: "The request has been fulfilled, resulting in the creation of a new resource." },
+                { code: 204, msg: "No Content", desc: "The server successfully processed the request and is not returning any content." },
+                { code: 301, msg: "Moved Permanently", desc: "This and all future requests should be directed to the given URI." },
+                { code: 302, msg: "Found", desc: "The resource was found, but at a different URI temporarily." },
+                { code: 304, msg: "Not Modified", desc: "Indicates that the resource has not been modified since the version specified by the request headers." },
+                { code: 400, msg: "Bad Request", desc: "The server cannot or will not process the request due to an apparent client error." },
+                { code: 401, msg: "Unauthorized", desc: "Similar to 403 Forbidden, but specifically for use when authentication is required and has failed or has not yet been provided." },
+                { code: 403, msg: "Forbidden", desc: "The request was valid, but the server is refusing action. The user might not have the necessary permissions." },
+                { code: 404, msg: "Not Found", desc: "The requested resource could not be found but may be available in the future." },
+                { code: 405, msg: "Method Not Allowed", desc: "A request method is not supported for the requested resource." },
+                { code: 429, msg: "Too Many Requests", desc: "The user has sent too many requests in a given amount of time." },
+                { code: 500, msg: "Internal Server Error", desc: "A generic error message, given when an unexpected condition was encountered and no more specific message is suitable." },
+                { code: 502, msg: "Bad Gateway", desc: "The server was acting as a gateway or proxy and received an invalid response from the upstream server." },
+                { code: 503, msg: "Service Unavailable", desc: "The server is currently unavailable (because it is overloaded or down for maintenance)." },
+                { code: 504, msg: "Gateway Timeout", desc: "The server was acting as a gateway or proxy and did not receive a timely response from the upstream server." }
+            ];
+
+            function render(f = "") {
+                grid.innerHTML = '';
+                const filtered = statusCodes.filter(s =>
+                    s.code.toString().includes(f) || s.msg.toLowerCase().includes(f.toLowerCase())
+                );
+
+                filtered.forEach(s => {
+                    const card = document.createElement('div');
+                    card.className = 'status-card';
+                    const cat = Math.floor(s.code / 100);
+                    card.innerHTML = `
+                        <span class="status-code sc-${cat}xx">${s.code}</span>
+                        <span class="status-msg">${s.msg}</span>
+                        <p class="status-desc">${s.desc}</p>
+                    `;
+                    card.addEventListener('click', async () => {
+                        await navigator.clipboard.writeText(`${s.code} ${s.msg}`);
+                        copyMsg.style.display = 'block';
+                        setTimeout(() => copyMsg.style.display = 'none', 1500);
+                    });
+                    grid.appendChild(card);
+                });
+            }
+
+            filter.addEventListener('input', (e) => render(e.target.value));
+            render();
+        });
+    </script>
+</body>
+
+</html>
