@@ -439,7 +439,10 @@ button:disabled {
 
 #username-display,
 #port-display,
-#password-display {
+#password-display,
+#key-display,
+#hash-display,
+#name-display {
     font-size: 2.22rem;
     font-family: var(--font-mono);
     margin: 0;
@@ -449,6 +452,7 @@ button:disabled {
     border-radius: 20px;
     transition: all 0.3s;
     word-break: break-all;
+    overflow-wrap: break-word;
     color: var(--primary-color);
     cursor: pointer;
     flex: 1;
@@ -457,7 +461,10 @@ button:disabled {
 
 #username-display:hover,
 #port-display:hover,
-#password-display:hover {
+#password-display:hover,
+#key-display:hover,
+#hash-display:hover,
+#name-display:hover {
     border-color: var(--primary-color);
     background: rgba(0, 210, 255, 0.05);
 }
@@ -698,5 +705,179 @@ body.page-nsfw-downloader .download-card h1 {
 
     100% {
         transform: rotate(360deg);
+    }
+}
+
+/* --- Responsive Design --- */
+
+@media (max-width: 768px) {
+    .content h1 {
+        font-size: 2.5rem;
+    }
+
+    .content {
+        margin: 50px auto;
+        padding: 1rem;
+    }
+
+    .hamburger-menu {
+        width: 50px !important;
+        height: 50px !important;
+        min-width: 50px !important;
+        min-height: 50px !important;
+        bottom: 20px !important;
+        left: 20px !important;
+    }
+
+    .hamburger-box {
+        width: 18px;
+        height: 12px;
+    }
+
+    .hamburger-inner,
+    .hamburger-inner::before,
+    .hamburger-inner::after {
+        width: 18px;
+    }
+
+    .nav-panel ul {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 15px;
+        padding: 20px;
+    }
+
+    .nav-panel ul li a {
+        padding: 20px;
+        font-size: 0.9rem;
+    }
+
+    .tool-container {
+        padding: 40px 20px;
+        margin: 20px auto;
+        max-width: 95%;
+    }
+
+    .control-group {
+        max-width: 100%;
+        text-align: center;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+        max-width: 100%;
+    }
+
+    .display-wrapper {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    #username-display,
+    #port-display,
+    #password-display,
+    #key-display,
+    #hash-display,
+    #name-display {
+        font-size: 1.5rem;
+        padding: 16px;
+        min-height: auto;
+    }
+
+    .refresh-btn-circle {
+        width: 50px !important;
+        height: 50px !important;
+        min-width: 50px !important;
+        font-size: 1.2rem;
+    }
+
+    .button-group-row {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    button {
+        min-width: 150px;
+        padding: 12px 30px;
+    }
+}
+
+@media (max-width: 480px) {
+    .content h1 {
+        font-size: 2rem;
+    }
+
+    .hamburger-menu {
+        width: 45px !important;
+        height: 45px !important;
+        min-width: 45px !important;
+        min-height: 45px !important;
+        bottom: 15px !important;
+        left: 15px !important;
+    }
+
+    .hamburger-box {
+        width: 16px;
+        height: 10px;
+    }
+
+    .hamburger-inner,
+    .hamburger-inner::before,
+    .hamburger-inner::after {
+        width: 16px;
+        height: 1.5px;
+    }
+
+    .nav-panel ul {
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        gap: 10px;
+        padding: 15px;
+    }
+
+    .nav-panel ul li a {
+        padding: 15px 10px;
+        font-size: 0.75rem;
+        aspect-ratio: auto;
+        min-height: 90px;
+    }
+
+    .nav-icon {
+        font-size: 1.5rem !important;
+        margin-bottom: 8px;
+    }
+
+    .tool-container h1 {
+        font-size: 1.8rem;
+    }
+
+    .input-group label,
+    .control-group label {
+        font-size: 0.8rem;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+        padding: 12px 20px;
+        font-size: 14px;
+    }
+
+    #username-display,
+    #port-display,
+    #password-display,
+    #key-display,
+    #hash-display,
+    #name-display {
+        font-size: 1.2rem;
+        padding: 12px;
+    }
+
+    .refresh-btn-circle {
+        width: 45px !important;
+        height: 45px !important;
+        min-width: 45px !important;
+        font-size: 1rem;
     }
 }
