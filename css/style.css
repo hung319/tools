@@ -314,6 +314,21 @@ main {
     text-align: center;
 }
 
+.download-card {
+    background: var(--panel-bg-color);
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+    border: 1px solid var(--border-color);
+    border-radius: 30px;
+    padding: 60px 40px;
+    margin: 40px auto;
+    max-width: 900px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    position: relative;
+    overflow: hidden;
+    text-align: center;
+}
+
 .download-card::before,
 .tool-container::before {
     content: '';
@@ -437,6 +452,7 @@ button:disabled {
     max-width: 700px;
 }
 
+#cron-display,
 #username-display,
 #port-display,
 #password-display,
@@ -459,6 +475,7 @@ button:disabled {
     line-height: 1.2;
 }
 
+#cron-display:hover,
 #username-display:hover,
 #port-display:hover,
 #password-display:hover,
@@ -547,7 +564,7 @@ input[type="checkbox"] {
 
 .loading {
     display: none;
-    margin: 20px auto;
+    margin: 30px auto;
     width: 40px;
     height: 40px;
     border: 4px solid var(--border-color);
@@ -681,21 +698,34 @@ body.page-nsfw-downloader .download-card h1 {
     }
 }
 
+@keyframes toastFadeIn {
+    from {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
 #status,
 #copy-message {
     position: fixed;
-    bottom: 30px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 12px 30px;
-    border-radius: 50px;
-    background: var(--primary-color);
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    background: var(--success-color);
     color: #000;
     font-weight: 700;
     z-index: 9999;
-    box-shadow: 0 0 30px var(--primary-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     display: none;
-    animation: fadeIn 0.3s ease forwards;
+    animation: toastFadeIn 0.3s ease forwards;
+    max-width: 300px;
+    word-wrap: break-word;
 }
 
 @keyframes spin {
@@ -757,6 +787,12 @@ body.page-nsfw-downloader .download-card h1 {
         max-width: 95%;
     }
 
+    .download-card {
+        padding: 40px 20px;
+        margin: 20px auto;
+        max-width: 95%;
+    }
+
     .control-group {
         max-width: 100%;
         text-align: center;
@@ -774,6 +810,7 @@ body.page-nsfw-downloader .download-card h1 {
         gap: 10px;
     }
 
+    #cron-display,
     #username-display,
     #port-display,
     #password-display,
@@ -800,6 +837,20 @@ body.page-nsfw-downloader .download-card h1 {
     button {
         min-width: 150px;
         padding: 12px 30px;
+    }
+
+    .cron-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .cron-item label {
+        margin-bottom: 5px;
+    }
+
+    .cron-input {
+        width: 100%;
     }
 }
 
@@ -851,6 +902,10 @@ body.page-nsfw-downloader .download-card h1 {
         font-size: 1.8rem;
     }
 
+    .download-card h1 {
+        font-size: 1.8rem;
+    }
+
     .input-group label,
     .control-group label {
         font-size: 0.8rem;
@@ -864,6 +919,7 @@ body.page-nsfw-downloader .download-card h1 {
         font-size: 14px;
     }
 
+    #cron-display,
     #username-display,
     #port-display,
     #password-display,
@@ -874,10 +930,45 @@ body.page-nsfw-downloader .download-card h1 {
         padding: 12px;
     }
 
+    #status,
+    #copy-message {
+        position: static;
+        margin-top: 20px;
+        text-align: center;
+    }
+
     .refresh-btn-circle {
         width: 45px !important;
         height: 45px !important;
         min-width: 45px !important;
         font-size: 1rem;
+    }
+
+    #status,
+    #copy-message {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--success-color);
+        border-radius: 8px;
+        animation: toastFadeIn 0.3s ease forwards;
+        max-width: 80%;
+        text-align: center;
+    }
+
+    .cron-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .cron-item label {
+        width: 100%;
+        margin-bottom: 5px;
+    }
+
+    .cron-input {
+        width: 100%;
     }
 }
