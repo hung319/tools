@@ -163,6 +163,7 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 20px;
+    grid-auto-rows: minmax(140px, auto);
     max-width: 1200px;
     margin: 0 auto;
     overflow-y: auto;
@@ -200,7 +201,7 @@ body {
     border: 1px solid var(--border-color);
     border-radius: 20px;
     height: 100%;
-    aspect-ratio: 1.2 / 1;
+    aspect-ratio: auto;
     will-change: transform;
     transform: translateZ(0);
     min-height: 120px;
@@ -840,15 +841,17 @@ body.page-nsfw-downloader .download-card h1 {
     }
 
     .nav-panel ul {
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 15px;
+        grid-template-columns: repeat(3, minmax(150px, 1fr));
+        gap: 14px;
         padding: 20px;
+        grid-auto-rows: minmax(120px, auto);
     }
 
     .nav-panel ul li a {
         padding: 22px 18px;
         font-size: 0.9rem;
-        min-height: 100px;
+        min-height: 120px;
+        aspect-ratio: auto;
         transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
     }
 
@@ -938,6 +941,20 @@ body.page-nsfw-downloader .download-card h1 {
     }
 }
 
+@media (max-width: 640px) {
+    .nav-panel ul {
+        grid-template-columns: repeat(2, minmax(150px, 1fr));
+        gap: 12px;
+        padding: 18px;
+        grid-auto-rows: minmax(120px, auto);
+    }
+
+    .nav-panel ul li a {
+        padding: 20px 16px;
+        min-height: 116px;
+    }
+}
+
 @media (max-width: 768px) and (hover: hover) {
     .nav-panel ul li a:hover {
         box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
@@ -986,16 +1003,17 @@ body.page-nsfw-downloader .download-card h1 {
     }
 
     .nav-panel ul {
-        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        grid-template-columns: repeat(2, minmax(130px, 1fr));
         gap: 10px;
-        padding: 15px;
+        padding: 14px;
+        grid-auto-rows: minmax(112px, auto);
     }
 
     .nav-panel ul li a {
         padding: 18px 12px;
-        font-size: 0.75rem;
+        font-size: 0.8rem;
         aspect-ratio: auto;
-        min-height: 96px;
+        min-height: 112px;
         transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
     }
 
@@ -1089,6 +1107,25 @@ body.page-nsfw-downloader .download-card h1 {
 
     .cron-input {
         width: 100%;
+    }
+}
+
+@media (max-width: 360px) {
+    .nav-panel ul {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+        gap: 8px;
+        padding: 12px;
+    }
+
+    .nav-panel ul li a {
+        padding: 16px 10px;
+        font-size: 0.78rem;
+        min-height: 108px;
+    }
+
+    .nav-panel .nav-icon {
+        font-size: 1.4rem;
+        margin-bottom: 6px;
     }
 }
 

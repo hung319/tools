@@ -1,0 +1,3 @@
+- Updated css/style.css for mobile menu performance: replaced transition: all with explicit properties, reduced nav-panel slide duration to 0.3s using translate3d and will-change, added GPU hints on menu items, and lowered backdrop-filter/box-shadow intensity at <=768px and <=480px.
+- Added touch-specific menu styles in css/style.css using hover media queries, :active feedback, and larger tap targets (min-height/padding and larger hamburger button) while keeping desktop hover intact.
+- Adjusted mobile grid layout in css/style.css with fixed column counts at <=768/640/480/360, removed base aspect-ratio, and added grid-auto-rows/min-height tweaks for consistent touch-friendly sizing while leaving desktop grid intact.
