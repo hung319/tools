@@ -1,9 +1,0 @@
-{
-  "status": "in_progress",
-  "origin": "manual",
-  "planTitle": "04-optimize-panel-performance",
-  "baseCommit": "909cc57c998e991bce6faea9111c21bebb14513b",
-  "schemaVersion": 1,
-  "startedAt": "2026-02-01T08:44:39.130Z",
-  "idempotencyKey": "hive-fix-mobile-menu-grid-04-04-optimize-panel-performance-1"
-}
