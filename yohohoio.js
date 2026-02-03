@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YoHoHo.io Precision Hybrid (CezDev)
+// @name         YoHoHo.io Perfect Logic (Bottom-Left UI)
 // @namespace    http://tampermonkey.net/
-// @version      1.8
-// @description  Sửa lỗi double click, gồng lại ngay lập tức sau khi thả chuột.
+// @version      1.9.1
+// @description  Chuyển Menu xuống góc dưới bên trái. T: Auto-Charge | G: Hold-to-Spam.
 // @author       CezDev
 // @match        https://yohoho.io/
 // @grant        none
@@ -11,80 +11,94 @@
 (function() {
     'use strict';
 
-    let config = {
-        autoCharge: true,
-        spamEnabled: true
-    };
-
+    let config = { autoCharge: true, spamEnabled: true };
     let isUserHolding = false;
-    let chargeTimer = null;
+    let spamInterval = null;
 
-    // --- 1. UI Quản lý ---
+    // --- 1. UI - Đã chuyển xuống Bottom-Left ---
     const ui = document.createElement('div');
     Object.assign(ui.style, {
-        position: 'fixed', top: '15px', left: '15px', padding: '12px',
-        backgroundColor: 'rgba(10, 10, 10, 0.9)', color: '#00ff00',
-        fontFamily: 'monospace', zIndex: '10000', borderRadius: '6px',
-        border: '1px solid #00ff00', pointerEvents: 'none', fontSize: '12px'
+        position: 'fixed',
+        bottom: '20px', // Cách đáy 20px
+        left: '20px',   // Cách lề trái 20px
+        padding: '12px',
+        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        color: '#00ff00',
+        fontFamily: 'Consolas, monospace',
+        zIndex: '10000',
+        borderRadius: '8px',
+        border: '1px solid #00ff00',
+        pointerEvents: 'none',
+        boxShadow: '0 0 10px rgba(0, 255, 0, 0.3)',
+        fontSize: '13px',
+        lineHeight: '1.6'
     });
     document.body.appendChild(ui);
 
     const updateUI = () => {
         ui.innerHTML = `
-            <b style="color:#fbff00">CEZDEV PRO V1.8</b><br>
-            [T] CHARGE: ${config.autoCharge ? 'ON' : 'OFF'}<br>
-            [G] SPAM: ${config.spamEnabled ? 'ON' : 'OFF'}
+            <b style="color:#fbff00; font-size: 14px;">CEZDEV COMMANDER</b><br>
+            <span style="color: ${config.autoCharge ? '#00ff00' : '#ff4444'}">[T] AUTO-CHARGE: ${config.autoCharge ? 'ON' : 'OFF'}</span><br>
+            <span style="color: ${config.spamEnabled ? '#00ffff' : '#ff4444'}">[G] HOLD-TO-SPAM: ${config.spamEnabled ? 'ON' : 'OFF'}</span>
         `;
         ui.style.borderColor = config.autoCharge ? '#00ff00' : '#ff4444';
     };
     updateUI();
 
-    // --- 2. Logic Events ---
+    // --- 2. Core Actions ---
     const canvas = document.querySelector('canvas') || document.body;
-    const sendEvent = (type) => {
-        canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 }));
+    const send = (type) => canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 }));
+
+    const startSpam = () => {
+        if (spamInterval) return;
+        spamInterval = setInterval(() => {
+            if (isUserHolding && config.spamEnabled) {
+                send('mouseup');
+                setTimeout(() => { if (isUserHolding) send('mousedown'); }, 5);
+            }
+        }, 50);
     };
 
-    // Vòng lặp xử lý chính (Interval)
-    setInterval(() => {
-        if (!config.autoCharge && !config.spamEnabled) return;
+    const stopSpam = () => {
+        clearInterval(spamInterval);
+        spamInterval = null;
+    };
 
-        if (isUserHolding && config.spamEnabled) {
-            // Chế độ SPAM
-            sendEvent('mouseup');
-            setTimeout(() => { if(isUserHolding) sendEvent('mousedown'); }, 5);
-        } else if (config.autoCharge && !isUserHolding) {
-            // Chế độ GỒNG (Chỉ chạy khi người dùng KHÔNG chạm vào chuột)
-            sendEvent('mousedown');
-        }
-    }, 50);
-
-    // --- 3. Listeners ---
+    // --- 3. Event Listeners ---
     window.addEventListener('mousedown', (e) => {
         if (e.isTrusted) {
             isUserHolding = true;
-            // Ngắt gồng ngay lập tức để thực hiện đòn đánh hoặc bắt đầu spam
-            sendEvent('mouseup'); 
+            if (config.spamEnabled) startSpam();
         }
     }, true);
 
     window.addEventListener('mouseup', (e) => {
         if (e.isTrusted) {
             isUserHolding = false;
-            // Đảm bảo sau khi nhả chuột, script "ép" lệnh gồng lại ngay lập tức (không đợi interval)
+            stopSpam();
+            
             if (config.autoCharge) {
                 setTimeout(() => {
-                    if (!isUserHolding) sendEvent('mousedown');
-                }, 10); 
+                    if (!isUserHolding) send('mousedown');
+                }, 30);
             }
         }
     }, true);
 
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
-        if (key === 't') { config.autoCharge = !config.autoCharge; if(!config.autoCharge) sendEvent('mouseup'); updateUI(); }
-        if (key === 'g') { config.spamEnabled = !config.spamEnabled; updateUI(); }
+        if (key === 't') {
+            config.autoCharge = !config.autoCharge;
+            config.autoCharge ? send('mousedown') : send('mouseup');
+            updateUI();
+        }
+        if (key === 'g') {
+            config.spamEnabled = !config.spamEnabled;
+            updateUI();
+        }
     });
 
-    console.log("CezDev: Precision Hybrid v1.8 Loaded.");
+    // Khởi tạo trạng thái ban đầu
+    setTimeout(() => { if (config.autoCharge) send('mousedown'); }, 2000);
+
 })();
