@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YoHoHo.io Zero-Conflict (CezDev)
+// @name         YoHoHo.io Infinite Hold (CezDev)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Loại bỏ hoàn toàn double click bằng cách ngừng can thiệp khi người dùng thao tác.
+// @version      2.1
+// @description  Giữ nguyên Zero-Conflict, tăng cường khả năng tự động Hold liên tục.
 // @author       CezDev
 // @match        https://yohoho.io/
 // @grant        none
@@ -13,8 +13,8 @@
 
     let config = { autoCharge: true, spamEnabled: true };
     let isUserHolding = false;
+    let isLocked = false; 
     let spamInterval = null;
-    let globalLock = false; // Khóa toàn bộ script
 
     // --- 1. UI (Góc dưới trái) ---
     const ui = document.createElement('div');
@@ -28,7 +28,7 @@
 
     const updateUI = () => {
         ui.innerHTML = `
-            <b style="color:#fbff00">CEZDEV ZERO-CONFLICT</b><br>
+            <b style="color:#fbff00">CEZDEV INFINITE HOLD</b><br>
             <span style="color: ${config.autoCharge ? '#00ff00' : '#ff4444'}">[T] AUTO-CHARGE: ${config.autoCharge ? 'ON' : 'OFF'}</span><br>
             <span style="color: ${config.spamEnabled ? '#00ffff' : '#ff4444'}">[G] HOLD-TO-SPAM: ${config.spamEnabled ? 'ON' : 'OFF'}</span>
         `;
@@ -38,10 +38,15 @@
     // --- 2. Core Actions ---
     const canvas = document.querySelector('canvas') || document.body;
     const send = (type) => {
-        if (!globalLock || type === 'mouseup') { // Cho phép nhả chuột ngay cả khi lock
-            canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
-        }
+        canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
     };
+
+    // Vòng lặp Watchdog (0.5s một lần) - Đảm bảo nhân vật luôn gồng
+    setInterval(() => {
+        if (config.autoCharge && !isUserHolding && !isLocked) {
+            send('mousedown');
+        }
+    }, 500);
 
     const startSpam = () => {
         if (spamInterval) return;
@@ -62,11 +67,8 @@
     window.addEventListener('mousedown', (e) => {
         if (e.isTrusted) {
             isUserHolding = true;
-            globalLock = true; // NGỪNG TOÀN BỘ AUTO KHI NGƯỜI DÙNG NHẤN CHUỘT
-            
-            if (config.spamEnabled) {
-                startSpam();
-            }
+            isLocked = true; // Khóa ngay khi người dùng chạm vào
+            if (config.spamEnabled) startSpam();
         }
     }, true);
 
@@ -75,23 +77,15 @@
             isUserHolding = false;
             stopSpam();
             
-            // SAU KHI THẢ CHUỘT: Đợi game xử lý xong đòn đánh thật (250ms)
-            // Trong 250ms này, script không được phép tự ý nhấn mousedown (chống double click)
+            // Chống double click: Khóa trong 200ms
             setTimeout(() => {
-                globalLock = false; 
+                isLocked = false;
                 if (config.autoCharge && !isUserHolding) {
                     send('mousedown');
                 }
-            }, 250); 
+            }, 200); 
         }
     }, true);
-
-    // Watchdog cực chậm để đảm bảo luôn gồng khi không chơi
-    setInterval(() => {
-        if (config.autoCharge && !isUserHolding && !globalLock) {
-            send('mousedown');
-        }
-    }, 2000);
 
     window.addEventListener('keydown', (e) => {
         const key = e.key.toLowerCase();
