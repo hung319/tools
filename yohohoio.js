@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         CEZ COMBAT PRO
+// @name         YoHoHo.io Turbo Double-Spam (CezDev)
 // @namespace    http://tampermonkey.net/
-// @version      2.5
-// @description  Hệ thống hỗ trợ chiến đấu YoHoHo: Auto-Charge & Turbo-Spam.
+// @version      2.3
+// @description  Tính năng Double-Click trong lúc Spam. T: Auto-Charge | G: Hold-to-Spam.
 // @author       CezDev
 // @match        https://yohoho.io/
 // @grant        none
@@ -11,69 +11,84 @@
 (function() {
     'use strict';
 
-    let config = { autoCharge: true, turboSpam: true };
+    let config = { autoCharge: true, spamEnabled: true };
     let isUserHolding = false;
-    let lastAction = 0;
+    let isLocked = false; 
+    let spamInterval = null;
 
-    // --- 1. UI: CEZ COMBAT PRO (Góc dưới trái) ---
+    // --- 1. UI (Góc dưới trái) ---
     const ui = document.createElement('div');
     Object.assign(ui.style, {
         position: 'fixed', bottom: '20px', left: '20px', padding: '12px',
-        backgroundColor: 'rgba(15, 15, 15, 0.9)', color: '#00ff00',
-        fontFamily: 'Segoe UI, Tahoma, sans-serif', zIndex: '10000', borderRadius: '8px',
-        border: '2px solid #00ff00', pointerEvents: 'none', fontSize: '12px',
-        boxShadow: '0 0 15px rgba(0, 255, 0, 0.2)', letterSpacing: '0.5px'
+        backgroundColor: 'rgba(0, 0, 0, 0.9)', color: '#00ff00',
+        fontFamily: 'Consolas, monospace', zIndex: '10000', borderRadius: '8px',
+        border: '1px solid #00ff00', pointerEvents: 'none', fontSize: '13px'
     });
     document.body.appendChild(ui);
 
     const updateUI = () => {
         ui.innerHTML = `
-            <div style="font-weight: bold; color: #fbff00; border-bottom: 1px solid #444; margin-bottom: 6px; padding-bottom: 4px;">CEZ COMBAT PRO</div>
-            <div style="display: flex; justify-content: space-between; gap: 15px;">
-                <span>[T] AUTO-CHARGE:</span> 
-                <span style="color: ${config.autoCharge ? '#00ff00' : '#ff4444'}">${config.autoCharge ? 'ON' : 'OFF'}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; gap: 15px;">
-                <span>[G] TURBO-SPAM:</span> 
-                <span style="color: ${config.turboSpam ? '#00ffff' : '#ff4444'}">${config.turboSpam ? 'ON' : 'OFF'}</span>
-            </div>
+            <b style="color:#fbff00">CEZDEV TURBO V2.3</b><br>
+            <span style="color: ${config.autoCharge ? '#00ff00' : '#ff4444'}">[T] AUTO-CHARGE: ${config.autoCharge ? 'ON' : 'OFF'}</span><br>
+            <span style="color: ${config.spamEnabled ? '#00ffff' : '#ff4444'}">[G] DOUBLE-SPAM: ${config.spamEnabled ? 'ON' : 'OFF'}</span>
         `;
     };
     updateUI();
 
-    // --- 2. Core Logic ---
-    const canvas = document.querySelector('canvas') || document.body;
-    const send = (type) => canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
+    // --- 2. Core Actions ---
+    const send = (type) => {
+        const canvas = document.querySelector('canvas') || document.body;
+        canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
+    };
 
-    // Vòng lặp đồng bộ hiệu năng cao (45ms)
-    setInterval(() => {
-        const now = Date.now();
-
-        if (isUserHolding && config.turboSpam) {
-            // Chế độ Turbo Spam: Nhịp độ cao, ổn định lực chém
-            send('mouseup');
-            send('mousedown');
-        } else if (config.autoCharge && !isUserHolding) {
-            // Chế độ Auto-Charge: Chỉ kích hoạt sau 180ms để tránh Double Click
-            if (now - lastAction > 180) {
-                send('mousedown');
+    // Vòng lặp Spam với kỹ thuật Double-Click
+    const startSpam = () => {
+        if (spamInterval) return;
+        spamInterval = setInterval(() => {
+            if (isUserHolding && config.spamEnabled) {
+                // Nhát chém 1
+                send('mouseup');
+                setTimeout(() => { 
+                    if (isUserHolding) {
+                        send('mousedown');
+                        // Nhát chém 2 (Double click ngay lập tức)
+                        setTimeout(() => {
+                            if (isUserHolding) {
+                                send('mouseup');
+                                setTimeout(() => { if (isUserHolding) send('mousedown'); }, 5);
+                            }
+                        }, 10); 
+                    }
+                }, 5);
             }
-        }
-    }, 45);
+        }, 70); // Tăng nhịp gốc lên 70ms để tránh lag do Double-Click quá nhanh
+    };
+
+    const stopSpam = () => {
+        clearInterval(spamInterval);
+        spamInterval = null;
+    };
 
     // --- 3. Event Listeners ---
     window.addEventListener('mousedown', (e) => {
         if (e.isTrusted) {
             isUserHolding = true;
-            lastAction = Date.now();
-            send('mouseup'); // Nhả phát gồng cũ để bung đòn hoặc bắt đầu spam
+            isLocked = true;
+            if (config.spamEnabled) {
+                send('mouseup'); // Nhả phát gồng để bắt đầu chuỗi Turbo
+                startSpam();
+            }
         }
     }, true);
 
     window.addEventListener('mouseup', (e) => {
         if (e.isTrusted) {
             isUserHolding = false;
-            lastAction = Date.now();
+            stopSpam();
+            setTimeout(() => {
+                isLocked = false;
+                if (config.autoCharge && !isUserHolding) send('mousedown');
+            }, 200); 
         }
     }, true);
 
@@ -81,16 +96,23 @@
         const key = e.key.toLowerCase();
         if (key === 't') {
             config.autoCharge = !config.autoCharge;
-            if (!config.autoCharge) send('mouseup');
+            config.autoCharge ? send('mousedown') : send('mouseup');
             updateUI();
         }
         if (key === 'g') {
-            config.turboSpam = !config.turboSpam;
+            config.spamEnabled = !config.spamEnabled;
             updateUI();
         }
     });
 
-    // Khởi động trễ khi load web để game ổn định
-    setTimeout(() => { if (config.autoCharge) send('mousedown'); }, 2500);
+    // Watchdog duy trì gồng (Fix lỗi web không ổn định)
+    setInterval(() => {
+        if (config.autoCharge && !isUserHolding && !isLocked) {
+            send('mousedown');
+        }
+    }, 500);
+
+    // Khởi động
+    setTimeout(() => { if (config.autoCharge) send('mousedown'); }, 2000);
 
 })();
