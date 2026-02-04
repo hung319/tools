@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YoHoHo.io Infinite Hold (CezDev)
+// @name         YoHoHo.io Turbo Double-Spam (CezDev)
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Giữ nguyên Zero-Conflict, tăng cường khả năng tự động Hold liên tục.
+// @version      2.3
+// @description  Tính năng Double-Click trong lúc Spam. T: Auto-Charge | G: Hold-to-Spam.
 // @author       CezDev
 // @match        https://yohoho.io/
 // @grant        none
@@ -28,34 +28,40 @@
 
     const updateUI = () => {
         ui.innerHTML = `
-            <b style="color:#fbff00">CEZDEV INFINITE HOLD</b><br>
+            <b style="color:#fbff00">CEZDEV TURBO V2.3</b><br>
             <span style="color: ${config.autoCharge ? '#00ff00' : '#ff4444'}">[T] AUTO-CHARGE: ${config.autoCharge ? 'ON' : 'OFF'}</span><br>
-            <span style="color: ${config.spamEnabled ? '#00ffff' : '#ff4444'}">[G] HOLD-TO-SPAM: ${config.spamEnabled ? 'ON' : 'OFF'}</span>
+            <span style="color: ${config.spamEnabled ? '#00ffff' : '#ff4444'}">[G] DOUBLE-SPAM: ${config.spamEnabled ? 'ON' : 'OFF'}</span>
         `;
     };
     updateUI();
 
     // --- 2. Core Actions ---
-    const canvas = document.querySelector('canvas') || document.body;
     const send = (type) => {
+        const canvas = document.querySelector('canvas') || document.body;
         canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }));
     };
 
-    // Vòng lặp Watchdog (0.5s một lần) - Đảm bảo nhân vật luôn gồng
-    setInterval(() => {
-        if (config.autoCharge && !isUserHolding && !isLocked) {
-            send('mousedown');
-        }
-    }, 500);
-
+    // Vòng lặp Spam với kỹ thuật Double-Click
     const startSpam = () => {
         if (spamInterval) return;
         spamInterval = setInterval(() => {
             if (isUserHolding && config.spamEnabled) {
+                // Nhát chém 1
                 send('mouseup');
-                setTimeout(() => { if (isUserHolding) send('mousedown'); }, 10);
+                setTimeout(() => { 
+                    if (isUserHolding) {
+                        send('mousedown');
+                        // Nhát chém 2 (Double click ngay lập tức)
+                        setTimeout(() => {
+                            if (isUserHolding) {
+                                send('mouseup');
+                                setTimeout(() => { if (isUserHolding) send('mousedown'); }, 5);
+                            }
+                        }, 10); 
+                    }
+                }, 5);
             }
-        }, 60);
+        }, 70); // Tăng nhịp gốc lên 70ms để tránh lag do Double-Click quá nhanh
     };
 
     const stopSpam = () => {
@@ -67,8 +73,11 @@
     window.addEventListener('mousedown', (e) => {
         if (e.isTrusted) {
             isUserHolding = true;
-            isLocked = true; // Khóa ngay khi người dùng chạm vào
-            if (config.spamEnabled) startSpam();
+            isLocked = true;
+            if (config.spamEnabled) {
+                send('mouseup'); // Nhả phát gồng để bắt đầu chuỗi Turbo
+                startSpam();
+            }
         }
     }, true);
 
@@ -76,13 +85,9 @@
         if (e.isTrusted) {
             isUserHolding = false;
             stopSpam();
-            
-            // Chống double click: Khóa trong 200ms
             setTimeout(() => {
                 isLocked = false;
-                if (config.autoCharge && !isUserHolding) {
-                    send('mousedown');
-                }
+                if (config.autoCharge && !isUserHolding) send('mousedown');
             }, 200); 
         }
     }, true);
@@ -100,5 +105,14 @@
         }
     });
 
+    // Watchdog duy trì gồng (Fix lỗi web không ổn định)
+    setInterval(() => {
+        if (config.autoCharge && !isUserHolding && !isLocked) {
+            send('mousedown');
+        }
+    }, 500);
+
+    // Khởi động
     setTimeout(() => { if (config.autoCharge) send('mousedown'); }, 2000);
+
 })();
