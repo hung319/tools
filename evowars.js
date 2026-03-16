@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         EvoWars.io ESP (CezDev Vector Evade & Aim)
-// @version      6.0.0
-// @description  Advanced ESP, Repulsion Vector Evade, Magnetic Aim
+// @name         EvoWars.io ESP (CezDev - Strike Signal + Auto Sprint)
+// @version      9.0.0
+// @description  Vector Evade, Attack Range Indicator, Auto Sprint, ESP
 // @author       DDatiOS (Optimized by CezDev)
 // @match        *://evowars.io/*
 // @icon         https://www.google.com/s2/favicons?domain=evowars.io
@@ -23,12 +23,12 @@
         WARNING_BORDER: "rgba(255, 0, 0, 0.9)", 
         WARNING_TRACER: "rgba(255, 0, 0, 0.7)", 
         
-        TARGET_COLOR: "#00ff00", 
+        TARGET_COLOR: "#00ff00", // Đang ngắm (Xanh)
+        IN_RANGE_COLOR: "#ff0000", // ĐÃ VÀO TẦM CHÉM (ĐỎ)
         EVADE_COLOR: "#ff00ff",  
         FONT: "#ffffff",
         FONT_DANGER: "#ff4444",
         
-        // --- TÍNH NĂNG & PHÍM TẮT ---
         SHOW_CIRCLE: true,
         SHOW_TRACER: true,
         SHOW_NAMES: true,
@@ -37,10 +37,15 @@
         AIM_KEY: "Shift",        
         TOGGLE_KEY: "v",         
         
-        // --- CẤU HÌNH AUTO EVADE (MỚI) ---
+        // --- CẤU HÌNH AUTO EVADE ---
         AUTO_EVADE: true,        
-        EVADE_MULTIPLIER: 1.5,   // Nhân số theo thân hình địch
-        EVADE_BUFFER: 400,       // Khoảng bù trừ (Chống lại tầm chém của vũ khí dài)
+        EVADE_MULTIPLIER: 1.5,   
+        EVADE_BUFFER: 400,       
+
+        // --- CẤU HÌNH TẦM ĐÁNH (MỚI) ---
+        SHOW_ATTACK_RING: true,          // Hiển thị vòng tròn tầm đánh của bạn
+        ATTACK_RANGE_MULTIPLIER: 2.2,    // Hệ số nhân chiều dài vũ khí (Tinh chỉnh theo cảm giác)
+        ATTACK_RANGE_BUFFER: 60,         // Khoảng bù trừ (Pixel)
     };
 
     const state = {
@@ -69,12 +74,36 @@
 
         window.addEventListener('keydown', (e) => {
             if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
-            if (e.key === config.AIM_KEY) state.isAiming = true;
+            
+            if (e.key === config.AIM_KEY && !state.isAiming) {
+                state.isAiming = true;
+                if (state.gameCanvas) {
+                    state.gameCanvas.dispatchEvent(new MouseEvent('mousedown', {
+                        button: 2, 
+                        bubbles: true,
+                        cancelable: true
+                    }));
+                }
+            }
+            
             if (e.key.toLowerCase() === config.TOGGLE_KEY) state.isActive = !state.isActive;
         });
         
         window.addEventListener('keyup', (e) => {
-            if (e.key === config.AIM_KEY) state.isAiming = false;
+            if (e.key === config.AIM_KEY) {
+                state.isAiming = false;
+                if (state.gameCanvas) {
+                    state.gameCanvas.dispatchEvent(new MouseEvent('mouseup', {
+                        button: 2,
+                        bubbles: true,
+                        cancelable: true
+                    }));
+                }
+            }
+        });
+
+        window.addEventListener('contextmenu', (e) => {
+            if (state.isActive) e.preventDefault();
         });
     };
 
@@ -121,10 +150,23 @@
         let bestTarget = null;
         let minTargetDist = Infinity;
         
-        // Biến phục vụ Thuật toán Repulsion (Tổng hợp lực đẩy)
         let forceX = 0;
         let forceY = 0;
         let dangerCount = 0;
+
+        // Tính toán Tầm đánh của bản thân (World Coordinates)
+        const selfAttackRadius = (self.width / 2) * config.ATTACK_RANGE_MULTIPLIER + config.ATTACK_RANGE_BUFFER;
+
+        // Vẽ Vòng tròn Tầm đánh (Attack Ring) nếu được bật
+        if (config.SHOW_ATTACK_RING) {
+            ctx.beginPath();
+            ctx.arc(viewX, viewY, selfAttackRadius * scale, 0, 2 * Math.PI);
+            ctx.strokeStyle = "rgba(255, 165, 0, 0.3)"; // Cam mờ
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
 
         for (const p of state.pType.instances) {
             if (p.uid === self.uid) continue;
@@ -132,7 +174,6 @@
             const pScore = Math.floor(p.instance_vars[state.scoreIndex] || 0);
             const isDanger = pScore > selfScore; 
             
-            // Tính khoảng cách World thực tế (Chuẩn xác hơn Screen)
             const dx = self.x - p.x;
             const dy = self.y - p.y;
             const worldDist = Math.sqrt(dx*dx + dy*dy);
@@ -162,31 +203,24 @@
                 ctx.fillText(text, pX, pY - radius - 8);
             }
 
-            // --- THUẬT TOÁN LỰC ĐẨY (AUTO EVADE) ---
             if (isDanger) {
-                // Vùng nguy hiểm = Bán kính thân hình địch + Khoảng bù trừ lưỡi kiếm
                 const threatRadius = (p.width / 2) * config.EVADE_MULTIPLIER + config.EVADE_BUFFER;
-                
                 if (worldDist < threatRadius) {
                     dangerCount++;
-                    // Lực đẩy mạnh hơn nếu địch ở gần, yếu hơn nếu địch ở rìa vùng nguy hiểm
                     const strength = 1 - (worldDist / threatRadius);
-                    
                     if (worldDist > 0) {
                         forceX += (dx / worldDist) * strength;
                         forceY += (dy / worldDist) * strength;
                     }
                 }
             } else {
-                // --- THUẬT TOÁN TÌM CON MỒI (AIM ASSIST) ---
                 if (worldDist < minTargetDist) {
                     minTargetDist = worldDist;
-                    bestTarget = { x: pX, y: pY }; 
+                    bestTarget = { x: pX, y: pY, pWidth: p.width, worldDist: worldDist }; 
                 }
             }
         }
 
-        // Render Đồ họa
         if (config.SHOW_TRACER) {
             ctx.strokeStyle = config.TRACER; ctx.stroke(tracersNormal);
             ctx.strokeStyle = config.WARNING_TRACER; ctx.stroke(tracersDanger);
@@ -198,14 +232,10 @@
             ctx.strokeStyle = config.WARNING_BORDER; ctx.stroke(circlesDanger);
         }
 
-        // --- XỬ LÝ ĐIỀU KHIỂN CHUỘT ---
         if (config.AUTO_EVADE && dangerCount > 0) {
-            // TÍNH TOÁN GÓC CHẠY TRỐN TỔNG HỢP (Chạy khỏi tất cả mục tiêu cùng lúc)
             let escapeAngle = Math.atan2(forceY, forceX);
-            // Fallback nếu đang ở chính giữa 2 lực cân bằng tuyệt đối
             if (forceX === 0 && forceY === 0) escapeAngle = Math.random() * Math.PI * 2; 
 
-            // Phóng con trỏ chuột ra xa 500 pixel để game nhận diện đây là lệnh "chạy max tốc độ"
             const escapeX = viewX + Math.cos(escapeAngle) * 500;
             const escapeY = viewY + Math.sin(escapeAngle) * 500;
 
@@ -216,31 +246,40 @@
                 cancelable: true
             }));
 
-            // Vẽ chỉ báo đường thoát màu tím
             ctx.beginPath();
             ctx.strokeStyle = config.EVADE_COLOR;
             ctx.lineWidth = 3;
-            ctx.setLineDash([10, 5]); // Kẻ đứt nét cho đường chạy trốn
+            ctx.setLineDash([10, 5]); 
             ctx.moveTo(viewX, viewY);
             ctx.lineTo(escapeX, escapeY);
             ctx.stroke();
-            ctx.setLineDash([]); // Reset nét vẽ
+            ctx.setLineDash([]); 
 
             ctx.font = "bold 16px Arial";
             ctx.fillStyle = config.EVADE_COLOR;
             ctx.fillText(`⚠ EVADING ${dangerCount} THREATS ⚠`, viewX, viewY - 40);
 
         } else if (bestTarget) {
-            // Vẽ hồng tâm nhắm bắn
+            // Kiểm tra xem địch đã lọt vào vùng vung kiếm chưa (Khoảng cách < Bán kính đánh + Nửa thân hình địch)
+            const isInRange = bestTarget.worldDist < (selfAttackRadius + (bestTarget.pWidth / 2));
+            
+            // Vẽ hồng tâm
             ctx.beginPath();
-            ctx.strokeStyle = config.TARGET_COLOR;
-            ctx.lineWidth = 2;
-            const size = 15;
+            ctx.strokeStyle = isInRange ? config.IN_RANGE_COLOR : config.TARGET_COLOR;
+            ctx.lineWidth = isInRange ? 4 : 2; // Làm đậm hồng tâm nếu vào tầm
+            const size = isInRange ? 20 : 15;
+            
             ctx.moveTo(bestTarget.x - size, bestTarget.y); ctx.lineTo(bestTarget.x + size, bestTarget.y);
             ctx.moveTo(bestTarget.x, bestTarget.y - size); ctx.lineTo(bestTarget.x, bestTarget.y + size);
             ctx.stroke();
 
-            // Chỉ override chuột ngắm bắn khi GIỮ phím Shift (tránh giật chuột khi đang đi dạo)
+            // Hiện chữ báo hiệu CHÉM
+            if (isInRange) {
+                ctx.font = "bold 16px Arial";
+                ctx.fillStyle = config.IN_RANGE_COLOR;
+                ctx.fillText("⚔️ CHÉM ⚔️", bestTarget.x, bestTarget.y - 30);
+            }
+
             if (state.isAiming) {
                 state.gameCanvas.dispatchEvent(new MouseEvent('mousemove', {
                     clientX: bestTarget.x,
@@ -269,7 +308,7 @@
                 }
             }
             if (state.pType) {
-                console.log("%c[EvoWars ESP] VECTOR EVADE & AIM ACTIVE", "color: #00ff00; font-weight: bold;");
+                console.log("%c[EvoWars ESP] V9.0 STRIKE SIGNAL ACTIVE", "color: #00ff00; font-weight: bold;");
                 setupDOM();
                 mainLoop();
             }
