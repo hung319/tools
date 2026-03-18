@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         EvoWars.io ESP (CezDev - Strike Signal + Auto Sprint)
-// @version      9.0.0
-// @description  Vector Evade, Attack Range Indicator, Auto Sprint, ESP
+// @name         EvoWars.io ESP (CezDev - Threat Awareness v11.4)
+// @version      11.4.0
+// @description  Facing Warning, Continuous Aim Override, Absolute Lock, Enemy Rings
 // @author       DDatiOS (Optimized by CezDev)
 // @match        *://evowars.io/*
 // @icon         https://www.google.com/s2/favicons?domain=evowars.io
@@ -13,39 +13,40 @@
     'use strict';
 
     const config = {
-        CIRCLE_SIZE_FACTOR: 1.7,
+        // --- CẤU HÌNH MÀU SẮC & GIAO DIỆN ---
+        TRACER: "rgba(255, 255, 255, 0.2)", 
+        WARNING_TRACER: "rgba(255, 0, 0, 0.4)", 
+        FACING_WARNING_TRACER: "rgba(255, 0, 0, 0.9)", // Dây cảnh báo đỏ rực khi bị ngắm
         
-        CIRCLE_FILL: "rgba(255, 255, 255, 0.15)", 
-        CIRCLE_BORDER: "rgba(255, 255, 255, 0.8)", 
-        TRACER: "rgba(255, 255, 255, 0.5)", 
-        
-        WARNING_FILL: "rgba(255, 0, 0, 0.25)", 
-        WARNING_BORDER: "rgba(255, 0, 0, 0.9)", 
-        WARNING_TRACER: "rgba(255, 0, 0, 0.7)", 
-        
-        TARGET_COLOR: "#00ff00", // Đang ngắm (Xanh)
-        IN_RANGE_COLOR: "#ff0000", // ĐÃ VÀO TẦM CHÉM (ĐỎ)
-        EVADE_COLOR: "#ff00ff",  
+        ENEMY_RING_NORMAL: "rgba(255, 255, 255, 0.5)", 
+        ENEMY_RING_DANGER: "rgba(255, 0, 0, 0.6)",     
+        MY_RING_COLOR: "rgba(255, 165, 0, 0.6)",       
+
+        TARGET_COLOR: "#00ff00", 
+        IN_RANGE_COLOR: "#ff0000", 
         FONT: "#ffffff",
         FONT_DANGER: "#ff4444",
+        FONT_WARNING: "#ff0000",
         
-        SHOW_CIRCLE: true,
         SHOW_TRACER: true,
         SHOW_NAMES: true,
         SHOW_SCORES: true,
+        SHOW_ATTACK_RING: true,          
+        SHOW_FACING_WARNING: true,       // Bật/tắt tính năng cảnh báo hướng nhìn
+        FACING_CONE: Math.PI / 4,        // Góc cảnh báo (45 độ mỗi bên)
         
+        // --- PHÍM TẮT ---
         AIM_KEY: "Shift",        
         TOGGLE_KEY: "v",         
-        
-        // --- CẤU HÌNH AUTO EVADE ---
-        AUTO_EVADE: true,        
-        EVADE_MULTIPLIER: 1.5,   
-        EVADE_BUFFER: 400,       
 
-        // --- CẤU HÌNH TẦM ĐÁNH (MỚI) ---
-        SHOW_ATTACK_RING: true,          // Hiển thị vòng tròn tầm đánh của bạn
-        ATTACK_RANGE_MULTIPLIER: 2.2,    // Hệ số nhân chiều dài vũ khí (Tinh chỉnh theo cảm giác)
-        ATTACK_RANGE_BUFFER: 60,         // Khoảng bù trừ (Pixel)
+        // --- CẤU HÌNH TẦM ĐÁNH ---
+        ATTACK_RANGE_MULTIPLIER: 2.2,    
+        ATTACK_RANGE_BUFFER: 60,         
+
+        // --- CẤU HÌNH AUTO ATTACK ---
+        AUTO_ATTACK: true,               
+        ATTACK_COOLDOWN: 300,            
+        ATTACK_LOCK_DURATION: 200, 
     };
 
     const state = {
@@ -55,7 +56,10 @@
         nameIndex: 18, 
         scoreIndex: 27, 
         isAiming: false,
-        isActive: true
+        isActive: true,
+        lastAttackTime: 0,
+        attackLockEnd: 0, 
+        lockedTarget: null 
     };
 
     const canvas = document.createElement('canvas');
@@ -72,6 +76,18 @@
         window.addEventListener('resize', resize);
         resize();
 
+        const blockRealMouse = (e) => {
+            if (state.isActive && Date.now() < state.attackLockEnd && e.isTrusted) {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+            }
+        };
+
+        window.addEventListener('mousemove', blockRealMouse, true);
+        window.addEventListener('pointermove', blockRealMouse, true);
+        window.addEventListener('mousedown', blockRealMouse, true);
+        window.addEventListener('pointerdown', blockRealMouse, true);
+
         window.addEventListener('keydown', (e) => {
             if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
             
@@ -79,13 +95,10 @@
                 state.isAiming = true;
                 if (state.gameCanvas) {
                     state.gameCanvas.dispatchEvent(new MouseEvent('mousedown', {
-                        button: 2, 
-                        bubbles: true,
-                        cancelable: true
+                        button: 2, bubbles: true, cancelable: true
                     }));
                 }
             }
-            
             if (e.key.toLowerCase() === config.TOGGLE_KEY) state.isActive = !state.isActive;
         });
         
@@ -94,9 +107,7 @@
                 state.isAiming = false;
                 if (state.gameCanvas) {
                     state.gameCanvas.dispatchEvent(new MouseEvent('mouseup', {
-                        button: 2,
-                        bubbles: true,
-                        cancelable: true
+                        button: 2, bubbles: true, cancelable: true
                     }));
                 }
             }
@@ -107,12 +118,28 @@
         });
     };
 
+    const simulateAttack = (x, y) => {
+        if (!state.gameCanvas) return;
+        const opts = { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, view: window };
+        
+        state.gameCanvas.dispatchEvent(new PointerEvent('pointerdown', opts));
+        state.gameCanvas.dispatchEvent(new MouseEvent('mousedown', opts));
+        
+        setTimeout(() => {
+            if (state.gameCanvas) {
+                state.gameCanvas.dispatchEvent(new PointerEvent('pointerup', opts));
+                state.gameCanvas.dispatchEvent(new MouseEvent('mouseup', opts));
+            }
+        }, 60); 
+    };
+
     const render = () => {
         if (!state.isActive || !state.rt?.running_layout || !state.pType) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             return;
         }
 
+        const now = Date.now();
         const scrollX = state.rt.running_layout.scrollX;
         const scrollY = state.rt.running_layout.scrollY;
         let self = null;
@@ -144,24 +171,17 @@
         
         const tracersNormal = new Path2D();
         const tracersDanger = new Path2D();
-        const circlesNormal = new Path2D();
-        const circlesDanger = new Path2D();
+        const tracersFacing = new Path2D(); // Dây tia laser đỏ khi bị ngắm
 
         let bestTarget = null;
         let minTargetDist = Infinity;
-        
-        let forceX = 0;
-        let forceY = 0;
-        let dangerCount = 0;
 
-        // Tính toán Tầm đánh của bản thân (World Coordinates)
         const selfAttackRadius = (self.width / 2) * config.ATTACK_RANGE_MULTIPLIER + config.ATTACK_RANGE_BUFFER;
 
-        // Vẽ Vòng tròn Tầm đánh (Attack Ring) nếu được bật
         if (config.SHOW_ATTACK_RING) {
             ctx.beginPath();
             ctx.arc(viewX, viewY, selfAttackRadius * scale, 0, 2 * Math.PI);
-            ctx.strokeStyle = "rgba(255, 165, 0, 0.3)"; // Cam mờ
+            ctx.strokeStyle = config.MY_RING_COLOR; 
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
             ctx.stroke();
@@ -180,113 +200,125 @@
 
             const pX = viewX + (p.x - scrollX) * scale;
             const pY = viewY + (p.y - scrollY) * scale;
-            const radius = (p.width / 2) * scale * config.CIRCLE_SIZE_FACTOR;
 
-            if (config.SHOW_TRACER) {
-                const targetTracer = isDanger ? tracersDanger : tracersNormal;
-                targetTracer.moveTo(viewX, viewY);
-                targetTracer.lineTo(pX, pY);
+            const enemyAttackRadius = (p.width / 2) * config.ATTACK_RANGE_MULTIPLIER + config.ATTACK_RANGE_BUFFER;
+
+            // TÍNH TOÁN HƯỚNG NHÌN CỦA ĐỊCH
+            let isFacingMe = false;
+            if (config.SHOW_FACING_WARNING) {
+                // Tính góc từ địch đến mình
+                const angleToMe = Math.atan2(self.y - p.y, self.x - p.x);
+                // Lấy góc quay hiện tại của địch (p.angle)
+                let angleDiff = p.angle - angleToMe;
+                // Chuẩn hóa góc về mốc -PI đến PI
+                angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+                
+                // Nếu độ lệch góc nằm trong hình nón 90 độ (45 độ mỗi bên)
+                if (Math.abs(angleDiff) < config.FACING_CONE) {
+                    isFacingMe = true;
+                }
             }
 
-            if (config.SHOW_CIRCLE) {
-                const targetCircle = isDanger ? circlesDanger : circlesNormal;
-                targetCircle.moveTo(pX + radius, pY);
-                targetCircle.arc(pX, pY, radius, 0, 2 * Math.PI);
+            if (config.SHOW_ATTACK_RING) {
+                ctx.beginPath();
+                ctx.arc(pX, pY, enemyAttackRadius * scale, 0, 2 * Math.PI);
+                ctx.strokeStyle = isDanger ? config.ENEMY_RING_DANGER : config.ENEMY_RING_NORMAL;
+                ctx.lineWidth = isDanger ? 2 : 1.5;
+                ctx.setLineDash([4, 4]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            if (config.SHOW_TRACER) {
+                if (isFacingMe && isDanger) {
+                    tracersFacing.moveTo(viewX, viewY);
+                    tracersFacing.lineTo(pX, pY);
+                } else {
+                    const targetTracer = isDanger ? tracersDanger : tracersNormal;
+                    targetTracer.moveTo(viewX, viewY);
+                    targetTracer.lineTo(pX, pY);
+                }
             }
             
             const name = p.instance_vars[state.nameIndex] || ''; 
             let text = `${config.SHOW_NAMES ? name : ''} ${config.SHOW_SCORES ? '[' + pScore + ']' : ''}`.trim();
+            
+            // THÊM CHỮ CẢNH BÁO NẾU ĐỊCH ĐANG CHỮA VŨ KHÍ VÀO BẠN
+            if (isFacingMe) {
+                ctx.font = "bold 14px Arial";
+                ctx.textAlign = 'center';
+                // Chỉ nháy cảnh báo nguy hiểm nếu địch to hơn, nếu địch nhỏ hơn thì hiện cảnh báo nhẹ hơn
+                ctx.fillStyle = isDanger ? config.FONT_WARNING : config.FONT_DANGER;
+                ctx.fillText("⚠️ NGẮM BẠN ⚠️", pX, pY - (enemyAttackRadius * scale) - 25);
+            }
+
             if (text) {
                 ctx.font = isDanger ? "bold 13px Arial" : "bold 12px Arial";
                 ctx.textAlign = 'center';
                 ctx.fillStyle = isDanger ? config.FONT_DANGER : config.FONT;
-                ctx.fillText(text, pX, pY - radius - 8);
+                ctx.fillText(text, pX, pY - (enemyAttackRadius * scale) - 8);
             }
 
-            if (isDanger) {
-                const threatRadius = (p.width / 2) * config.EVADE_MULTIPLIER + config.EVADE_BUFFER;
-                if (worldDist < threatRadius) {
-                    dangerCount++;
-                    const strength = 1 - (worldDist / threatRadius);
-                    if (worldDist > 0) {
-                        forceX += (dx / worldDist) * strength;
-                        forceY += (dy / worldDist) * strength;
-                    }
-                }
-            } else {
-                if (worldDist < minTargetDist) {
-                    minTargetDist = worldDist;
-                    bestTarget = { x: pX, y: pY, pWidth: p.width, worldDist: worldDist }; 
-                }
+            if (worldDist < minTargetDist) {
+                minTargetDist = worldDist;
+                bestTarget = { x: pX, y: pY, pWidth: p.width, worldDist: worldDist }; 
             }
         }
 
         if (config.SHOW_TRACER) {
+            ctx.lineWidth = 1;
             ctx.strokeStyle = config.TRACER; ctx.stroke(tracersNormal);
             ctx.strokeStyle = config.WARNING_TRACER; ctx.stroke(tracersDanger);
-        }
-        if (config.SHOW_CIRCLE) {
-            ctx.fillStyle = config.CIRCLE_FILL; ctx.fill(circlesNormal);
-            ctx.strokeStyle = config.CIRCLE_BORDER; ctx.stroke(circlesNormal);
-            ctx.fillStyle = config.WARNING_FILL; ctx.fill(circlesDanger);
-            ctx.strokeStyle = config.WARNING_BORDER; ctx.stroke(circlesDanger);
-        }
-
-        if (config.AUTO_EVADE && dangerCount > 0) {
-            let escapeAngle = Math.atan2(forceY, forceX);
-            if (forceX === 0 && forceY === 0) escapeAngle = Math.random() * Math.PI * 2; 
-
-            const escapeX = viewX + Math.cos(escapeAngle) * 500;
-            const escapeY = viewY + Math.sin(escapeAngle) * 500;
-
-            state.gameCanvas.dispatchEvent(new MouseEvent('mousemove', {
-                clientX: escapeX,
-                clientY: escapeY,
-                bubbles: true,
-                cancelable: true
-            }));
-
-            ctx.beginPath();
-            ctx.strokeStyle = config.EVADE_COLOR;
+            
+            // Vẽ dây laser đỏ rực và dày hơn nếu đang bị kẻ địch to ngắm trúng
             ctx.lineWidth = 3;
-            ctx.setLineDash([10, 5]); 
-            ctx.moveTo(viewX, viewY);
-            ctx.lineTo(escapeX, escapeY);
-            ctx.stroke();
-            ctx.setLineDash([]); 
+            ctx.strokeStyle = config.FACING_WARNING_TRACER; 
+            ctx.stroke(tracersFacing);
+        }
 
-            ctx.font = "bold 16px Arial";
-            ctx.fillStyle = config.EVADE_COLOR;
-            ctx.fillText(`⚠ EVADING ${dangerCount} THREATS ⚠`, viewX, viewY - 40);
+        // --- HỆ THỐNG GHI ĐÈ LIÊN TỤC KHI ĐANG VUNG KIẾM ---
+        if (now < state.attackLockEnd && state.lockedTarget) {
+            const opts = { clientX: state.lockedTarget.x, clientY: state.lockedTarget.y, bubbles: true, cancelable: true };
+            state.gameCanvas.dispatchEvent(new PointerEvent('pointermove', opts));
+            state.gameCanvas.dispatchEvent(new MouseEvent('mousemove', opts));
+        }
 
-        } else if (bestTarget) {
-            // Kiểm tra xem địch đã lọt vào vùng vung kiếm chưa (Khoảng cách < Bán kính đánh + Nửa thân hình địch)
+        if (bestTarget) {
             const isInRange = bestTarget.worldDist < (selfAttackRadius + (bestTarget.pWidth / 2));
             
-            // Vẽ hồng tâm
             ctx.beginPath();
             ctx.strokeStyle = isInRange ? config.IN_RANGE_COLOR : config.TARGET_COLOR;
-            ctx.lineWidth = isInRange ? 4 : 2; // Làm đậm hồng tâm nếu vào tầm
+            ctx.lineWidth = isInRange ? 4 : 2; 
             const size = isInRange ? 20 : 15;
             
             ctx.moveTo(bestTarget.x - size, bestTarget.y); ctx.lineTo(bestTarget.x + size, bestTarget.y);
             ctx.moveTo(bestTarget.x, bestTarget.y - size); ctx.lineTo(bestTarget.x, bestTarget.y + size);
             ctx.stroke();
 
-            // Hiện chữ báo hiệu CHÉM
             if (isInRange) {
                 ctx.font = "bold 16px Arial";
                 ctx.fillStyle = config.IN_RANGE_COLOR;
-                ctx.fillText("⚔️ CHÉM ⚔️", bestTarget.x, bestTarget.y - 30);
-            }
+                ctx.fillText("⚔️ AUTO SNAP & STRIKE ⚔️", bestTarget.x, bestTarget.y - 30);
 
-            if (state.isAiming) {
-                state.gameCanvas.dispatchEvent(new MouseEvent('mousemove', {
-                    clientX: bestTarget.x,
-                    clientY: bestTarget.y,
-                    bubbles: true,
-                    cancelable: true
-                }));
+                if (config.AUTO_ATTACK) {
+                    if (now - state.lastAttackTime > config.ATTACK_COOLDOWN) {
+                        state.lockedTarget = { x: bestTarget.x, y: bestTarget.y };
+                        state.attackLockEnd = now + config.ATTACK_LOCK_DURATION;
+                        
+                        const opts = { clientX: bestTarget.x, clientY: bestTarget.y, bubbles: true, cancelable: true };
+                        state.gameCanvas.dispatchEvent(new PointerEvent('pointermove', opts));
+                        state.gameCanvas.dispatchEvent(new MouseEvent('mousemove', opts));
+                        
+                        simulateAttack(bestTarget.x, bestTarget.y);
+                        state.lastAttackTime = now;
+                    }
+                }
+            } else {
+                if (state.isAiming && now > state.attackLockEnd) {
+                    const opts = { clientX: bestTarget.x, clientY: bestTarget.y, bubbles: true, cancelable: true };
+                    state.gameCanvas.dispatchEvent(new PointerEvent('pointermove', opts));
+                    state.gameCanvas.dispatchEvent(new MouseEvent('mousemove', opts));
+                }
             }
         }
     };
@@ -308,7 +340,7 @@
                 }
             }
             if (state.pType) {
-                console.log("%c[EvoWars ESP] V9.0 STRIKE SIGNAL ACTIVE", "color: #00ff00; font-weight: bold;");
+                console.log("%c[EvoWars ESP] V11.4 THREAT AWARENESS ACTIVE", "color: #00ff00; font-weight: bold;");
                 setupDOM();
                 mainLoop();
             }
