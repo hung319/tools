@@ -1,0 +1,8 @@
+docker run -d \
+  --name watchtower \
+  --restart always \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --label "dokploy.managed=true" \
+  -e WATCHTOWER_CLEANUP=true \
+  -e WATCHTOWER_POLL_INTERVAL=86400 \
+  containrrr/watchtower
