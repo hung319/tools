@@ -13,13 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates procps git sudo python3 python3-pip \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 2. Lấy uv siêu tốc và tải Cloudflared binary
+# 2. Lấy uv siêu tốc
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-ADD --chmod=755 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 /usr/local/bin/cloudflared
 
 WORKDIR /app
 
-# 3. Bypass PEP 668 cho pip thuần (Đảm bảo gõ `pip install` trong Jupyter không bị lỗi)
+# 3. Bypass PEP 668 cho pip thuần
 RUN python3 -m pip config set global.break-system-packages true
 
 # 4. Cài đặt JupyterLab qua uv (Bypass PEP 668 lúc build)
@@ -30,17 +29,12 @@ COPY --chmod=755 <<"EOF" /entrypoint.sh
 #!/bin/bash
 set -e
 
-if [ -n "$CF_TUNNEL_TOKEN" ]; then
-  echo "[INFO] Starting Cloudflared tunnel..."
-  cloudflared tunnel --no-autoupdate run --token "$CF_TUNNEL_TOKEN" &
-fi
-
 if [ -n "$REMOTE_KEY" ]; then
   echo "[INFO] Generating Jupyter password hash..."
   # Tự động băm mật khẩu từ biến môi trường REMOTE_KEY sang mã hóa Argon2
   HASHED_PW=$(python3 -c "from jupyter_server.auth.security import passwd; import os; print(passwd(os.environ.get('REMOTE_KEY', '')))")
 
-  echo "[INFO] Starting JupyterLab (System Env + Iframe Optimized)..."
+  echo "[INFO] Starting JupyterLab (Clean Version - Iframe Optimized)..."
   exec jupyter lab --ip=0.0.0.0 --port=7860 --no-browser --allow-root \
     --ServerApp.password="$HASHED_PW" \
     --IdentityProvider.token="" \
