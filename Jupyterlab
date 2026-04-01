@@ -8,48 +8,59 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_SYSTEM_PYTHON=1 \
     UV_BREAK_SYSTEM_PACKAGES=1
 
-# 1. System Dependencies
+# 1. Cài đặt hệ thống
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates procps git sudo python3 python3-pip python3-dev python3-venv \
     gcc g++ curl htop ncdu \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && echo 'export PS1="\[\e[1;31m\]\u \[\e[1;34m\]\w \[\e[0m\]# "' >> /root/.bashrc
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Lấy uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /root
 
-# 3. Cài đặt JupyterLab 4 & Management Tools
+# 3. Cài đặt JupyterLab 4 & Proxy
 RUN uv pip install --system --no-cache \
     "jupyterlab>=4.0.0" \
     "jupyter-resource-usage>=1.0.0" \
     "jupyter-server-proxy>=4.0.0"
 
-# 4. Entrypoint Script - Fix triệt để WebSocket & Cookie
+# 4. Cấu hình JSON (Sạch log, chuẩn IdentityProvider)
+RUN mkdir -p /root/.jupyter/
+RUN echo '{ \
+  "ServerApp": { \
+    "jpserver_extensions": { "jupyter_server_proxy": true }, \
+    "log_level": "WARN", \
+    "disable_check_xsrf": true, \
+    "allow_origin": "*", \
+    "trust_xheaders": true \
+  }, \
+  "IdentityProvider": { \
+    "cookie_options": { "SameSite": "None", "Secure": true } \
+  }, \
+  "ServerProxy": { \
+    "host_allowlist": ["*"] \
+  } \
+}' > /root/.jupyter/jupyter_server_config.json
+
+# 5. Entrypoint Script
 COPY --chmod=755 <<"EOF" /entrypoint.sh
 #!/bin/bash
 set -e
 [ -f /root/.bashrc ] && source /root/.bashrc
 
 if [ -n "$REMOTE_KEY" ]; then
-  echo "[INFO] Generating Jupyter password hash..."
-  HASHED_PW=$(python3 -c "from jupyter_server.auth.security import passwd; import os; print(passwd(os.environ.get('REMOTE_KEY', '')))")
-
-  echo "[INFO] Starting Management Dashboard (Production Optimized)..."
+  echo "[INFO] Dashboard Started. Use your token to access services."
   
+  # Chế độ ẩn cảnh báo thừa
+  export PYTHONWARNINGS="ignore"
+
   exec jupyter lab --ip=0.0.0.0 --port=7860 --no-browser --allow-root \
-    --PasswordIdentityProvider.hashed_password="$HASHED_PW" \
-    --IdentityProvider.cookie_options="{'SameSite': 'None', 'Secure': True}" \
-    --ServerApp.base_url="/" \
-    --ServerApp.allow_origin="*" \
+    --IdentityProvider.token="$REMOTE_KEY" \
+    --ServerApp.password='' \
     --ServerApp.allow_origin_pat="https?://.*\.huggingface\.co" \
-    --ServerApp.trust_xheaders=True \
-    --ServerApp.disable_check_xsrf=True \
-    --ServerApp.tornado_settings="{'headers': {'Content-Security-Policy': \"frame-ancestors * 'self'\"}}" \
     --FileContentsManager.delete_to_trash=False \
     --ContentsManager.allow_hidden=True \
-    --ServerApp.terminado_settings="{'shell_command': ['/bin/bash']}" \
     --ResourceUseDisplay.track_cpu_percent=True \
     --ResourceUseDisplay.show_host_usage=True
 else
