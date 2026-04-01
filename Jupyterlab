@@ -8,10 +8,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_SYSTEM_PYTHON=1 \
     UV_BREAK_SYSTEM_PACKAGES=1
 
-# 1. Cài đặt hệ thống
+# 1. Cài đặt hệ thống & nginx-light
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates procps git sudo python3 python3-pip python3-dev python3-venv \
-    gcc g++ curl htop ncdu \
+    gcc g++ curl htop ncdu nginx-light \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Lấy uv
@@ -19,43 +19,102 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /root
 
-# 3. Cài đặt JupyterLab 4 & Proxy
+# 3. Trang trí Shell (PS1 có màu & Aliases)
+RUN echo "export PS1='\[\033[01;32m\]\u\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\] # '" >> /root/.bashrc && \
+    echo "alias ls='ls --color=auto'" >> /root/.bashrc && \
+    echo "alias ll='ls -alF --color=auto'" >> /root/.bashrc && \
+    echo "alias la='ls -A --color=auto'" >> /root/.bashrc && \
+    echo "alias grep='grep --color=auto'" >> /root/.bashrc && \
+    echo "alias ..='cd ..'" >> /root/.bashrc && \
+    echo "alias c='clear'" >> /root/.bashrc
+
+# 4. Cài đặt JupyterLab 4
 RUN uv pip install --system --no-cache \
     "jupyterlab>=4.0.0" \
-    "jupyter-resource-usage>=1.0.0" \
-    "jupyter-server-proxy>=4.0.0"
+    "jupyter-resource-usage>=1.0.0"
 
-# 4. Cấu hình JSON (Sạch log, chuẩn IdentityProvider)
-RUN mkdir -p /root/.jupyter/
-RUN echo '{ \
+# 5. Cấu hình Jupyter (Vá lỗi 403)
+RUN mkdir -p /root/.jupyter/ && echo '{ \
   "ServerApp": { \
-    "jpserver_extensions": { "jupyter_server_proxy": true }, \
     "log_level": "WARN", \
     "disable_check_xsrf": true, \
     "allow_origin": "*", \
+    "allow_remote_access": true, \
     "trust_xheaders": true \
   }, \
   "IdentityProvider": { \
     "cookie_options": { "SameSite": "None", "Secure": true } \
-  }, \
-  "ServerProxy": { \
-    "host_allowlist": ["*"] \
   } \
 }' > /root/.jupyter/jupyter_server_config.json
 
-# 5. Entrypoint Script
+# 6. Cấu hình Nginx (Tối ưu WebSocket & Routing)
+COPY <<"EOF" /etc/nginx/nginx.conf
+worker_processes auto;
+pid /run/nginx.pid;
+events { worker_connections 1024; }
+http {
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    server_tokens off;
+
+    # Fix lỗi tiềm ẩn: Chỉ set header Connection=upgrade khi request là WebSocket
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 7860;
+        server_name _;
+
+        # Rule 1: Dynamic Port Proxy /px/<port>/...
+        location ~ ^/px/(?<target_port>[0-9]+)(?<target_path>.*)$ {
+            set $final_path $target_path;
+            if ($final_path = "") {
+                set $final_path "/";
+            }
+            
+            proxy_pass http://127.0.0.1:$target_port$final_path$is_args$args;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_redirect off;
+        }
+
+        # Rule 2: JupyterLab
+        location / {
+            proxy_pass http://127.0.0.1:8888;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_read_timeout 86400; 
+        }
+    }
+}
+EOF
+
+# 7. Entrypoint Script
 COPY --chmod=755 <<"EOF" /entrypoint.sh
 #!/bin/bash
 set -e
+# Load bashrc ngay trong entrypoint để các subprocess kế thừa nếu cần
 [ -f /root/.bashrc ] && source /root/.bashrc
 
 if [ -n "$REMOTE_KEY" ]; then
-  echo "[INFO] Dashboard Started. Use your token to access services."
+  echo "[INFO] CezDev Dashboard - Optimized Nginx & Jupyter starting..."
   
-  # Chế độ ẩn cảnh báo thừa
+  nginx
   export PYTHONWARNINGS="ignore"
 
-  exec jupyter lab --ip=0.0.0.0 --port=7860 --no-browser --allow-root \
+  exec jupyter lab --ip=127.0.0.1 --port=8888 --no-browser --allow-root \
     --IdentityProvider.token="$REMOTE_KEY" \
     --ServerApp.password='' \
     --ServerApp.allow_origin_pat="https?://.*\.huggingface\.co" \
