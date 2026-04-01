@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+FROM debian:stable-slim
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    UV_SYSTEM_PYTHON=1 \
+    UV_BREAK_SYSTEM_PACKAGES=1
+
+# 1. System Dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates procps git sudo python3 python3-pip python3-dev python3-venv \
+    gcc g++ curl htop ncdu \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && echo 'export PS1="\[\e[1;31m\]\u \[\e[1;34m\]\w \[\e[0m\]# "' >> /root/.bashrc
+
+# 2. Lấy uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /root
+
+# 3. Cài đặt JupyterLab 4 & Management Tools
+RUN uv pip install --system --no-cache \
+    "jupyterlab>=4.0.0" \
+    "jupyter-resource-usage>=1.0.0" \
+    "jupyter-server-proxy>=4.0.0"
+
+# 4. Entrypoint Script - Fix triệt để WebSocket & Cookie
+COPY --chmod=755 <<"EOF" /entrypoint.sh
+#!/bin/bash
+set -e
+[ -f /root/.bashrc ] && source /root/.bashrc
+
+if [ -n "$REMOTE_KEY" ]; then
+  echo "[INFO] Generating Jupyter password hash..."
+  HASHED_PW=$(python3 -c "from jupyter_server.auth.security import passwd; import os; print(passwd(os.environ.get('REMOTE_KEY', '')))")
+
+  echo "[INFO] Starting Management Dashboard (Production Optimized)..."
+  
+  exec jupyter lab --ip=0.0.0.0 --port=7860 --no-browser --allow-root \
+    --PasswordIdentityProvider.hashed_password="$HASHED_PW" \
+    --IdentityProvider.cookie_options="{'SameSite': 'None', 'Secure': True}" \
+    --ServerApp.base_url="/" \
+    --ServerApp.allow_origin="*" \
+    --ServerApp.allow_origin_pat="https?://.*\.huggingface\.co" \
+    --ServerApp.trust_xheaders=True \
+    --ServerApp.disable_check_xsrf=True \
+    --ServerApp.tornado_settings="{'headers': {'Content-Security-Policy': \"frame-ancestors * 'self'\"}}" \
+    --FileContentsManager.delete_to_trash=False \
+    --ContentsManager.allow_hidden=True \
+    --ServerApp.terminado_settings="{'shell_command': ['/bin/bash']}" \
+    --ResourceUseDisplay.track_cpu_percent=True \
+    --ResourceUseDisplay.show_host_usage=True
+else
+  echo "⚠️ [ERROR] REMOTE_KEY is required!"
+  exit 1
+fi
+EOF
+
+EXPOSE 7860
+ENTRYPOINT ["/entrypoint.sh"]
