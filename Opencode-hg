@@ -1,0 +1,61 @@
+FROM debian:stable
+
+# Copy uv binary
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# Cấu hình môi trường cho Hugging Face
+# HF sẽ truyền SECRET vào ENV, ta sẽ tận dụng chúng ở lệnh chạy cuối
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH="/usr/local/bin:/usr/bin:${PATH}" \
+    BUN_INSTALL="/usr" \
+    XDG_DATA_HOME=/root/.local/share \
+    NODE_ENV=production \
+    HOME=/root
+
+SHELL ["/bin/bash", "-c"]
+
+# Cài đặt dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git ssh build-essential tini procps unzip psmisc \
+    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y nodejs \
+    && uv python install 3.12 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Cài đặt Bun và OpenCode
+RUN curl -fsSL https://bun.sh/install | bash && \
+    /usr/bin/bun install -g opencode-ai@latest @openchamber/web@latest
+
+# Cấu hình tin cậy cho Bun
+RUN echo -e "[install.trustedDependencies]\n\"*\" = true" > /root/.bunfig.toml
+
+# Patch lỗi cache opencode
+RUN if [ -f /usr/bin/opencode ]; then mv /usr/bin/opencode /usr/bin/opencode-original; fi && \
+    cat <<'EOF' > /usr/bin/opencode && chmod +x /usr/bin/opencode
+#!/bin/bash
+rm -rf /root/.cache/opencode/package.json 2>/dev/null || true
+exec /usr/bin/opencode-original "$@"
+EOF
+
+WORKDIR /root
+
+# Script khởi chạy để xử lý dynamic port và auth từ Secret
+RUN cat <<'EOF' > /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
+#!/bin/bash
+# Hugging Face cung cấp port qua biến $PORT, nếu không có thì mặc định 7860
+TARGET_PORT=${PORT:-7860}
+
+echo "Starting OpenCode on port $TARGET_PORT..."
+
+# Chạy opencode với các biến môi trường được truyền từ HF Secret
+# Nếu bạn đặt SECRET trên HF là OPENCODE_SERVER_PASSWORD thì nó sẽ tự áp dụng
+exec opencode web \
+    --hostname 0.0.0.0 \
+    --port "$TARGET_PORT"
+EOF
+
+# Port 7860 là port mặc định của Hugging Face Spaces
+EXPOSE 7860
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/start.sh"]
