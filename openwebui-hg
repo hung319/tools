@@ -1,0 +1,27 @@
+# Sử dụng image chính thức mới nhất từ Open WebUI
+FROM ghcr.io/open-webui/open-webui:main
+
+# 1. Thiết lập biến môi trường mạng (Bắt buộc cho HF Spaces)
+ENV HOST=0.0.0.0
+ENV PORT=7860
+ENV WEBUI_PORT=7860
+
+# 2. Xử lý thư mục cache và dữ liệu để tránh lỗi permission denied
+# Đặt HOME về /app để các thư viện (như HuggingFace Hub, LiteLLM) lưu cache đúng chỗ
+ENV HOME=/app
+# Thư mục chứa dữ liệu của Open WebUI (SQLite, uploaded files)
+ENV DATA_DIR=/app/backend/data
+
+USER root
+
+# 3. Cấp quyền cho UID 1000 (Yêu cầu bắt buộc từ Hugging Face)
+RUN mkdir -p $DATA_DIR \
+    && chown -R 1000:1000 /app
+
+# Chuyển sang user 1000
+USER 1000
+
+# 4. Expose port
+EXPOSE 7860
+
+# CMD mặc định của base image sẽ tự động start server
