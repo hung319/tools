@@ -1,0 +1,57 @@
+# Sử dụng image Kasm của tác giả làm nguồn
+FROM ghcr.io/chriswritescode-dev/opencode-manager:latest AS source
+
+# Runner image sạch để tránh các layer thừa của Kasm (giúp giảm dung lượng Space)
+FROM node:22-bookworm-slim
+
+USER root
+
+# 1. Cài đặt các gói hệ thống cần thiết (Sửa chromium)
+RUN apt-get update && apt-get install -y \
+    git curl lsof ripgrep ca-certificates grep gawk sed findutils \
+    coreutils procps jq less tree file python3 python3-pip python3-venv \
+    unzip chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Cài đặt GitHub CLI & Bun
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash && \
+    ln -s /root/.bun/bin/bun /usr/local/bin/bun
+
+# 3. Copy app từ bản Kasm sang (Lưu ý đường dẫn /opt/opencode-manager)
+# Bản Kasm thường cài app vào /opt/opencode-manager
+COPY --from=source /opt/opencode-manager /app
+COPY --from=source /opt/opencode /opt/opencode
+COPY --from=source /opt/opencode-plugins /opt/opencode-plugins
+COPY --from=source /usr/local/bin/uv /usr/local/bin/uv
+COPY --from=source /usr/local/bin/opencode /usr/local/bin/opencode
+
+# 4. Cấu hình biến môi trường
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=7860
+ENV AUTH_TRUSTED_ORIGINS=https://*.hf.space,http://localhost:7860
+ENV AUTH_SECURE_COOKIES=false
+ENV DATABASE_PATH=/app/data/opencode.db
+ENV WORKSPACE_PATH=/app/workspace
+ENV NODE_PATH=/opt/opencode-plugins/node_modules
+ENV HOME=/root
+
+# 5. Thiết lập thư mục làm việc và quyền hạn
+RUN mkdir -p /app/data /app/workspace && \
+    chmod -R 777 /app /opt/opencode /opt/opencode-plugins /root
+
+WORKDIR /app
+
+# Expose cổng 7860 cho Hugging Face
+EXPOSE 7860
+
+# Chạy với quyền ROOT
+USER root
+
+# Khởi chạy bằng Bun (Backend của OpenCode Manager nằm ở backend/src/index.ts)
+CMD ["bun", "backend/src/index.ts"]
