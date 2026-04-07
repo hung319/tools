@@ -2,17 +2,20 @@
 
 /* --- Color Variables and Fonts --- */
 :root {
-    --bg-color: #050505;
-    --primary-color: #00d2ff;
-    --accent-color: #3a7bd5;
-    --success-color: #00ffcc;
-    --error-color: #ff2a6d;
-    --text-color: #e0e0ff;
-    --text-dim: #a0a0c0;
-    --panel-bg-color: rgba(10, 10, 20, 0.8);
-    --glass-bg: rgba(255, 255, 255, 0.03);
-    --border-color: rgba(0, 210, 255, 0.15);
-    --border-glow: rgba(0, 210, 255, 0.3);
+    --bg-color: #000000;
+    --primary-color: #00ffff;
+    --secondary-color: #00bfff;
+    --accent-color: #7df9ff;
+    --success-color: #00ff88;
+    --error-color: #ff006e;
+    --warning-color: #ffaa00;
+    --text-color: #ffffff;
+    --text-dim: #b0b0c0;
+    --text-light: #e0e0ff;
+    --panel-bg-color: rgba(0, 0, 0, 0.85);
+    --glass-bg: rgba(255, 255, 255, 0.05);
+    --border-color: rgba(0, 255, 255, 0.2);
+    --border-glow: rgba(0, 255, 255, 0.4);
     --panel-width: 320px;
     --font-main: 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'Fira Code', monospace;
@@ -39,29 +42,31 @@ body {
     text-align: center;
 }
 
-/* --- Hamburger Menu (Circular and Compact) --- */
+/* --- Hamburger Menu (Enhanced Circular Design) --- */
 .hamburger-menu {
     position: fixed !important;
     bottom: 30px !important;
     left: 30px !important;
-    width: 64px !important;
-    height: 64px !important;
-    min-width: 64px !important;
-    min-height: 64px !important;
-    max-width: 64px !important;
-    max-height: 64px !important;
+    width: 70px !important;
+    height: 70px !important;
+    min-width: 70px !important;
+    min-height: 70px !important;
+    max-width: 70px !important;
+    max-height: 70px !important;
     z-index: 1001 !important;
     cursor: pointer !important;
-    background: var(--panel-bg-color) !important;
-    backdrop-filter: blur(12px) !important;
-    -webkit-backdrop-filter: blur(12px) !important;
-    border: 1px solid var(--primary-color) !important;
+    background: linear-gradient(135deg, var(--panel-bg-color), rgba(0, 21, 42, 0.9)) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    border: 1px solid var(--border-glow) !important;
     border-radius: 50% !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    transition: transform 0.3s ease, background-color 0.3s ease, box-shadow 0.3s ease !important;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+    transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    box-shadow: 
+        0 10px 30px rgba(0, 0, 0, 0.5),
+        inset 0 0 0 1px rgba(0, 255, 255, 0.1) !important;
     padding: 0 !important;
     margin: 0 !important;
     flex-shrink: 0 !important;
@@ -69,24 +74,25 @@ body {
     aspect-ratio: 1 / 1 !important;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+    border-image: linear-gradient(45deg, transparent, var(--primary-color), transparent) 1;
 }
 
 
 .hamburger-box {
-    width: 24px;
-    height: 18px;
+    width: 28px;
+    height: 20px;
     position: relative;
 }
 
 .hamburger-inner,
 .hamburger-inner::before,
 .hamburger-inner::after {
-    width: 24px;
-    height: 2px;
+    width: 28px;
+    height: 3px;
     background-color: var(--primary-color);
-    border-radius: 4px;
+    border-radius: 6px;
     position: absolute;
-    transition: transform 0.2s ease, background-color 0.2s ease;
+    transition: transform 0.3s ease, background-color 0.3s ease;
     box-shadow: 0 0 8px var(--primary-color);
 }
 
@@ -121,7 +127,7 @@ body {
     transform: rotate(90deg);
 }
 
-/* --- Panel Menu --- */
+/* --- Panel Menu (Enhanced) --- */
 .nav-panel {
     position: fixed;
     top: 0;
@@ -129,13 +135,15 @@ body {
     width: 100%;
     height: 100vh;
     z-index: 1000;
-    background: rgba(5, 5, 10, 0.95);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-right: 1px solid var(--border-color);
+    background: linear-gradient(to bottom, rgba(0, 5, 15, 0.98), rgba(0, 10, 20, 0.95));
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+    border-right: 1px solid var(--border-glow);
+    border-left: 1px solid rgba(0, 255, 255, 0.05);
     transform: translate3d(-100%, 0, 0);
-    transition: transform 0.3s ease;
+    transition: transform 0.5s cubic-bezier(0.25, 0.8, 0.25, 1);
     will-change: transform;
+    box-shadow: 5px 0 30px rgba(0, 0, 0, 0.5);
 }
 
 .nav-panel.active {
@@ -301,30 +309,90 @@ main {
     padding: 2rem;
     position: relative;
     z-index: 1;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .content {
     max-width: 900px;
-    margin: 100px auto;
+    margin: 0 auto;
     text-align: center;
+    padding: 2rem;
     animation: slideUp 0.8s ease;
+    background: var(--panel-bg-color);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border-color);
+    border-radius: 30px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
 
 .content h1 {
-    font-size: 4rem;
-    font-weight: 800;
-    margin-bottom: 20px;
-    background: linear-gradient(to bottom, #fff, #888);
+    font-size: 3.5rem;
+    font-weight: 900;
+    margin-bottom: 15px;
+    background: linear-gradient(to right, var(--primary-color), var(--accent-color));
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.1));
+    text-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+    letter-spacing: -1px;
+    line-height: 1.1;
 }
 
 .content p {
-    color: var(--text-dim);
+    color: var(--text-light);
+    font-size: 1.2rem;
+    margin-bottom: 30px;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.6;
+}
+
+.explore-btn {
+    display: inline-block;
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    color: #000;
+    border: none;
+    border-radius: 50px;
+    padding: 15px 35px;
     font-size: 1.1rem;
-    text-align: center;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 10px 25px rgba(0, 255, 255, 0.3);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    position: relative;
+    overflow: hidden;
+}
+
+.explore-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 15px 35px rgba(0, 255, 255, 0.4);
+    background: linear-gradient(45deg, var(--secondary-color), var(--accent-color));
+}
+
+.explore-btn:active {
+    transform: translateY(-1px);
+}
+
+.explore-btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: 0.5s;
+}
+
+.explore-btn:hover::before {
+    left: 100%;
 }
 
 /* --- Common Layout for Cards/Tools --- */
@@ -415,20 +483,22 @@ main {
 /* --- Form Elements --- */
 .input-group,
 .control-group {
-    margin: 25px auto;
-    max-width: 400px;
-    text-align: center;
+    margin: 20px auto;
+    max-width: 500px;
+    width: 100%;
+    text-align: left;
 }
 
 .input-group label,
 .control-group label {
-    font-size: 0.9rem;
+    font-size: 0.95rem;
     font-weight: 600;
-    color: var(--text-dim);
+    color: var(--primary-color);
     display: block;
-    margin-bottom: 12px;
-    letter-spacing: 1px;
+    margin-bottom: 10px;
+    letter-spacing: 0.5px;
     text-transform: uppercase;
+    text-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
 }
 
 input[type="number"],
@@ -798,31 +868,42 @@ body.page-nsfw-downloader .download-card h1 {
 
 @media (max-width: 768px) {
     .content h1 {
-        font-size: 2.5rem;
+        font-size: 2.2rem;
     }
 
     .content {
-        margin: 50px auto;
-        padding: 1rem;
+        margin: 30px auto;
+        padding: 1.5rem;
+    }
+
+    .content p {
+        font-size: 1rem;
+    }
+
+    .explore-btn {
+        padding: 12px 25px;
+        font-size: 1rem;
     }
 
     .hamburger-menu {
-        width: 56px !important;
-        height: 56px !important;
-        min-width: 56px !important;
-        min-height: 56px !important;
+        width: 60px !important;
+        height: 60px !important;
+        min-width: 60px !important;
+        min-height: 60px !important;
         bottom: 20px !important;
         left: 20px !important;
     }
 
-    /* Reduce heavy effects on mobile for performance */
+    /* Optimized mobile performance with enhanced visuals */
     .nav-panel {
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
     }
 
     .hamburger-menu {
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3) !important;
+        box-shadow: 
+            0 6px 20px rgba(0, 0, 0, 0.4),
+            inset 0 0 0 1px rgba(0, 255, 255, 0.1) !important;
     }
 
     .nav-panel ul li a {
@@ -830,54 +911,54 @@ body.page-nsfw-downloader .download-card h1 {
     }
 
     .hamburger-box {
-        width: 18px;
-        height: 12px;
+        width: 24px;
+        height: 16px;
     }
 
     .hamburger-inner,
     .hamburger-inner::before,
     .hamburger-inner::after {
-        width: 18px;
+        width: 24px;
     }
 
     .nav-panel ul {
-        grid-template-columns: repeat(3, minmax(150px, 1fr));
-        gap: 14px;
-        padding: 20px;
-        grid-auto-rows: minmax(120px, auto);
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+        padding: 24px;
+        grid-auto-rows: minmax(110px, auto);
     }
 
     .nav-panel ul li a {
-        padding: 22px 18px;
-        font-size: 0.9rem;
-        min-height: 120px;
+        padding: 20px 16px;
+        font-size: 0.95rem;
+        min-height: 110px;
         aspect-ratio: auto;
-        transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+        transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
     }
 
     .nav-panel {
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
     }
 
     .nav-panel ul li a:active {
         color: #fff;
-        background: rgba(0, 210, 255, 0.2);
+        background: rgba(0, 255, 255, 0.15);
         border-color: var(--primary-color);
-        transform: scale(0.98);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+        transform: scale(0.96);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     }
 
     .tool-container {
-        padding: 40px 20px;
-        margin: 20px auto;
-        max-width: 95%;
+        padding: 30px 20px;
+        margin: 15px auto;
+        max-width: 92%;
     }
 
     .download-card {
-        padding: 40px 20px;
-        margin: 20px auto;
-        max-width: 95%;
+        padding: 30px 20px;
+        margin: 15px auto;
+        max-width: 92%;
     }
 
     .control-group {
@@ -890,11 +971,12 @@ body.page-nsfw-downloader .download-card h1 {
     select,
     textarea {
         max-width: 100%;
+        font-size: 16px; /* Prevent iOS zoom on focus */
     }
 
     .display-wrapper {
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
     }
 
     #cron-display,
@@ -904,9 +986,118 @@ body.page-nsfw-downloader .download-card h1 {
     #key-display,
     #hash-display,
     #name-display {
-        font-size: 1.5rem;
-        padding: 16px;
-        min-height: auto;
+        font-size: 1.3rem;
+        padding: 14px;
+        min-height: 50px;
+    }
+
+    .refresh-btn-circle {
+        width: 55px !important;
+        height: 55px !important;
+        min-width: 55px !important;
+        font-size: 1.3rem;
+    }
+
+    .button-group-row {
+        gap: 12px;
+    }
+
+    button {
+        min-width: 140px;
+        padding: 11px 25px;
+        font-size: 0.95rem;
+    }
+
+    .cron-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .cron-item label {
+        margin-bottom: 4px;
+    }
+
+    .cron-input {
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .content h1 {
+        font-size: 1.8rem;
+    }
+
+    .content {
+        padding: 1.2rem;
+    }
+
+    .content p {
+        font-size: 0.95rem;
+    }
+
+    .explore-btn {
+        padding: 10px 20px;
+        font-size: 0.9rem;
+        width: 100%;
+        display: block;
+        margin-top: 20px;
+    }
+
+    .hamburger-menu {
+        width: 56px !important;
+        height: 56px !important;
+        min-width: 56px !important;
+        min-height: 56px !important;
+        bottom: 15px !important;
+        left: 15px !important;
+    }
+
+    .nav-panel ul {
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 20px;
+        grid-auto-rows: minmax(100px, auto);
+    }
+
+    .nav-panel ul li a {
+        padding: 18px 14px;
+        font-size: 0.9rem;
+        min-height: 100px;
+    }
+
+    .hamburger-box {
+        width: 20px;
+        height: 14px;
+    }
+
+    .hamburger-inner,
+    .hamburger-inner::before,
+    .hamburger-inner::after {
+        width: 20px;
+    }
+
+    .tool-container {
+        padding: 25px 15px;
+        margin: 10px auto;
+        max-width: 90%;
+    }
+
+    .download-card {
+        padding: 25px 15px;
+        margin: 10px auto;
+        max-width: 90%;
+    }
+
+    #cron-display,
+    #username-display,
+    #port-display,
+    #password-display,
+    #key-display,
+    #hash-display,
+    #name-display {
+        font-size: 1.1rem;
+        padding: 12px;
     }
 
     .refresh-btn-circle {
@@ -916,28 +1107,10 @@ body.page-nsfw-downloader .download-card h1 {
         font-size: 1.2rem;
     }
 
-    .button-group-row {
-        flex-direction: column;
-        gap: 10px;
-    }
-
     button {
-        min-width: 150px;
-        padding: 12px 30px;
-    }
-
-    .cron-item {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
-    }
-
-    .cron-item label {
-        margin-bottom: 5px;
-    }
-
-    .cron-input {
-        width: 100%;
+        min-width: 120px;
+        padding: 10px 20px;
+        font-size: 0.9rem;
     }
 }
 

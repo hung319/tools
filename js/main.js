@@ -17,8 +17,7 @@ function initializeMenu() {
 }
 
 // Chờ cho component được chèn vào rồi mới chạy logic
-// Sử dụng setTimeout nhỏ để đảm bảo DOM đã cập nhật
 document.addEventListener('DOMContentLoaded', () => {
-    // Đảm bảo hàm này chạy sau khi component đã được attach
-    setTimeout(initializeMenu, 0); 
+    // Initialize menu after a slight delay to ensure components are loaded
+    initializeMenu();
 });

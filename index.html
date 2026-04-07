@@ -9,17 +9,31 @@
 </head>
 
 <body>
-
     <main>
         <div class="content">
-            <h1>WELCOME TO THE GRID</h1>
-            <p>Main introduction page. Click the menu icon (☰) to navigate.</p>
+            <h1>TECH TOOLS HQ</h1>
+            <p>Your collection of essential developer utilities - all in one place</p>
+            <a href="#" id="explore-btn" class="explore-btn">Explore Tools</a>
         </div>
     </main>
 
     <script src="js/components.js" defer></script>
     <script src="js/main.js" defer></script>
-
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const exploreBtn = document.getElementById('explore-btn');
+            exploreBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                // Trigger menu open
+                const menuBtn = document.getElementById('menu-btn');
+                const navMenu = document.getElementById('nav-menu');
+                if (menuBtn && navMenu) {
+                    menuBtn.classList.toggle('active');
+                    navMenu.classList.toggle('active');
+                }
+            });
+        });
+    </script>
 </body>
 
 </html>
