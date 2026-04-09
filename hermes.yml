@@ -1,0 +1,14 @@
+services:
+  hermes-brain:
+    image: ghcr.io/xmbshwll/hermes-agent-docker:latest
+    container_name: hermes-brain
+    restart: unless-stopped
+    volumes:
+      - hermes_home:/home/agent/.hermes
+      - hermes_workspace:/home/agent/workspace
+    # Chạy trực tiếp để Agent sẵn sàng nhận lệnh từ CLI
+    command: hermes --gateway
+
+volumes:
+  hermes_home:
+  hermes_workspace:
