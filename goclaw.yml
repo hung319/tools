@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # --- DATABASE (Lưu trữ Vector & Đa người dùng) ---
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: goclaw-db
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-goclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-goclaw}
+      POSTGRES_DB: ${POSTGRES_DB:-goclaw}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-goclaw} -d ${POSTGRES_DB:-goclaw}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # --- GOCLAW BACKEND & WEB UI ---
+  goclaw:
+    image: ghcr.io/nextlevelbuilder/goclaw:latest
+    container_name: goclaw-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${GOCLAW_PORT:-18790}:18790"
+    env_file:
+      - .env
+    environment:
+      - GOCLAW_HOST=0.0.0.0
+      - GOCLAW_PORT=18790
+      - GOCLAW_CONFIG=/app/data/config.json
+      - GOCLAW_SKILLS_DIR=/app/data/skills
+      - GOCLAW_POSTGRES_DSN=postgres://${POSTGRES_USER:-goclaw}:${POSTGRES_PASSWORD:-goclaw}@postgres:5432/${POSTGRES_DB:-goclaw}?sslmode=disable
+      # Encryption key để bảo mật API Keys trong DB (nên đặt trong .env)
+      - GOCLAW_ENCRYPTION_KEY=${GOCLAW_ENCRYPTION_KEY}
+    volumes:
+      - goclaw-data:/app/data
+      - goclaw-workspace:/app/workspace
+      - goclaw-skills:/app/skills
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  goclaw-data:
+  goclaw-workspace:
+  goclaw-skills:
+
+networks:
+  default:
+    name: goclaw-net
