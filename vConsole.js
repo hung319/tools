@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         eruda load
+// @name         vconsole load
 // @namespace    http://tampermonkey.net/
 // @version      0.3
 // @description  Console for mobile browsers
