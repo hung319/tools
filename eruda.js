@@ -1,25 +1,16 @@
 // ==UserScript==
-// @name         Auto Load Eruda (Hidden)
+// @name         eruda load
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Tải Eruda vào trang nhưng không tự động hiển thị
-// @author       Yuu Onii-chan
-// @match        *://*/*
+// @version      0.3
+// @description  Console for mobile browsers
+// @author       kairusds
+// @include      http://*
+// @include      https://*
+// @require      https://cdnjs.cloudflare.com/ajax/libs/eruda/3.2.2/eruda.min.js
+// @run-at       document-body
 // @grant        none
 // ==/UserScript==
 
-(function() {
-    'use strict';
-
-    // Chèn script Eruda
-    var script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/eruda';
-    document.body.appendChild(script);
-
-    // Khi tải xong thì khởi tạo nhưng KHÔNG hiển thị
-    script.onload = function () {
-        eruda.init(); // khởi tạo
-        // không gọi eruda.show() để nó ẩn
-        // Anh có thể tự mở bằng cách gõ eruda.show() trong console sau
-    };
+(() => {
+	eruda.init();
 })();
