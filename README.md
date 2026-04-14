@@ -1,11 +1,6 @@
 ```sh
-wget https://github.com/hung319/tool/raw/refs/heads/main/setupvps.sh && bash setupvps.sh
+curl -sSL https://github.com/hung319/tool/raw/refs/heads/main/setupvps.sh | bash
 ```
-user:
 ```sh
-root 
-```
-pass:
-```sh
-LeitboGi0ro
+wget -qO- https://github.com/hung319/tool/raw/refs/heads/main/setupvps.sh | bash
 ```
