@@ -4,7 +4,7 @@
 export DEBIAN_FRONTEND=noninteractive
 
 # 1. Cập nhật hệ thống
-apt-get update && apt-get upgrade -y && apt install sudo wget -y
+apt-get update && apt-get upgrade -y && apt install sudo wget curl -y
 
 # 2. Thiết lập Locale & Timezone
 locale-gen en_US.UTF-8
