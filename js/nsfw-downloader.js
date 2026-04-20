@@ -15,7 +15,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const imageCountInput = document.getElementById('imageCount');
     const apiSelector = document.getElementById('apiSelector');
     const loadingAnimation = document.getElementById('loadingAnimation');
-    const statusDiv = document.getElementById('status');
+
+    const statusBar = document.getElementById('downloadStatusBar');
+    const statusText = document.getElementById('statusText');
+    const progressBar = document.getElementById('progressBar');
+    const progressPercentage = document.getElementById('progressPercentage');
 
     const generateRandomString = (length) => Array.from({ length }, () => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.charAt(Math.floor(Math.random() * 62))).join('');
 
@@ -56,6 +60,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    const updateStatus = (text, progress) => {
+        statusText.textContent = text;
+        progressBar.style.width = `${progress}%`;
+        progressPercentage.textContent = `${Math.round(progress)}%`;
+    };
+
+    const showStatusBar = () => {
+        statusBar.classList.add('active');
+        statusBar.classList.remove('hidden');
+    };
+
+    const hideStatusBar = () => {
+        statusBar.classList.add('hidden');
+        statusBar.classList.remove('active');
+    };
+
     const downloadImages = async (count) => {
         const zip = new JSZip();
         let completed = 0;
@@ -69,12 +89,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (result && result.imageBlob) {
                     zip.file(result.fileName, result.imageBlob);
                     completed++;
-                    statusDiv.textContent = `Downloaded ${completed}/${count} images`;
+                    const progress = (completed / count) * 100;
+                    updateStatus(`Downloaded ${completed}/${count} images`, progress);
                 }
             }));
         }
         await Promise.all(promises);
-        statusDiv.textContent = 'Generating ZIP file...';
+        updateStatus('Generating ZIP file...', 100);
         return zip.generateAsync({ type: 'blob' });
     };
 
@@ -83,22 +104,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         downloadBtn.disabled = true;
         loadingAnimation.classList.add('active');
-        statusDiv.style.display = 'block';
-        statusDiv.textContent = 'Downloading images...';
+        showStatusBar();
+        updateStatus('Downloading images...', 0);
 
         try {
             const zipBlob = await downloadImages(imageCount);
             const fileName = `images-${generateRandomString(6)}.zip`;
             saveAs(zipBlob, fileName);
-            statusDiv.textContent = 'Download Complete!';
+            updateStatus('Download Complete!', 100);
+            setTimeout(hideStatusBar, 3000);
         } catch (error) {
             console.error("Download process error:", error);
-            statusDiv.textContent = 'Error downloading images!';
+            updateStatus('Error downloading images!', 0);
+            setTimeout(hideStatusBar, 3000);
         } finally {
             downloadBtn.disabled = false;
             loadingAnimation.classList.remove('active');
         }
     });
 
-    statusDiv.style.display = 'none';
+    hideStatusBar();
 });
