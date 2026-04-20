@@ -37,17 +37,16 @@
 
                 <button id="downloadBtn">DOWNLOAD & ZIP</button>
                 <div class="loading" id="loadingAnimation"></div>
+                <div class="download-status-bar" id="downloadStatusBar">
+                    <div class="status-text" id="statusText">Preparing...</div>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-percentage" id="progressPercentage">0%</div>
+                </div>
             </div>
         </div>
     </main>
-
-    <div class="download-status-bar" id="downloadStatusBar">
-        <div class="status-text" id="statusText">Preparing...</div>
-        <div class="progress-container">
-            <div class="progress-bar" id="progressBar" style="width: 0%"></div>
-        </div>
-        <div class="progress-percentage" id="progressPercentage">0%</div>
-    </div>
 
     <script src="../js/components.js" defer></script>
     <script src="../js/main.js" defer></script>

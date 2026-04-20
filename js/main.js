@@ -4,20 +4,32 @@ function initializeMenu() {
     const menuBtn = document.getElementById('menu-btn');
     const navMenu = document.getElementById('nav-menu');
 
-    // Nếu không tìm thấy các element thì không làm gì cả
     if (!menuBtn || !navMenu) {
-        console.error("Menu button or navigation panel not found!");
         return;
     }
 
+    const toggleScroll = (disable) => {
+        document.body.style.overflow = disable ? 'hidden' : '';
+        document.body.style.position = disable ? 'fixed' : '';
+        document.body.style.width = disable ? '100%' : '';
+    };
+
     menuBtn.addEventListener('click', () => {
+        const isOpening = !menuBtn.classList.contains('active');
         menuBtn.classList.toggle('active');
         navMenu.classList.toggle('active');
+        toggleScroll(isOpening);
+    });
+
+    navMenu.addEventListener('click', (e) => {
+        if (e.target === navMenu || e.target.tagName === 'A') {
+            menuBtn.classList.remove('active');
+            navMenu.classList.remove('active');
+            toggleScroll(false);
+        }
     });
 }
 
-// Chờ cho component được chèn vào rồi mới chạy logic
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize menu after a slight delay to ensure components are loaded
     initializeMenu();
 });

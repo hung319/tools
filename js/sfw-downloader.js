@@ -68,8 +68,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const hideStatusBar = () => {
-        statusBar.classList.add('hidden');
         statusBar.classList.remove('active');
+        statusBar.classList.add('hidden');
     };
 
     const downloadImages = async (count) => {
