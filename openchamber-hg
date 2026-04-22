@@ -32,7 +32,6 @@ RUN cat <<'EOF' > /usr/local/bin/entrypoint
 
 # Dọn dẹp sơ bộ
 openchamber stop || true
-fuser -k 8081/tcp || true
 
 # Khởi chạy OpenChamber ở cổng nội bộ 8081 (Background)
 # Không dùng --foreground để app tự quản lý chu trình sống/update của nó
