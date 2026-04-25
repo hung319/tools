@@ -1,42 +1,43 @@
 # ==========================================
-# 1. SOURCE-FETCHER: Tải bản mới nhất & Patch log/root
+# 1. SOURCE-FETCHER: Tải bản mới nhất & Patch code
 # ==========================================
 FROM debian:bookworm-slim AS source-fetcher
 RUN apt-get update && apt-get install -y curl tar sed ca-certificates
 
 WORKDIR /src
+# Tự động lấy URL bản mới nhất từ GitHub
 RUN LATEST_URL=$(curl -s https://api.github.com/repos/chriswritescode-dev/opencode-manager/releases/latest | grep "tarball_url" | cut -d '"' -f 4) \
     && curl -Ls "$LATEST_URL" | tar -xzf - --strip-components=1
 
-# PATCH: Chuyển sang root và CÂM LẶNG HÓA các lệnh echo/install trong entrypoint
+# PATCH: Chuyển toàn bộ script sang chạy quyền root và thư mục /root
 RUN if [ -f scripts/docker-entrypoint.sh ]; then \
-        # Sửa quyền root
         sed -i 's/export HOME=\/home\/node/export HOME=\/root/g' scripts/docker-entrypoint.sh && \
         sed -i 's/\/home\/node/\/root/g' scripts/docker-entrypoint.sh && \
-        sed -i 's/chown -R node:node.*/# silent/g' scripts/docker-entrypoint.sh && \
-        sed -i 's/exec runuser -u node -- "$@"/exec "$@"/g' scripts/docker-entrypoint.sh && \
-        # Ẩn các dòng log "Checking...", "Starting..." và output của bun install
-        sed -i 's/echo "/# echo "/g' scripts/docker-entrypoint.sh && \
-        sed -i 's/bun install/bun install --silent > \/dev\/null 2>\&1/g' scripts/docker-entrypoint.sh; \
+        sed -i 's/chown -R node:node.*/# Root mode enabled/g' scripts/docker-entrypoint.sh && \
+        sed -i 's/exec runuser -u node -- "$@"/exec "$@"/g' scripts/docker-entrypoint.sh; \
     fi
 
 # ==========================================
-# 2. BUILDER: Cài đặt & Build (CI mode)
+# 2. BUILDER: Cài đặt & Build (Chạy tại /root)
 # ==========================================
 FROM node:24.13.0-slim AS builder
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /root
+
+# Copy source từ stage fetcher
 COPY --from=source-fetcher /src .
+
+# Install và build (giống logic bản gốc nhưng bỏ qua dev rác)
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter frontend build
-# Fix lỗi No TTY bằng CI=true
 RUN CI=true pnpm install --prod --frozen-lockfile
 
 # ==========================================
-# 3. RUNNER: Image cuối cùng (Siêu im lặng)
+# 3. RUNNER: Image cuối cùng cho Hugging Face
 # ==========================================
 FROM node:24.13.0-slim AS runner
 
+# Cài đặt system packages tối thiểu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl lsof ripgrep ca-certificates grep gawk sed findutils \
     coreutils procps jq less tree file python3 python3-pip python3-venv \
@@ -46,17 +47,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y gh \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://bun.sh/install | bash > /dev/null 2>&1 && \
+# Cài đặt Bun, UV và Opencode Tools
+RUN curl -fsSL https://bun.sh/install | bash && \
     ln -s /root/.bun/bin/bun /usr/local/bin/bun
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh > /dev/null 2>&1 && \
-    mv /root/.local/bin/uv /usr/local/bin/uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    chmod +x /usr/local/bin/uv
 
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path > /dev/null 2>&1 && \
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path && \
     mv /root/.opencode /opt/opencode && \
     ln -s /opt/opencode/bin/opencode /usr/local/bin/opencode
 
+# Đặt WORKDIR vào thẳng /root
 WORKDIR /root
+
+# Copy thành phẩm từ builder
 COPY --from=builder /root/node_modules ./node_modules
 COPY --from=builder /root/shared ./shared
 COPY --from=builder /root/backend ./backend
@@ -64,27 +70,35 @@ COPY --from=builder /root/frontend/dist ./frontend/dist
 COPY --from=source-fetcher /src/package.json /src/pnpm-workspace.yaml ./
 COPY --from=source-fetcher /src/scripts/docker-entrypoint.sh /docker-entrypoint.sh
 
+# Thiết lập cấu trúc module
 RUN mkdir -p /root/backend/node_modules/@opencode-manager && \
     ln -s /root/shared /root/backend/node_modules/@opencode-manager/shared && \
     chmod +x /docker-entrypoint.sh
 
-# Cấu hình biến môi trường ĐẶC BIỆT để ẩn log app
+# ============================================
+# Biến môi trường (Tối ưu cho duy nhất 1 Port)
+# ============================================
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=5003 \
-    LOG_LEVEL=silent \
-    DEBUG=false \
+    # Chỉ định database và workspace nằm trong /root
     DATABASE_PATH=/root/data/opencode.db \
     WORKSPACE_PATH=/root/workspace \
     HOME=/root \
+    XDG_CACHE_HOME=/root/.cache \
+    # HTTPS Security cho Hugging Face
     AUTH_SECURE_COOKIES=true \
     AUTH_TRUSTED_ORIGINS=https://*.hf.space,http://localhost:5003
 
+# Khởi tạo thư mục và phân quyền root
 RUN mkdir -p /root/data /root/workspace /root/.cache && \
     chmod -R 777 /root
 
 USER root
+
+# CHỈ MỞ 1 CỔNG DUY NHẤT
 EXPOSE 5003
 
-# Dùng shell form để có thể redirect log của toàn bộ quá trình entrypoint và app
-ENTRYPOINT ["/bin/bash", "-c", "/docker-entrypoint.sh > /dev/null 2>&1"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+# Chạy backend trực tiếp bằng Bun
+CMD ["bun", "backend/src/index.ts"]
