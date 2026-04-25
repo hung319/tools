@@ -1,57 +1,90 @@
-# Sử dụng image Kasm của tác giả làm nguồn
-FROM ghcr.io/chriswritescode-dev/opencode-manager:latest AS source
+# ==========================================
+# 1. SOURCE-FETCHER: Tải bản mới nhất & Patch log/root
+# ==========================================
+FROM debian:bookworm-slim AS source-fetcher
+RUN apt-get update && apt-get install -y curl tar sed ca-certificates
 
-# Runner image sạch để tránh các layer thừa của Kasm (giúp giảm dung lượng Space)
-FROM node:22-bookworm-slim
+WORKDIR /src
+RUN LATEST_URL=$(curl -s https://api.github.com/repos/chriswritescode-dev/opencode-manager/releases/latest | grep "tarball_url" | cut -d '"' -f 4) \
+    && curl -Ls "$LATEST_URL" | tar -xzf - --strip-components=1
 
-USER root
+# PATCH: Chuyển sang root và CÂM LẶNG HÓA các lệnh echo/install trong entrypoint
+RUN if [ -f scripts/docker-entrypoint.sh ]; then \
+        # Sửa quyền root
+        sed -i 's/export HOME=\/home\/node/export HOME=\/root/g' scripts/docker-entrypoint.sh && \
+        sed -i 's/\/home\/node/\/root/g' scripts/docker-entrypoint.sh && \
+        sed -i 's/chown -R node:node.*/# silent/g' scripts/docker-entrypoint.sh && \
+        sed -i 's/exec runuser -u node -- "$@"/exec "$@"/g' scripts/docker-entrypoint.sh && \
+        # Ẩn các dòng log "Checking...", "Starting..." và output của bun install
+        sed -i 's/echo "/# echo "/g' scripts/docker-entrypoint.sh && \
+        sed -i 's/bun install/bun install --silent > \/dev\/null 2>\&1/g' scripts/docker-entrypoint.sh; \
+    fi
 
-# 1. Cài đặt các gói hệ thống cần thiết (Sửa chromium)
-RUN apt-get update && apt-get install -y \
+# ==========================================
+# 2. BUILDER: Cài đặt & Build (CI mode)
+# ==========================================
+FROM node:24.13.0-slim AS builder
+RUN corepack enable && corepack prepare pnpm@latest --activate
+WORKDIR /root
+COPY --from=source-fetcher /src .
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter frontend build
+# Fix lỗi No TTY bằng CI=true
+RUN CI=true pnpm install --prod --frozen-lockfile
+
+# ==========================================
+# 3. RUNNER: Image cuối cùng (Siêu im lặng)
+# ==========================================
+FROM node:24.13.0-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl lsof ripgrep ca-certificates grep gawk sed findutils \
     coreutils procps jq less tree file python3 python3-pip python3-venv \
-    unzip chromium \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. Cài đặt GitHub CLI & Bun
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    unzip chromium bash \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update && apt-get install -y gh \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://bun.sh/install | bash && \
+RUN curl -fsSL https://bun.sh/install | bash > /dev/null 2>&1 && \
     ln -s /root/.bun/bin/bun /usr/local/bin/bun
 
-# 3. Copy app từ bản Kasm sang (Lưu ý đường dẫn /opt/opencode-manager)
-# Bản Kasm thường cài app vào /opt/opencode-manager
-COPY --from=source /opt/opencode-manager /app
-COPY --from=source /opt/opencode /opt/opencode
-COPY --from=source /opt/opencode-plugins /opt/opencode-plugins
-COPY --from=source /usr/local/bin/uv /usr/local/bin/uv
-COPY --from=source /usr/local/bin/opencode /usr/local/bin/opencode
+RUN curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh > /dev/null 2>&1 && \
+    mv /root/.local/bin/uv /usr/local/bin/uv
 
-# 4. Cấu hình biến môi trường
-ENV NODE_ENV=production
-ENV HOST=0.0.0.0
-ENV PORT=7860
-ENV AUTH_TRUSTED_ORIGINS=https://*.hf.space,http://localhost:7860
-ENV AUTH_SECURE_COOKIES=false
-ENV DATABASE_PATH=/app/data/opencode.db
-ENV WORKSPACE_PATH=/app/workspace
-ENV NODE_PATH=/opt/opencode-plugins/node_modules
-ENV HOME=/root
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path > /dev/null 2>&1 && \
+    mv /root/.opencode /opt/opencode && \
+    ln -s /opt/opencode/bin/opencode /usr/local/bin/opencode
 
-# 5. Thiết lập thư mục làm việc và quyền hạn
-RUN mkdir -p /app/data /app/workspace && \
-    chmod -R 777 /app /opt/opencode /opt/opencode-plugins /root
+WORKDIR /root
+COPY --from=builder /root/node_modules ./node_modules
+COPY --from=builder /root/shared ./shared
+COPY --from=builder /root/backend ./backend
+COPY --from=builder /root/frontend/dist ./frontend/dist
+COPY --from=source-fetcher /src/package.json /src/pnpm-workspace.yaml ./
+COPY --from=source-fetcher /src/scripts/docker-entrypoint.sh /docker-entrypoint.sh
 
-WORKDIR /app
+RUN mkdir -p /root/backend/node_modules/@opencode-manager && \
+    ln -s /root/shared /root/backend/node_modules/@opencode-manager/shared && \
+    chmod +x /docker-entrypoint.sh
 
-# Expose cổng 7860 cho Hugging Face
-EXPOSE 7860
+# Cấu hình biến môi trường ĐẶC BIỆT để ẩn log app
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=5003 \
+    LOG_LEVEL=silent \
+    DEBUG=false \
+    DATABASE_PATH=/root/data/opencode.db \
+    WORKSPACE_PATH=/root/workspace \
+    HOME=/root \
+    AUTH_SECURE_COOKIES=true \
+    AUTH_TRUSTED_ORIGINS=https://*.hf.space,http://localhost:5003
 
-# Chạy với quyền ROOT
+RUN mkdir -p /root/data /root/workspace /root/.cache && \
+    chmod -R 777 /root
+
 USER root
+EXPOSE 5003
 
-# Khởi chạy bằng Bun (Backend của OpenCode Manager nằm ở backend/src/index.ts)
-CMD ["bun", "backend/src/index.ts"]
+# Dùng shell form để có thể redirect log của toàn bộ quá trình entrypoint và app
+ENTRYPOINT ["/bin/bash", "-c", "/docker-entrypoint.sh > /dev/null 2>&1"]
