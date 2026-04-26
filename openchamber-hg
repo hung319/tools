@@ -1,52 +1,97 @@
 FROM debian:stable-slim
 
-# 1. Khai báo môi trường (Đã đổi tên và xóa HOST)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
-    APP_PORT=8080 \
-    NODE_ENV=production
+    OPENCHAMBER_PORT=8080 \
+    OPENCHAMBER_HOST=0.0.0.0 \
+    NODE_ENV=production \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="backup_root.zip" \
+    BACKUP_PASS="123456"
 
 WORKDIR /root
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# 2. Cài đặt hệ thống
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git ssh build-essential tini procps unzip psmisc socat \
-        nodejs npm \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ \
+        ca-certificates curl git ssh build-essential tini procps unzip psmisc \
+        nodejs npm zip inotify-tools \
     && uv python install 3.12 \
     && npm install -g opencode-ai@latest @openchamber/web@latest \
     && npm cache clean --force \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Cấu hình wrapper script cho opencode
 RUN mv /usr/local/bin/opencode /usr/local/bin/opencode-original \
-    && echo '#!/bin/bash\nrm -rf /root/.cache/opencode/package.json 2>/dev/null || true\nexec /usr/local/bin/opencode-original "$@"' > /usr/local/bin/opencode \
+    && echo -e '#!/bin/bash\nrm -rf /root/.cache/opencode/package.json 2>/dev/null || true\nexec /usr/local/bin/opencode-original "$@"' > /usr/local/bin/opencode \
     && chmod +x /usr/local/bin/opencode
 
-# 4. Entrypoint: Chạy background hoàn toàn
-RUN cat <<'EOF' > /usr/local/bin/entrypoint
+# Entrypoint: Sử dụng biến BACKUP_FILENAME linh hoạt
+RUN cat <<'EOF' > /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
 #!/bin/bash
+set -e
 
-# Dọn dẹp sơ bộ
-openchamber stop || true
+# --- HÀM GIẢI NÉN (RESTORE) ---
+restore_data() {
+    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
+        echo "--- [RESTORE] Tìm thấy file $BACKUP_FILENAME. Đang phục hồi... ---"
+        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true
+        echo "--- [RESTORE] Phục hồi hoàn tất! ---"
+    else
+        echo "--- [RESTORE] Không tìm thấy $BACKUP_FILENAME trong $BACKUP_DIR. ---"
+    fi
+}
 
-# Khởi chạy OpenChamber ở cổng nội bộ 8081 (Background)
-# Không dùng --foreground để app tự quản lý chu trình sống/update của nó
-openchamber serve --port 8081 ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"}
+# --- HÀM SAO LƯU (BACKUP) ---
+backup_data() {
+    if [ ! "$(ls -A /root)" ]; then return; fi
+    
+    echo "--- [BACKUP] Đang thực thi nén vào $BACKUP_FILENAME... ---"
+    mkdir -p "$BACKUP_DIR"
+    
+    # Nén tạm thời rồi chuyển vào volume
+    zip -qrP "$BACKUP_PASS" "/tmp/temp_backup.zip" /root \
+        -x "/root/.cache/*" "/root/.npm/*" "/root/.uv/*" "/root/.local/share/opencode/log/*" "*.log" 2>/dev/null || true
+        
+    if [ -f "/tmp/temp_backup.zip" ]; then
+        mv "/tmp/temp_backup.zip" "$BACKUP_DIR/$BACKUP_FILENAME"
+        echo "--- [BACKUP] Đã cập nhật: $BACKUP_DIR/$BACKUP_FILENAME ($(date)) ---"
+    fi
+}
 
-echo "OpenChamber is running in background on internal port 8081."
+cleanup() {
+    echo "!!! [STOP] Đang thực hiện backup cuối cùng trước khi đóng... !!!"
+    backup_data
+    [ -n "$CHILD_PID" ] && kill -TERM "$CHILD_PID"
+    exit 0
+}
 
-# Socat giữ cổng APP_PORT (8080) luôn mở cho Hugging Face
-# Chuyển tiếp lưu lượng từ APP_PORT vào cổng thực tế 8081
-echo "Socat bridge active: ${APP_PORT} -> 8081"
-exec socat TCP-LISTEN:${APP_PORT},fork,reuseaddr TCP:127.0.0.1:8081
+trap cleanup SIGTERM SIGINT
+
+# Thực hiện quy trình
+restore_data
+backup_data
+
+(
+    while true; do
+        inotifywait -r -e modify,create,delete,move -t 60 \
+            --excludei '(/\.cache|/\.npm|/\.uv|/log/|\.log$)' /root 2>/dev/null || true
+        sleep 5
+        backup_data
+    done
+) &
+
+echo "Đang khởi động OpenChamber..."
+openchamber serve \
+    --port "${OPENCHAMBER_PORT}" \
+    --host "${OPENCHAMBER_HOST}" \
+    --foreground \
+    ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"} &
+
+CHILD_PID=$!
+wait "$CHILD_PID"
 EOF
 
-RUN chmod +x /usr/local/bin/entrypoint
-
-# 5. Cấu hình vận hành
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]
