@@ -70,10 +70,10 @@ ENV NODE_ENV=production \
     BACKUP_FILENAME="opencode_backup.zip" \
     BACKUP_PASS="123456" \
     DATABASE_PATH=/root/data/opencode.db \
-    WORKSPACE_PATH=/root/workspace
+    WORKSPACE_PATH=/root
 
 # Tạo thư mục cần thiết
-RUN mkdir -p /root/data /root/workspace /root/.cache /data && chmod -R 777 /root /data
+RUN mkdir -p /root/data /root/.cache /data && chmod -R 777 /root /data
 
 # --- TẠO ENTRYPOINT SCRIPT TÍCH HỢP BACKUP ---
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
@@ -116,7 +116,7 @@ restore_data
 (
     while true; do
         inotifywait -r -e modify,create,delete,move -t 60 \
-            --excludei '(/\.cache|/\.npm|/\.bun|/node_modules/|\.log$)' /root/data /root/workspace 2>/dev/null || true
+            --excludei '(/\.cache|/\.npm|/\.bun|/node_modules/|\.log$)' /root 2>/dev/null || true
         sleep 10
         backup_data
     done
