@@ -63,6 +63,8 @@ ENV NODE_ENV=production \
     HOME=/root \
     # Biến mới yêu cầu
     AUTH_SECRET="super-secret-key-change-me" \
+    CORS_ORIGIN="http://localhost:5003" \
+    AUTH_SECURE_COOKIES=true \
     # Cấu hình Backup
     BACKUP_DIR="/data" \
     BACKUP_FILENAME="opencode_backup.zip" \
