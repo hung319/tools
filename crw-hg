@@ -1,0 +1,54 @@
+# --- STAGE 1: BUILDER ---
+FROM debian:stable-slim AS builder
+RUN apt-get update && apt-get install -y curl
+WORKDIR /temp
+RUN curl -fsSL https://raw.githubusercontent.com/us/crw/main/install.sh | CRW_BINARY=crw-server sh
+
+# --- STAGE 2: FINAL ---
+FROM debian:stable-slim
+
+# 1. Cài đặt Runtime Dependencies
+RUN apt-get update && apt-get install -y \
+    tini curl ca-certificates socat procps \
+    libgbm1 libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 2. Copy các thành phần thực thi
+COPY --from=builder /usr/local/bin/crw-server /usr/local/bin/crw-server
+COPY --from=lightpanda/browser:latest /bin/lightpanda /usr/local/bin/lightpanda
+COPY --from=chromedp/headless-shell:latest /headless-shell /headless-shell
+
+# 3. Cấu hình Biến môi trường hệ thống
+ENV CRW_SERVER__HOST=0.0.0.0 \
+    CRW_SERVER__PORT=7860 \
+    RUST_LOG=info \
+    PATH="/headless-shell:${PATH}" \
+    CRW_RENDERER__MODE=auto \
+    CRW_RENDERER__LIGHTPANDA__WS_URL=ws://127.0.0.1:9224/ \
+    CRW_RENDERER__CHROME__WS_URL=ws://127.0.0.1:9222/
+
+EXPOSE 7860
+
+# 4. Script khởi động thông minh: Xử lý Secret và kích hoạt Browser
+RUN echo '#!/bin/bash\n\
+# Tạo cấu hình Auth động từ Secret của Hugging Face\n\
+SEC_KEY=${CRW_SECRET_KEY:-"default_key"}\n\
+echo "[auth]\napi_keys = [\"$SEC_KEY\"]" > /app/config.local.toml\n\
+\n\
+# Chạy Chrome Headless (qua socat 9222)\n\
+/headless-shell/run.sh --no-sandbox --remote-debugging-address=127.0.0.1 --remote-debugging-port=9223 --remote-allow-origins=* &\n\
+\n\
+# Chạy Lightpanda (cổng 9224)\n\
+lightpanda serve --host 127.0.0.1 --port 9224 &\n\
+\n\
+# Đợi hạ tầng trình duyệt sẵn sàng\n\
+sleep 10\n\
+\n\
+# Khởi động CRW Server chính\n\
+exec crw-server' > /app/start.sh && chmod +x /app/start.sh
+
+# 5. Khởi chạy với tini để quản lý process bền bỉ
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/app/start.sh"]
