@@ -1,27 +1,105 @@
-# Sử dụng image chính thức mới nhất từ Open WebUI
 FROM ghcr.io/open-webui/open-webui:main
-
-# 1. Thiết lập biến môi trường mạng (Bắt buộc cho HF Spaces)
-ENV HOST=0.0.0.0
-ENV PORT=7860
-ENV WEBUI_PORT=7860
-
-# 2. Xử lý thư mục cache và dữ liệu để tránh lỗi permission denied
-# Đặt HOME về /app để các thư viện (như HuggingFace Hub, LiteLLM) lưu cache đúng chỗ
-ENV HOME=/app
-# Thư mục chứa dữ liệu của Open WebUI (SQLite, uploaded files)
-ENV DATA_DIR=/app/backend/data
 
 USER root
 
-# 3. Cấp quyền cho UID 1000 (Yêu cầu bắt buộc từ Hugging Face)
-RUN mkdir -p $DATA_DIR \
-    && chown -R 1000:1000 /app
+# 1. Cài đặt tini và các công cụ cần thiết cho backup
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini \
+    zip \
+    unzip \
+    inotify-tools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Chuyển sang user 1000
+# 2. Cấu hình biến môi trường
+ENV PORT=7860 \
+    DATA_DIR=/app/backend/data \
+    BACKUP_DIR=/data \
+    BACKUP_FILENAME="open_webui-backup.zip" \
+    BACKUP_PASS="123456" \
+    USER_AGENT="OpenWebUI-Agent" \
+    HF_TOKEN="" \
+    WEBUI_SECRET_KEY="secret_key_999" \
+    # --- TẠO ADMIN SẴN & BẢO MẬT ---
+    WEBUI_ADMIN_NAME="admin" \
+    WEBUI_ADMIN_EMAIL="admin@example.com" \
+    WEBUI_ADMIN_PASSWORD="your_strong_password_here" \
+    ENABLE_SIGNUP=False \
+    ENABLE_OLLAMA=False \
+    WEBUI_AUTH=True
+
+# 3. Phân quyền thư mục
+RUN mkdir -p /app/backend/data /data && chown -R 1000:1000 /app /data
+
+# 4. Script Entrypoint xử lý logic chính
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+DATA_PATH="/app/backend/data"
+TEMP_ZIP="/tmp/temp_sync.zip"
+
+# --- HÀM PHỤC HỒI ---
+restore_data() {
+    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
+        echo "--- [RESTORE] Tìm thấy file backup tại $BACKUP_DIR. Đang phục hồi... ---"
+        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true
+        echo "--- [RESTORE] Hoàn tất phục hồi dữ liệu! ---"
+    else
+        echo "--- [RESTORE] Không tìm thấy dữ liệu cũ. Bắt đầu từ đầu. ---"
+    fi
+}
+
+# --- HÀM SAO LƯU ---
+backup_data() {
+    # Kiểm tra nếu thư mục rỗng thì không backup
+    if [ ! "$(ls -A $DATA_PATH 2>/dev/null)" ]; then return; fi
+
+    echo "--- [BACKUP] Đang sao lưu dữ liệu vào $BACKUP_DIR... ---"
+    mkdir -p "$BACKUP_DIR"
+    
+    # Loại trừ các file tạm của SQLite (db-wal, db-shm) để tránh loop backup liên tục
+    zip -qrP "$BACKUP_PASS" "$TEMP_ZIP" "$DATA_PATH" \
+        -x "*/cache/*" "*.log" "*/webui.db-wal" "*/webui.db-shm" 2>/dev/null || true
+        
+    if [ -f "$TEMP_ZIP" ]; then
+        mv "$TEMP_ZIP" "$BACKUP_DIR/$BACKUP_FILENAME"
+        echo "--- [BACKUP] Đã cập nhật bản sao lưu mới nhất ($(date)) ---"
+    fi
+}
+
+cleanup() {
+    echo "!!! [SHUTDOWN] Nhận tín hiệu dừng. Đang lưu dữ liệu lần cuối... !!!"
+    backup_data
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+# Thực hiện Restore ngay khi khởi động
+restore_data
+
+# --- AUTO BACKUP CẢI TIẾN ---
+(
+    echo "--- [WATCHER] Bắt đầu theo dõi thay đổi dữ liệu (tối ưu hóa) ---"
+    while true; do
+        # Tăng timeout lên 900s (15 phút) và loại trừ file tạm của DB để tránh backup liên tục
+        inotifywait -r -e modify,create,delete,move -t 900 \
+            --exclude '(/cache/|\.log$|db-wal$|db-shm$)' "$DATA_PATH" 2>/dev/null || true
+        sleep 30
+        backup_data
+    done
+) &
+
+# Khởi động Open WebUI
+echo "Đang khởi động Open WebUI (Admin: $ADMIN_EMAIL, Ollama: OFF)..."
+exec bash /app/backend/start.sh
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 5. Cấu hình chạy ứng dụng
 USER 1000
-
-# 4. Expose port
 EXPOSE 7860
 
-# CMD mặc định của base image sẽ tự động start server
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
