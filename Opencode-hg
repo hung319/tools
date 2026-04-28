@@ -1,61 +1,103 @@
-FROM debian:stable
+# Sử dụng Debian Bullseye Slim làm nền tảng
+FROM node:20-bullseye-slim
 
-# Copy uv binary
+# --- CÀI ĐẶT UV (Trình quản lý Python) ---
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# Cấu hình môi trường cho Hugging Face
-# HF sẽ truyền SECRET vào ENV, ta sẽ tận dụng chúng ở lệnh chạy cuối
-ENV DEBIAN_FRONTEND=noninteractive \
-    PATH="/usr/local/bin:/usr/bin:${PATH}" \
-    BUN_INSTALL="/usr" \
-    XDG_DATA_HOME=/root/.local/share \
+# --- CÀI ĐẶT BUN (Runtime JS cực nhanh) ---
+RUN apt-get update && apt-get install -y curl unzip \
+    && curl -fsSL https://bun.sh/install | bash \
+    && mv /root/.bun/bin/bun /usr/local/bin/bun \
+    && rm -rf /root/.bun
+
+# Biến môi trường - ĐÃ ĐỔI PORT SANG 7860
+ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
+    PORT=7860 \
+    HOSTNAME=0.0.0.0 \
     NODE_ENV=production \
-    HOME=/root
-
-SHELL ["/bin/bash", "-c"]
-
-# Cài đặt dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git ssh build-essential tini procps unzip psmisc \
-    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
-    && apt-get install -y nodejs \
-    && uv python install 3.12 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Cài đặt Bun và OpenCode
-RUN curl -fsSL https://bun.sh/install | bash && \
-    /usr/bin/bun install -g opencode-ai@latest @openchamber/web@latest
-
-# Cấu hình tin cậy cho Bun
-RUN echo -e "[install.trustedDependencies]\n\"*\" = true" > /root/.bunfig.toml
-
-# Patch lỗi cache opencode
-RUN if [ -f /usr/bin/opencode ]; then mv /usr/bin/opencode /usr/bin/opencode-original; fi && \
-    cat <<'EOF' > /usr/bin/opencode && chmod +x /usr/bin/opencode
-#!/bin/bash
-rm -rf /root/.cache/opencode/package.json 2>/dev/null || true
-exec /usr/bin/opencode-original "$@"
-EOF
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="opencode_backup.zip" \
+    BACKUP_PASS="123456"
 
 WORKDIR /root
 
-# Script khởi chạy để xử lý dynamic port và auth từ Secret
-RUN cat <<'EOF' > /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
+# Cài đặt các công cụ cần thiết
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git ssh build-essential tini procps unzip psmisc \
+        make g++ python3 zip inotify-tools \
+    && uv python install 3.12 \
+    && npm install -g opencode-ai@latest \
+    && npm cache clean --force \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fix quyền thực thi cho opencode
+RUN chmod +x /usr/local/lib/node_modules/opencode-ai/bin/.opencode || true
+
+# --- ENTRYPOINT SCRIPT: FIX LỖI SPAM BACKUP ---
+RUN cat <<'EOF' > /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
 #!/bin/bash
-# Hugging Face cung cấp port qua biến $PORT, nếu không có thì mặc định 7860
-TARGET_PORT=${PORT:-7860}
+set -e
 
-echo "Starting OpenCode on port $TARGET_PORT..."
+restore_data() {
+    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
+        echo "--- [RESTORE] Đang phục hồi dữ liệu từ $BACKUP_FILENAME... ---"
+        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true
+        echo "--- [RESTORE] Thành công! ---"
+    else
+        echo "--- [RESTORE] Không tìm thấy file backup. Khởi tạo mới. ---"
+    fi
+}
 
-# Chạy opencode với các biến môi trường được truyền từ HF Secret
-# Nếu bạn đặt SECRET trên HF là OPENCODE_SERVER_PASSWORD thì nó sẽ tự áp dụng
-exec opencode web \
-    --hostname 0.0.0.0 \
-    --port "$TARGET_PORT"
+backup_data() {
+    if [ ! "$(ls -A /root)" ]; then return; fi
+    echo "--- [BACKUP] Đang nén dữ liệu... ---"
+    mkdir -p "$BACKUP_DIR"
+    
+    # Loại trừ cache và các file tạm của SQLite (.db-wal, .db-shm) để tránh loop backup
+    zip -qrP "$BACKUP_PASS" "/tmp/temp_backup.zip" /root \
+        -x "/root/.cache/*" "/root/.npm/*" "/root/.uv/*" "/root/.bun/*" \
+        "*.db-wal" "*.db-shm" "*.log" 2>/dev/null || true
+        
+    if [ -f "/tmp/temp_backup.zip" ]; then
+        mv "/tmp/temp_backup.zip" "$BACKUP_DIR/$BACKUP_FILENAME"
+        echo "--- [BACKUP] Đã cập nhật lúc $(date) ---"
+    fi
+}
+
+cleanup() {
+    echo "!!! [STOP] Đang thực hiện backup cuối cùng trước khi tắt... !!!"
+    backup_data
+    [ -n "$CHILD_PID" ] && kill -TERM "$CHILD_PID"
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+# Bắt đầu quy trình
+restore_data
+backup_data
+
+# Vòng lặp theo dõi thay đổi thông minh hơn
+(
+    while true; do
+        # Chờ đợi thay đổi, bỏ qua các file log và database tạm
+        inotifywait -r -e modify,create,delete,move -t 300 \
+            --excludei '(/\.cache|/\.npm|/\.uv|/\.bun|/log/|\.log$|.*\.db-wal$|.*\.db-shm$)' /root 2>/dev/null || true
+        
+        # Đợi thêm 5 phút (300s) sau khi có thay đổi để gom cụm dữ liệu, tránh backup quá nhiều lần
+        sleep 300
+        backup_data
+    done
+) &
+
+echo "Đang khởi động Opencode-AI trên Port: ${PORT}..."
+opencode serve --port "${PORT}" --hostname "${HOSTNAME}" &
+
+CHILD_PID=$!
+wait "$CHILD_PID"
 EOF
 
-# Port 7860 là port mặc định của Hugging Face Spaces
 EXPOSE 7860
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/local/bin/start.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]
