@@ -1,48 +1,66 @@
-# GIAI ĐOẠN 1: Builder (Có đầy đủ đồ nghề)
+# GIAI ĐOẠN 1: Builder (Có đầy đủ đồ nghề để build script và công cụ)
 FROM alpine:3.22 AS tools-provider
 
 RUN apk add --no-cache zip unzip inotify-tools bash tini
 
-# Tạo script entrypoint hoàn chỉnh
-# Lưu ý: Tôi thêm cả việc tạo thư mục vào đây
+# Tạo script entrypoint hoàn chỉnh với cơ chế bảo vệ dữ liệu
 RUN printf '#!/bin/bash\n\
 set -e\n\
-# Tự xử lý thư mục nếu chưa có\n\
+\n\
+# Đảm bảo thư mục tồn tại\n\
 mkdir -p /home/node/.n8n "$BACKUP_DIR"\n\
 \n\
 restore_data() {\n\
     if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then\n\
-        echo "--- [RESTORE] Tìm thấy dữ liệu, đang phục hồi... ---"\n\
-        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true\n\
+        echo "--- [RESTORE] Tìm thấy bản sao lưu, đang giải nén... ---"\n\
+        # Giải nén đè vào đúng vị trí cấu trúc /home/node/.n8n\n\
+        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || echo "Lỗi giải nén hoặc sai mật khẩu."\n\
+        echo "--- [RESTORE] Hoàn tất phục hồi dữ liệu. ---"\n\
+    else\n\
+        echo "--- [RESTORE] Không tìm thấy file backup cũ. Chạy n8n mới. ---"\n\
     fi\n\
 }\n\
 \n\
 backup_data() {\n\
-    if [ ! -d "/home/node/.n8n" ] || [ ! "$(ls -A /home/node/.n8n)" ]; then return; fi\n\
-    zip -qrP "$BACKUP_PASS" "/tmp/n8n_temp.zip" /home/node/.n8n -x "/home/node/.n8n/binaryData/*" "*.log" 2>/dev/null || true\n\
-    [ -f "/tmp/n8n_temp.zip" ] && mv "/tmp/n8n_temp.zip" "$BACKUP_DIR/$BACKUP_FILENAME"\n\
-    echo "--- [BACKUP] Saved: $(date) ---"\n\
+    # Chỉ backup khi n8n thực sự đã tạo ra file database (tránh backup thư mục trống)\n\
+    if [ ! -f "/home/node/.n8n/database.sqlite" ]; then return; fi\n\
+    \n\
+    echo "--- [BACKUP] Đang tiến hành sao lưu... ---"\n\
+    # Tạo bản nén tạm thời, loại bỏ các file rác để giảm dung lượng\n\
+    zip -qrP "$BACKUP_PASS" "/tmp/n8n_temp.zip" /home/node/.n8n -x "/home/node/.n8n/binaryData/*" "/home/node/.n8n/cache/*" "*.log" 2>/dev/null || true\n\
+    \n\
+    # Chỉ ghi đè vào thư mục /data nếu file zip tạo ra thành công và không bị trống\n\
+    if [ -s "/tmp/n8n_temp.zip" ]; then\n\
+        mv "/tmp/n8n_temp.zip" "$BACKUP_DIR/$BACKUP_FILENAME"\n\
+        echo "--- [BACKUP] Đã lưu thành công lúc: $(date) ---"\n\
+    fi\n\
 }\n\
 \n\
+# 1. Phục hồi dữ liệu trước khi n8n chạy\n\
 restore_data\n\
+\n\
+# 2. Chạy tiến trình theo dõi thay đổi để backup ngầm\n\
 (\n\
     while true; do\n\
-        inotifywait -r -e modify,create,delete,move -t 600 /home/node/.n8n 2>/dev/null || true\n\
-        sleep 30\n\
+        # Đợi n8n ghi dữ liệu xong (inotifywait sẽ báo khi có file bị đóng sau khi ghi)\n\
+        inotifywait -r -e close_write,move /home/node/.n8n 2>/dev/null || true\n\
+        # Ngủ 60s để n8n hoàn tất mọi tiến trình ghi DB phức tạp\n\
+        sleep 60\n\
         backup_data\n\
     done\n\
 ) &\n\
 \n\
-echo "Starting n8n..."\n\
+# 3. Khởi động n8n chính thức\n\
+echo "--- Starting n8n... ---"\n\
 exec n8n start\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 
-# GIAI ĐOẠN 2: Runtime (Image "câm điếc" của n8n)
+# GIAI ĐOẠN 2: Runtime (Sử dụng Image gốc của n8n)
 FROM n8nio/n8n:latest
 
 USER root
 
-# CHỈ COPY - TUYỆT ĐỐI KHÔNG CHẠY RUN
+# Copy toàn bộ công cụ thực thi và thư viện từ Builder sang
 COPY --from=tools-provider /usr/bin/zip /usr/bin/zip
 COPY --from=tools-provider /usr/bin/unzip /usr/bin/unzip
 COPY --from=tools-provider /usr/bin/inotifywait /usr/bin/inotifywait
@@ -54,15 +72,15 @@ COPY --from=tools-provider /usr/lib/ /usr/lib/
 COPY --from=tools-provider /lib/ /lib/
 COPY --from=tools-provider /entrypoint.sh /entrypoint.sh
 
-# Thiết lập môi trường
+# Thiết lập các biến môi trường cần thiết
 ENV N8N_PORT=7860 \
     BACKUP_DIR=/data \
     BACKUP_FILENAME=n8n_backup.zip \
     BACKUP_PASS=123456
 
-# Để n8n tự chạy với user mặc định của nó
+# Đảm bảo n8n chạy với user node để có quyền ghi file trong home
 USER node
 EXPOSE 7860
 
-# Dùng tini để kích hoạt bash chạy script
+# Sử dụng tini để quản lý zombie process và Bash để chạy script
 ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/entrypoint.sh"]
