@@ -1,0 +1,68 @@
+# GIAI ĐOẠN 1: Builder (Có đầy đủ đồ nghề)
+FROM alpine:3.22 AS tools-provider
+
+RUN apk add --no-cache zip unzip inotify-tools bash tini
+
+# Tạo script entrypoint hoàn chỉnh
+# Lưu ý: Tôi thêm cả việc tạo thư mục vào đây
+RUN printf '#!/bin/bash\n\
+set -e\n\
+# Tự xử lý thư mục nếu chưa có\n\
+mkdir -p /home/node/.n8n "$BACKUP_DIR"\n\
+\n\
+restore_data() {\n\
+    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then\n\
+        echo "--- [RESTORE] Tìm thấy dữ liệu, đang phục hồi... ---"\n\
+        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true\n\
+    fi\n\
+}\n\
+\n\
+backup_data() {\n\
+    if [ ! -d "/home/node/.n8n" ] || [ ! "$(ls -A /home/node/.n8n)" ]; then return; fi\n\
+    zip -qrP "$BACKUP_PASS" "/tmp/n8n_temp.zip" /home/node/.n8n -x "/home/node/.n8n/binaryData/*" "*.log" 2>/dev/null || true\n\
+    [ -f "/tmp/n8n_temp.zip" ] && mv "/tmp/n8n_temp.zip" "$BACKUP_DIR/$BACKUP_FILENAME"\n\
+    echo "--- [BACKUP] Saved: $(date) ---"\n\
+}\n\
+\n\
+restore_data\n\
+(\n\
+    while true; do\n\
+        inotifywait -r -e modify,create,delete,move -t 600 /home/node/.n8n 2>/dev/null || true\n\
+        sleep 30\n\
+        backup_data\n\
+    done\n\
+) &\n\
+\n\
+echo "Starting n8n..."\n\
+exec n8n start\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+
+# GIAI ĐOẠN 2: Runtime (Image "câm điếc" của n8n)
+FROM n8nio/n8n:latest
+
+USER root
+
+# CHỈ COPY - TUYỆT ĐỐI KHÔNG CHẠY RUN
+COPY --from=tools-provider /usr/bin/zip /usr/bin/zip
+COPY --from=tools-provider /usr/bin/unzip /usr/bin/unzip
+COPY --from=tools-provider /usr/bin/inotifywait /usr/bin/inotifywait
+COPY --from=tools-provider /sbin/tini /usr/bin/tini
+COPY --from=tools-provider /bin/bash /bin/bash
+COPY --from=tools-provider /bin/mkdir /bin/mkdir
+COPY --from=tools-provider /bin/mv /bin/mv
+COPY --from=tools-provider /usr/lib/ /usr/lib/
+COPY --from=tools-provider /lib/ /lib/
+COPY --from=tools-provider /entrypoint.sh /entrypoint.sh
+
+# Thiết lập môi trường
+ENV N8N_PORT=7860 \
+    BACKUP_DIR=/data \
+    BACKUP_FILENAME=n8n_backup.zip \
+    BACKUP_PASS=123456
+
+# Để n8n tự chạy với user mặc định của nó
+USER node
+EXPOSE 7860
+
+# Dùng tini để kích hoạt bash chạy script
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/entrypoint.sh"]
