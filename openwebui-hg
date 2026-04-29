@@ -2,12 +2,9 @@ FROM ghcr.io/open-webui/open-webui:main
 
 USER root
 
-# 1. Cài đặt tini và các công cụ cần thiết cho backup
+# 1. Cài đặt các công cụ hệ thống cần thiết
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini \
-    zip \
-    unzip \
-    inotify-tools \
+    tini tar openssl findutils \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -15,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PORT=7860 \
     DATA_DIR=/app/backend/data \
     BACKUP_DIR=/data \
-    BACKUP_FILENAME="open_webui-backup.zip" \
+    BACKUP_FILENAME="open_webui_backup.enc" \
     BACKUP_PASS="123456" \
     USER_AGENT="OpenWebUI-Agent" \
     HF_TOKEN="" \
@@ -37,69 +34,86 @@ RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 set -e
 
 DATA_PATH="/app/backend/data"
-TEMP_ZIP="/tmp/temp_sync.zip"
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_backup.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
 # --- HÀM PHỤC HỒI ---
 restore_data() {
-    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
-        echo "--- [RESTORE] Tìm thấy file backup tại $BACKUP_DIR. Đang phục hồi... ---"
-        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true
-        echo "--- [RESTORE] Hoàn tất phục hồi dữ liệu! ---"
+    log "--- [RESTORE] Đang kiểm tra file backup tại $BACKUP_FILE ---"
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] TÌM THẤY bản sao lưu. Đang giải mã và phục hồi... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C "$DATA_PATH"; then
+            log "--- [RESTORE] THÀNH CÔNG! ---"
+        else
+            log "--- [RESTORE] LỖI: Giải mã thất bại. ---"
+        fi
     else
-        echo "--- [RESTORE] Không tìm thấy dữ liệu cũ. Bắt đầu từ đầu. ---"
+        log "--- [RESTORE] Không có dữ liệu cũ. Bắt đầu phiên mới. ---"
     fi
 }
 
-# --- HÀM SAO LƯU ---
+# --- HÀM SAO LƯU (BACKUP TOÀN BỘ KHÔNG LOẠI TRỪ) ---
 backup_data() {
-    # Kiểm tra nếu thư mục rỗng thì không backup
     if [ ! "$(ls -A $DATA_PATH 2>/dev/null)" ]; then return; fi
 
-    echo "--- [BACKUP] Đang sao lưu dữ liệu vào $BACKUP_DIR... ---"
-    mkdir -p "$BACKUP_DIR"
+    # KIỂM TRA THAY ĐỔI: Quét toàn bộ mọi file trong DATA_PATH
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED_FILES=$(find "$DATA_PATH" -type f -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED_FILES" ]; then
+            return
+        fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi! Đang nén toàn bộ và mã hóa... ---"
     
-    # Loại trừ các file tạm của SQLite (db-wal, db-shm) để tránh loop backup liên tục
-    zip -qrP "$BACKUP_PASS" "$TEMP_ZIP" "$DATA_PATH" \
-        -x "*/cache/*" "*.log" "*/webui.db-wal" "*/webui.db-shm" 2>/dev/null || true
-        
-    if [ -f "$TEMP_ZIP" ]; then
-        mv "$TEMP_ZIP" "$BACKUP_DIR/$BACKUP_FILENAME"
-        echo "--- [BACKUP] Đã cập nhật bản sao lưu mới nhất ($(date)) ---"
+    # Nén sạch 100% nội dung và mã hóa luồng bằng OpenSSL (AES-256-CBC)
+    if tar -cz --exclude='cache' -C "$DATA_PATH" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] HOÀN TẤT cập nhật bản sao lưu ($BACKUP_FILENAME) ---"
+    else
+        log "--- [BACKUP] LỖI trong quá trình sao lưu! ---"
+        rm -f "$TEMP_FILE"
     fi
 }
 
 cleanup() {
-    echo "!!! [SHUTDOWN] Nhận tín hiệu dừng. Đang lưu dữ liệu lần cuối... !!!"
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Đang backup lần cuối trước khi tắt Space... !!!"
+    kill $WATCHER_PID 2>/dev/null || true
     backup_data
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+    log "!!! [SHUTDOWN] Hệ thống đã dừng an toàn. !!!"
     exit 0
 }
 
-trap cleanup SIGTERM SIGINT
+trap 'cleanup' TERM INT QUIT
 
-# Thực hiện Restore ngay khi khởi động
+# Thực hiện Restore
 restore_data
 
-# --- AUTO BACKUP CẢI TIẾN ---
+# Khởi chạy Smart Watcher ngầm (quét mỗi 30s)
 (
-    echo "--- [WATCHER] Bắt đầu theo dõi thay đổi dữ liệu (tối ưu hóa) ---"
     while true; do
-        # Tăng timeout lên 900s (15 phút) và loại trừ file tạm của DB để tránh backup liên tục
-        inotifywait -r -e modify,create,delete,move -t 900 \
-            --exclude '(/cache/|\.log$|db-wal$|db-shm$)' "$DATA_PATH" 2>/dev/null || true
         sleep 30
         backup_data
     done
 ) &
+WATCHER_PID=$!
 
 # Khởi động Open WebUI
-echo "Đang khởi động Open WebUI (Admin: $ADMIN_EMAIL, Ollama: OFF)..."
-exec bash /app/backend/start.sh
+log "Đang khởi động Open WebUI (Admin: $WEBUI_ADMIN_EMAIL)..."
+bash /app/backend/start.sh &
+APP_PID=$!
+
+wait "$APP_PID" || true
 EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 5. Cấu hình chạy ứng dụng
+# 5. Cấu hình thực thi
 USER 1000
 EXPOSE 7860
-
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
