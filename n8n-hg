@@ -2,7 +2,7 @@ FROM n8nio/n8n:latest
 
 USER root
 
-# --- 1. Tạo script mã hóa AES-256 bằng Node.js (nhẹ và nhanh) ---
+# --- 1. Tạo script mã hóa AES-256 bằng Node.js ---
 RUN cat << 'EOF' > /crypto.js
 const crypto = require('crypto');
 const fs = require('fs');
@@ -46,17 +46,16 @@ try {
 }
 EOF
 
-# --- 2. Tạo script Entrypoint điều khiển n8n và Backup ---
+# --- 2. Tạo script Entrypoint điều khiển n8n và Smart Backup ---
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/sh
 set -e
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# Đảm bảo các thư mục tồn tại
 mkdir -p /home/node/.n8n "$BACKUP_DIR"
 
-# 1. Hàm Phục hồi dữ liệu (Chạy khi khởi động)
+# Hàm Phục hồi dữ liệu
 restore_data() {
     log "--- [RESTORE] Đang kiểm tra file backup tại $BACKUP_DIR/$BACKUP_FILENAME ---"
     if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
@@ -75,25 +74,27 @@ restore_data() {
     fi
 }
 
-# 2. Hàm Sao lưu dữ liệu (Smart Backup)
+# Hàm Sao lưu dữ liệu (Smart Tracker + Packer)
 backup_data() {
-    DB_FILE="/home/node/.n8n/database.sqlite"
     BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
     
-    if [ ! -f "$DB_FILE" ]; then return; fi
+    if [ ! -d "/home/node/.n8n" ]; then return; fi
 
-    # KIỂM TRA THÔNG MINH: Chỉ chạy nếu DB mới hơn file backup
+    # 1. TRACKER: Bỏ qua thư mục rác, file .log và crash.journal
     if [ -f "$BACKUP_FILE" ]; then
-        if [ ! "$DB_FILE" -nt "$BACKUP_FILE" ]; then
-            # Không có thay đổi, thoát sớm để tiết kiệm tài nguyên
+        CHANGED_FILE=$(find /home/node/.n8n -type f ! -path '*/cache/*' ! -path '*/binaryData/*' ! -name '*.log' ! -name 'crash.journal' -newer "$BACKUP_FILE" 2>/dev/null | head -n 1)
+        
+        if [ -z "$CHANGED_FILE" ]; then
             return
         fi
+        log "--- [TRACKER] Phát hiện file thay đổi: $CHANGED_FILE ---"
     fi
 
-    log "--- [BACKUP] Phát hiện thay đổi! Đang sao lưu vào Bucket... ---"
+    log "--- [BACKUP] Đang nén và sao lưu vào Bucket... ---"
     rm -f /tmp/n8n_temp.tar.gz
-    # Nén (loại bỏ cache và log để file nhẹ nhất có thể)
-    tar -czf /tmp/n8n_temp.tar.gz --exclude='.n8n/binaryData' --exclude='.n8n/cache' --exclude='*.log' -C /home/node .n8n
+    
+    # 2. PACKER: Chỉ loại bỏ cache và binaryData (Vẫn nén log và journal)
+    tar -czf /tmp/n8n_temp.tar.gz --exclude='.n8n/binaryData' --exclude='.n8n/cache' -C /home/node .n8n
     
     if node /crypto.js enc /tmp/n8n_temp.tar.gz "$BACKUP_FILE"; then
         log "--- [BACKUP] HOÀN TẤT lưu vào Bucket ---"
@@ -103,15 +104,15 @@ backup_data() {
     rm -f /tmp/n8n_temp.tar.gz
 }
 
-# 3. Hàm xử lý khi tắt máy (Shutdown)
+# Hàm xử lý khi tắt container
 cleanup() {
     trap - TERM INT QUIT
-    log "--- [SHUTDOWN] Hugging Face đang tắt Space! Đang backup lần cuối... ---"
+    log "--- [SHUTDOWN] Bắt được tín hiệu tắt! Đang backup lần cuối... ---"
     kill $WATCHER_PID 2>/dev/null || true
     backup_data
     kill -TERM "$N8N_PID" 2>/dev/null || true
     wait "$N8N_PID" 2>/dev/null || true
-    log "--- [SHUTDOWN] Tạm biệt! ---"
+    log "--- [SHUTDOWN] Đã dừng hoàn toàn. Tạm biệt! ---"
     exit 0
 }
 
@@ -120,7 +121,7 @@ trap 'cleanup' TERM INT QUIT
 # --- THỰC THI ---
 restore_data
 
-# Khởi chạy Smart Watcher ngầm (Quét mỗi 30s)
+# Khởi chạy Smart Watcher ngầm (Kiểm tra mỗi 30s)
 (
     while true; do
         sleep 30
@@ -139,8 +140,7 @@ EOF
 RUN chmod +x /entrypoint.sh
 
 # --- 3. Cấu hình biến môi trường ---
-# N8N_ENCRYPTION_KEY: Thay bằng chuỗi bí mật của bạn
-# BACKUP_PASS: Mật khẩu để mã hóa file .enc
+# Hãy thay thế các giá trị mật khẩu/key này bằng chuỗi bí mật của riêng bạn
 ENV N8N_PORT=7860 \
     BACKUP_DIR=/data \
     BACKUP_FILENAME=n8n_backup.enc \
@@ -153,5 +153,4 @@ RUN mkdir -p /data && chown -R node:node /data /home/node
 USER node
 EXPOSE 7860
 
-# Dùng tini để xử lý tín hiệu TERM chuẩn xác
 ENTRYPOINT ["tini", "--", "/bin/sh", "/entrypoint.sh"]
