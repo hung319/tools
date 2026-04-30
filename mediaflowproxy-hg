@@ -1,0 +1,17 @@
+# Sử dụng image chính thức từ dự án
+FROM ghcr.io/mhdzumair/mediaflow-proxy-light:latest
+
+# Thiết lập các biến môi trường mặc định cho Hugging Face
+# Hugging Face Spaces thường yêu cầu chạy trên port 7860
+ENV APP__SERVER__HOST=0.0.0.0
+ENV APP__SERVER__PORT=7860
+ENV APP__LOG_LEVEL=info
+
+# Bạn nên thay đổi password này hoặc thiết lập trong phần "Variables and Secrets" trên HF
+ENV APP__AUTH__API_PASSWORD=huggingface_proxy_secure
+
+# Mở port 7860
+EXPOSE 7860
+
+# Lệnh khởi chạy
+CMD ["mediaflow-proxy-light"]
