@@ -1,0 +1,5 @@
+FROM ghcr.io/thephaseless/byparr:latest
+
+ENV PORT=7860
+
+EXPOSE 7860
