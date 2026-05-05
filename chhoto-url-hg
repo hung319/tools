@@ -1,0 +1,106 @@
+# Sử dụng bản Alpine từ GitHub Registry
+FROM ghcr.io/sintan1729/chhoto-url:latest-alpine
+
+USER root
+
+# 1. Cài đặt các công cụ cần thiết (Alpine dùng apk thay vì apt)
+RUN apk add --no-cache \
+    bash \
+    tini \
+    tar \
+    openssl \
+    findutils \
+    tzdata
+
+# 2. Cấu hình các biến môi trường
+# DATA_DIR: Nơi app chạy (chứa file db gốc)
+# BACKUP_DIR: Nơi mount Persistent Storage của HF (thường là /data)
+ENV CHHOTO_PORT=7860 \
+    CHHOTO_LISTEN_PORT=7860 \
+    DATA_DIR=/app \
+    BACKUP_DIR=/data \
+    BACKUP_FILENAME="chhoto_url_backup.enc" \
+    BACKUP_PASS="123456" \
+    CHHOTO_DB_URL=/app/urls.sqlite \
+    CHHOTO_SQLITE_USE_WAL_MODE=True
+
+# 3. Tạo thư mục và phân quyền cho User 1000 (User mặc định của HF)
+RUN mkdir -p /app /data && chown -R 1000:1000 /app /data
+
+# 4. Script Entrypoint xử lý logic Restore và Backup tự động
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+DB_FILE="urls.sqlite"
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_backup.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# --- HÀM PHỤC HỒI ---
+restore_data() {
+    log "--- [RESTORE] Đang kiểm tra bản sao lưu tại $BACKUP_FILE ---"
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] Tìm thấy bản sao lưu. Đang giải mã... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C "$DATA_DIR"; then
+            log "--- [RESTORE] THÀNH CÔNG! ---"
+        else
+            log "--- [RESTORE] LỖI: Giải mã thất bại. Kiểm tra BACKUP_PASS! ---"
+        fi
+    else
+        log "--- [RESTORE] Không có dữ liệu cũ. Khởi tạo phiên mới. ---"
+    fi
+}
+
+# --- HÀM SAO LƯU ---
+backup_data() {
+    # Kiểm tra nếu file DB tồn tại và có dung lượng > 0
+    if [ ! -s "$DATA_DIR/$DB_FILE" ]; then return; fi
+
+    # Chỉ backup nếu file DB mới hơn file backup hiện tại
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED=$(find "$DATA_DIR/$DB_FILE" -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED" ]; then return; fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi! Đang mã hóa và đẩy vào $BACKUP_DIR... ---"
+    if tar -cz -C "$DATA_DIR" "$DB_FILE" | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] Cập nhật bản sao lưu THÀNH CÔNG. ---"
+    else
+        log "--- [BACKUP] LỖI trong quá trình sao lưu! ---"
+        rm -f "$TEMP_FILE"
+    fi
+}
+
+cleanup() {
+    log "!!! [SHUTDOWN] Đang backup lần cuối trước khi đóng Space... !!!"
+    backup_data
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+# Thực hiện Restore khi khởi động
+restore_data
+
+# Chạy Watcher ngầm quét thay đổi mỗi 60 giây
+(
+    while true; do
+        sleep 60
+        backup_data
+    done
+) &
+
+log "Đang khởi động Chhoto URL trên cổng $CHHOTO_PORT..."
+# Chạy binary của app (nằm ở root của image gốc)
+exec ./chhoto-url
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 5. Cấu hình thực thi
+USER 1000
+EXPOSE 7860
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/entrypoint.sh"]
