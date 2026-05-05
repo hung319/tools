@@ -22,7 +22,9 @@ ENV CHHOTO_PORT=7860 \
     BACKUP_FILENAME="chhoto_url_backup.enc" \
     BACKUP_PASS="123456" \
     CHHOTO_DB_URL=/app/urls.sqlite \
-    CHHOTO_SQLITE_USE_WAL_MODE=True
+    CHHOTO_SQLITE_USE_WAL_MODE=True \
+    password=TopSecretPass \
+    CHHOTO_SITE_URL=https://[username]-[spacename].hf.space
 
 # 3. Tạo thư mục và phân quyền cho User 1000 (User mặc định của HF)
 RUN mkdir -p /app /data && chown -R 1000:1000 /app /data
