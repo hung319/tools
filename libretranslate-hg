@@ -1,0 +1,65 @@
+FROM libretranslate/libretranslate:latest
+
+USER root
+
+# 1. Đồng bộ User ID 1000 để phù hợp với hạ tầng Hugging Face
+RUN usermod -u 1000 libretranslate && \
+    groupmod -g 1000 libretranslate && \
+    chown -R 1000:1000 /app /home/libretranslate
+
+# 2. Biến môi trường cấu hình
+ENV LT_PORT=7860
+ENV LT_HOST=0.0.0.0
+ENV LT_API_KEYS=true
+# Bạn có thể thay đổi Key này trong Settings > Variables của Space (Name: MY_CUSTOM_API_KEY)
+ENV MY_CUSTOM_API_KEY="my-secret-key-123"
+# Tải tất cả ngôn ngữ
+ENV LT_LOAD_ONLY="all"
+ENV LT_UPDATE_MODELS=true
+
+USER 1000
+
+# 3. Script khởi động: Cài đặt model và chèn Key tự động
+RUN echo '#!/bin/bash\n\
+export PATH="/app/venv/bin:$PATH"\n\
+\n\
+echo "--- ĐANG KIỂM TRA/KHỞI TẠO TẤT CẢ NGÔN NGỮ (FULL LANG) ---"\n\
+python scripts/install_models.py\n\
+\n\
+# Xóa DB cũ để đảm bảo khởi tạo cấu trúc mới nhất\n\
+rm -f db/api_keys.db\n\
+\n\
+# Tiến trình chạy ngầm để chèn API Key sau khi server tạo DB xong\n\
+( \n\
+  sleep 25\n\
+  python3 << EOF\n\
+import sqlite3\n\
+import os\n\
+db_path = "db/api_keys.db"\n\
+key = os.getenv("MY_CUSTOM_API_KEY", "my-secret-key-123")\n\
+if os.path.exists(db_path):\n\
+    conn = sqlite3.connect(db_path)\n\
+    cursor = conn.cursor()\n\
+    try:\n\
+        limit_val = 1000000000\n\
+        # Chèn key với hạn mức 1 tỷ request và 1 tỷ ký tự\n\
+        cursor.execute("INSERT OR REPLACE INTO api_keys (api_key, req_limit, char_limit) VALUES (?, ?, ?)", (key, limit_val, limit_val))\n\
+        conn.commit()\n\
+        print(f"\\n[SUCCESS] API KEY ĐÃ SẴN SÀNG: {key}\\n")\n\
+    except Exception as e:\n\
+        print(f"\\n[ERROR] Không thể chèn key: {e}\\n")\n\
+    finally:\n\
+        conn.close()\n\
+else:\n\
+    print("\\n[ERROR] Không tìm thấy file Database để chèn Key.\\n")\n\
+EOF\n\
+) &\n\
+\n\
+echo "--- HỆ THỐNG ĐANG BẮT ĐẦU KHỞI CHẠY ---"\n\
+libretranslate --host 0.0.0.0 --port 7860 --api-keys' > /app/run_with_key.sh
+
+RUN chmod +x /app/run_with_key.sh
+
+EXPOSE 7860
+
+ENTRYPOINT ["/bin/bash", "/app/run_with_key.sh"]
