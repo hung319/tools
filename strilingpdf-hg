@@ -1,0 +1,32 @@
+FROM frooodle/s-pdf:latest
+
+# Sử dụng quyền root để cài đặt và chạy
+USER root
+
+# Cài đặt rar/unrar và dọn dẹp cache để giảm dung lượng image
+RUN apt-get update && \
+    apt-get install -y rar unrar && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Các biến môi trường quan trọng
+ENV PORT=7860
+ENV SERVER_PORT=7860
+ENV DOCKER_ENABLE_SECURITY=true
+
+# VÔ HIỆU HÓA việc tự động chmod/chown của script init (để tránh lỗi Permission denied)
+ENV SET_CONTAINER_USER_ID=false
+ENV PUID=1000
+ENV PGID=1000
+
+# Cấu hình tài khoản (Thay đổi theo ý bạn)
+ENV SECURITY_INITIALLOGIN_USERNAME =admin
+ENV SECURITY_INITIALLOGIN_PASSWORD=mat_khau_moi_cua_ban
+
+# Hỗ trợ tiếng Việt cho OCR
+ENV INSTALL_VIETNAMESE=true
+
+# Phơi bày cổng
+EXPOSE 7860
+
+ENTRYPOINT ["tini", "--", "/scripts/init.sh"]
