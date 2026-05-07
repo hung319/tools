@@ -1,0 +1,14 @@
+# Sử dụng image chính thức từ tác giả
+FROM missuo/deeplx:latest
+
+# Hugging Face Spaces sử dụng cổng 7860 mặc định
+EXPOSE 7860
+
+# Thiết lập các biến môi trường
+# TOKEN: API Key của bạn (hãy thay đổi nó hoặc để trống nếu không cần)
+# PORT: Phải là 7860 để Hugging Face nhận diện được
+ENV PORT=7860
+ENV TOKEN=your_secret_token_here
+
+# Chạy ứng dụng
+CMD ["/app/deeplx"]
