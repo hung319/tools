@@ -1,97 +1,133 @@
-FROM debian:stable-slim
+# Sử dụng Debian Bullseye Slim để đảm bảo tính ổn định cho Node.js và Python
+FROM node:20-bullseye-slim
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+USER root
 
-ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
-    OPENCHAMBER_PORT=8080 \
-    OPENCHAMBER_HOST=0.0.0.0 \
-    NODE_ENV=production \
-    BACKUP_DIR="/data" \
-    BACKUP_FILENAME="backup_root.zip" \
-    BACKUP_PASS="123456"
-
-WORKDIR /root
-
-ARG DEBIAN_FRONTEND=noninteractive
-
+# 1. Cài đặt các công cụ hệ thống cần thiết
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
-        nodejs npm zip inotify-tools \
-    && uv python install 3.12 \
-    && npm install -g opencode-ai@latest @openchamber/web@latest \
-    && npm cache clean --force \
+        make g++ python3 tar openssl findutils \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mv /usr/local/bin/opencode /usr/local/bin/opencode-original \
-    && echo -e '#!/bin/bash\nrm -rf /root/.cache/opencode/package.json 2>/dev/null || true\nexec /usr/local/bin/opencode-original "$@"' > /usr/local/bin/opencode \
-    && chmod +x /usr/local/bin/opencode
+# 2. Cài đặt UV
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# Entrypoint: Sử dụng biến BACKUP_FILENAME linh hoạt
-RUN cat <<'EOF' > /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
+# 3. Cài đặt Opencode-AI và OpenChamber
+RUN npm install -g opencode-ai@latest @openchamber/web@latest \
+    && npm cache clean --force
+
+# 4. Cấu hình biến môi trường
+ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
+    OPENCHAMBER_PORT=7860 \
+    OPENCHAMBER_HOST=0.0.0.0 \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="chamber_secure_backup.enc" \
+    BACKUP_PASS="123456" \
+    NODE_ENV=production
+
+WORKDIR /root
+
+# 5. Script Entrypoint: Đã sửa lỗi xung đột PID / Port sau khi Restore
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -e
 
-# --- HÀM GIẢI NÉN (RESTORE) ---
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_PATH="/tmp/temp_chamber.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# --- HÀM PHỤC HỒI ---
 restore_data() {
-    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
-        echo "--- [RESTORE] Tìm thấy file $BACKUP_FILENAME. Đang phục hồi... ---"
-        unzip -oP "$BACKUP_PASS" "$BACKUP_DIR/$BACKUP_FILENAME" -d / > /dev/null 2>&1 || true
-        echo "--- [RESTORE] Phục hồi hoàn tất! ---"
+    if [ -f "$BACKUP_PATH" ]; then
+        log "--- [RESTORE] Đang giải mã dữ liệu từ $BACKUP_FILENAME... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
+            log "--- [RESTORE] Thành công! ---"
+            
+            # [QUAN TRỌNG] Xóa sạch file định danh tiến trình cũ để tránh lỗi "Already running"
+            log "--- [SỬA LỖI] Đang dọn dẹp file lock và PID cũ sau khi restore... ---"
+            rm -rf /root/.config/openchamber/pids/* 2>/dev/null || true
+            rm -rf /root/.local/share/openchamber/*.pid 2>/dev/null || true
+            fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
+        else
+            log "--- [RESTORE] Thất bại (Sai mật khẩu hoặc file lỗi) ---"
+        fi
     else
-        echo "--- [RESTORE] Không tìm thấy $BACKUP_FILENAME trong $BACKUP_DIR. ---"
+        log "--- [RESTORE] Không tìm thấy bản lưu cũ. Khởi tạo mới. ---"
     fi
 }
 
-# --- HÀM SAO LƯU (BACKUP) ---
+# --- HÀM SAO LƯU ---
 backup_data() {
-    if [ ! "$(ls -A /root)" ]; then return; fi
-    
-    echo "--- [BACKUP] Đang thực thi nén vào $BACKUP_FILENAME... ---"
+    if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
+
+    if [ -f "$BACKUP_PATH" ]; then
+        CHANGED=$(find /root -type f \
+            -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" \
+            -not -name "*.log" -not -name "*.pid" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED" ]; then return; fi
+    fi
+
+    log "--- [BACKUP] Đang đóng gói và mã hóa... ---"
     mkdir -p "$BACKUP_DIR"
     
-    # Nén tạm thời rồi chuyển vào volume
-    zip -qrP "$BACKUP_PASS" "/tmp/temp_backup.zip" /root \
-        -x "/root/.cache/*" "/root/.npm/*" "/root/.uv/*" "/root/.local/share/opencode/log/*" "*.log" 2>/dev/null || true
+    # Nén loại trừ thêm các file đuôi .pid và thư mục chứa pid tạm thời
+    if tar -cz -C / \
+        --exclude='root/.cache' \
+        --exclude='root/.npm' \
+        --exclude='root/.uv' \
+        --exclude='*.log' \
+        --exclude='*.pid' \
+        --exclude='root/.config/openchamber/pids' \
+        root | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         
-    if [ -f "/tmp/temp_backup.zip" ]; then
-        mv "/tmp/temp_backup.zip" "$BACKUP_DIR/$BACKUP_FILENAME"
-        echo "--- [BACKUP] Đã cập nhật: $BACKUP_DIR/$BACKUP_FILENAME ($(date)) ---"
+        mv "$TEMP_PATH" "$BACKUP_PATH"
+        log "--- [BACKUP] Đã cập nhật bản lưu mã hóa lúc $(date) ---"
+    else
+        log "--- [BACKUP] Lỗi trong quá trình nén/mã hóa! ---"
+        rm -f "$TEMP_PATH"
     fi
 }
 
 cleanup() {
-    echo "!!! [STOP] Đang thực hiện backup cuối cùng trước khi đóng... !!!"
+    log "!!! [STOP] Đang thực hiện backup cuối cùng... !!!"
     backup_data
-    [ -n "$CHILD_PID" ] && kill -TERM "$CHILD_PID"
+    [ -n "$APP_PID" ] && kill -TERM "$APP_PID"
     exit 0
 }
 
 trap cleanup SIGTERM SIGINT
 
-# Thực hiện quy trình
+# Chạy quy trình khởi động
 restore_data
 backup_data
 
+# Watcher chạy ngầm mỗi 2 phút
 (
     while true; do
-        inotifywait -r -e modify,create,delete,move -t 60 \
-            --excludei '(/\.cache|/\.npm|/\.uv|/log/|\.log$)' /root 2>/dev/null || true
-        sleep 5
+        sleep 120
         backup_data
     done
 ) &
 
-echo "Đang khởi động OpenChamber..."
+log "Khởi động OpenChamber trên cổng ${OPENCHAMBER_PORT}..."
+# Thêm lệnh giải phóng port bằng fuser trước khi chạy để chắc chắn 100%
+fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
+
 openchamber serve \
     --port "${OPENCHAMBER_PORT}" \
     --host "${OPENCHAMBER_HOST}" \
     --foreground \
     ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"} &
 
-CHILD_PID=$!
-wait "$CHILD_PID"
+APP_PID=$!
+wait "$APP_PID"
 EOF
 
-EXPOSE 8080
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 6. Port mặc định
+EXPOSE 7860
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
