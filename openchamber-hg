@@ -10,12 +10,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Cài đặt UV
+# 2. Cài đặt UV (Trình quản lý gói Python tốc độ cao)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# ========================================================
+# TỰ ĐỘNG BUST CACHE BẰNG THỜI GIAN (BẤM RESTART LÀ ĐỔI)
+# ========================================================
+# Lệnh date chạy mỗi khi bấm Rebuild/Restart sẽ sinh ra chuỗi thời gian mới.
+# Docker thấy câu lệnh này trả về kết quả khác nhau sẽ tự động vô hiệu hóa cache từ đây.
+RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
+
 # 3. Cài đặt Opencode-AI và OpenChamber
-RUN npm install -g opencode-ai@latest @openchamber/web@latest \
-    && npm cache clean --force
+# Thêm --loglevel=error để ẩn hoàn toàn các cảnh báo warn/notice râu ria của npm
+RUN npm install -g --prefer-online --loglevel=error opencode-ai@latest @openchamber/web@latest
 
 # 4. Cấu hình biến môi trường
 ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
@@ -28,7 +35,7 @@ ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
 
 WORKDIR /root
 
-# 5. Script Entrypoint: Đã sửa lỗi xung đột PID / Port sau khi Restore
+# 5. Script Entrypoint: Tự động Restore, Watcher Backup ngầm và Sửa lỗi PID chiếm dụng cổng
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -e
@@ -42,10 +49,11 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 restore_data() {
     if [ -f "$BACKUP_PATH" ]; then
         log "--- [RESTORE] Đang giải mã dữ liệu từ $BACKUP_FILENAME... ---"
+        # Giải mã bằng AES-256-CBC (PBKDF2) và bung tar trực tiếp vào hệ thống
         if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
             log "--- [RESTORE] Thành công! ---"
             
-            # [QUAN TRỌNG] Xóa sạch file định danh tiến trình cũ để tránh lỗi "Already running"
+            # Xóa sạch file định danh tiến trình cũ để tránh lỗi "Already running" do tar đè vào
             log "--- [SỬA LỖI] Đang dọn dẹp file lock và PID cũ sau khi restore... ---"
             rm -rf /root/.config/openchamber/pids/* 2>/dev/null || true
             rm -rf /root/.local/share/openchamber/*.pid 2>/dev/null || true
@@ -60,8 +68,10 @@ restore_data() {
 
 # --- HÀM SAO LƯU ---
 backup_data() {
+    # Tránh nén đè file trống nếu thư mục root chưa có dữ liệu gì
     if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
 
+    # Chỉ chạy nén và mã hóa nếu phát hiện có sự thay đổi thực sự trong file hệ thống
     if [ -f "$BACKUP_PATH" ]; then
         CHANGED=$(find /root -type f \
             -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" \
@@ -72,7 +82,7 @@ backup_data() {
     log "--- [BACKUP] Đang đóng gói và mã hóa... ---"
     mkdir -p "$BACKUP_DIR"
     
-    # Nén loại trừ thêm các file đuôi .pid và thư mục chứa pid tạm thời
+    # Gom thư mục /root, loại trừ thư mục cache rác và các file .pid tạm thời
     if tar -cz -C / \
         --exclude='root/.cache' \
         --exclude='root/.npm' \
@@ -91,7 +101,7 @@ backup_data() {
 }
 
 cleanup() {
-    log "!!! [STOP] Đang thực hiện backup cuối cùng... !!!"
+    log "!!! [STOP] Đang thực hiện backup cuối cùng trước khi đóng... !!!"
     backup_data
     [ -n "$APP_PID" ] && kill -TERM "$APP_PID"
     exit 0
@@ -99,11 +109,11 @@ cleanup() {
 
 trap cleanup SIGTERM SIGINT
 
-# Chạy quy trình khởi động
+# Thực hiện quy trình khi khởi chạy container
 restore_data
 backup_data
 
-# Watcher chạy ngầm mỗi 2 phút
+# Tiến trình Watcher quét dữ liệu ngầm mỗi 120 giây
 (
     while true; do
         sleep 120
@@ -112,7 +122,7 @@ backup_data
 ) &
 
 log "Khởi động OpenChamber trên cổng ${OPENCHAMBER_PORT}..."
-# Thêm lệnh giải phóng port bằng fuser trước khi chạy để chắc chắn 100%
+# Đảm bảo cổng chạy hoàn toàn trống trước khi mở ứng dụng
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
 openchamber serve \
@@ -127,7 +137,7 @@ EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 6. Port mặc định
+# 6. Mở cổng mạng mặc định
 EXPOSE 7860
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
