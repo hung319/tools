@@ -1,0 +1,107 @@
+FROM lscr.io/linuxserver/jackett:latest
+
+USER root
+
+ENV PORT=7860 \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="jackett_backup.enc" \
+    BACKUP_PASS="123456"
+
+RUN apk add --no-cache tini bash openssl findutils tar
+
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_backup.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# --- HÀM PHỤC HỒI (RESTORE) ---
+restore_data() {
+    log "--- [RESTORE] Kiểm tra bản lưu tại $BACKUP_FILE ---"
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] Đang giải mã và phục hồi cấu hình /config của Jackett... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+            log "--- [RESTORE] THÀNH CÔNG! ---"
+        else
+            log "--- [RESTORE] LỖI: Không thể giải mã hoặc giải nén dữ liệu cũ. ---"
+        fi
+    else
+        log "--- [RESTORE] Không tìm thấy dữ liệu cũ. Khởi tạo phiên làm việc mới. ---"
+    fi
+}
+
+# --- HÀM SAO LƯU (BACKUP) ---
+backup_data() {
+    if [ ! "$(ls -A /config 2>/dev/null)" ]; then return; fi
+
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED_FILES=$(find /config -type f \
+            -not -path "*/jackett/Data/Logs/*" \
+            -not -path "*/Logs/*" \
+            -not -name "*.log" \
+            -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        
+        if [ -z "$CHANGED_FILES" ]; then return; fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi cấu hình tracker! Đang đóng gói... ---"
+    
+    if tar -cz -C / \
+        --exclude='config/jackett/Data/Logs' \
+        --exclude='config/Logs' \
+        --exclude='*.log' \
+        config | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        
+        mkdir -p "$BACKUP_DIR"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] HOÀN TẤT: $BACKUP_FILENAME ---"
+    else
+        log "--- [BACKUP] LỖI: Sao lưu thất bại! ---"
+        rm -f "$TEMP_FILE"
+    fi
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Đang tiến hành sao lưu cấu hình an toàn lần cuối... !!!"
+    kill $WATCHER_PID 2>/dev/null || true
+    backup_data
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+restore_data
+backup_data
+
+# Khởi chạy Watcher ngầm quét I/O đổi mới mỗi 60 giây
+(
+    while true; do
+        sleep 60
+        backup_data
+    done
+) &
+WATCHER_PID=$!
+
+# --- SỬA LỖI TEMP DIR TẠI ĐÂY ---
+# Khởi tạo thư mục tạm theo đúng biến môi trường TMPDIR của LinuxServer
+mkdir -p /run/jackett-temp
+
+log "Khởi động Jackett Engine (LinuxServer Binary) trên Port: ${PORT}..."
+
+chmod +x /app/Jackett/jackett
+/app/Jackett/jackett --NoUpdates --Port "${PORT}" -x &
+APP_PID=$!
+
+wait "$APP_PID" || true
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 7860
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/entrypoint.sh"]
