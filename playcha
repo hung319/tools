@@ -1,0 +1,28 @@
+# Sử dụng trực tiếp image đã được tối ưu dung lượng và đóng gói sẵn từ tác giả
+FROM ghcr.io/mjlescano/playcha:latest
+
+# Chuyển sang quyền root để cấu hình lại hệ thống cho Hugging Face
+USER root
+
+# Định nghĩa các biến môi trường mới cho Hugging Face Spaces
+ENV PORT=7860
+ENV HOST=0.0.0.0
+ENV HOME=/opt/playcha
+
+# Thay đổi cấu hình của user 'playcha' có sẵn trong image gốc thành UID 1000 (Chuẩn HF)
+# Đồng thời cấp lại quyền sở hữu các thư mục cho user này
+RUN usermod -u 1000 playcha && \
+    groupmod -g 1000 playcha && \
+    chown -R playcha:playcha /opt/playcha /opt/camoufox
+
+# Chuyển sang quyền user playcha (lúc này đã mang UID 1000)
+USER playcha
+
+# Mở cổng 7860 thay vì cổng mặc định 8191
+EXPOSE 7860
+
+# Giữ nguyên ENTRYPOINT gốc của tác giả (sử dụng dumb-init để quản lý tiến trình)
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+
+# Override câu lệnh khởi chạy để trỏ đúng port 7860
+CMD ["/opt/playcha/playcha"]
