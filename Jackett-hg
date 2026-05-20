@@ -7,7 +7,8 @@ ENV PORT=7860 \
     BACKUP_FILENAME="jackett_backup.enc" \
     BACKUP_PASS="123456"
 
-RUN apk add --no-cache tini bash openssl findutils tar
+# Cài đặt thêm su-exec (công cụ hạ quyền chạy lệnh cực nhẹ của Alpine)
+RUN apk add --no-cache tini bash openssl findutils tar su-exec
 
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
@@ -88,14 +89,17 @@ backup_data
 ) &
 WATCHER_PID=$!
 
-# --- SỬA LỖI TEMP DIR TẠI ĐÂY ---
-# Khởi tạo thư mục tạm theo đúng biến môi trường TMPDIR của LinuxServer
-mkdir -p /run/jackett-temp
+# Khởi tạo thư mục tạm và đồng bộ phân quyền cho user abc (UID/GID 1000) của LinuxServer
+mkdir -p /run/jackett-temp /config
+chown -R 1000:1000 /run/jackett-temp /config /app/Jackett
 
-log "Khởi động Jackett Engine (LinuxServer Binary) trên Port: ${PORT}..."
+log "Khởi động Jackett Engine (Hạ quyền xuống user abc) trên Port: ${PORT}..."
 
 chmod +x /app/Jackett/jackett
-/app/Jackett/jackett --NoUpdates --Port "${PORT}" -x &
+
+# --- SỬ SỬA ĐỔI CHÍNH Ở ĐÂY ---
+# Sử dụng su-exec để ép tiến trình Jackett chạy bằng user abc (1000:1000)
+su-exec 1000:1000 /app/Jackett/jackett --NoUpdates --Port "${PORT}" -x &
 APP_PID=$!
 
 wait "$APP_PID" || true
