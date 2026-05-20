@@ -1,5 +1,67 @@
-FROM ghcr.io/thephaseless/byparr:latest
+# Sử dụng Python image chính thức gọn nhẹ dựa trên nền Debian Bookworm
+FROM python:3.11-slim-bookworm
 
+# Thiết lập chế độ cài đặt không tương tác để tránh bị treo dòng lệnh
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Sử dụng quyền ROOT tạm thời để cài đặt các gói hệ thống bắt buộc
+USER root
+
+# Cập nhật và cài đặt các thư viện lõi cần thiết để chạy trình duyệt Headless (Firefox/Camoufox)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgtk-3-0 \
+    libasound2 \
+    libdbus-1-3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libxtst6 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libfontconfig1 \
+    libnss3 \
+    libnspr4 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Sao chép trình quản lý gói uv từ image chính thức
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Thiết lập thư mục làm việc trong container
+WORKDIR /app
+
+# Tạo user mới theo quy định bảo mật nghiêm ngặt của Hugging Face
+RUN useradd -m -u 1000 user
+
+# Đảm bảo quyền sở hữu tuyệt đối của thư mục làm việc thuộc về user 1000
+RUN chown -R user:user /app
+
+# CHUYỂN SANG QUYỀN USER THƯỜNG (Hugging Face yêu cầu)
+USER user
+ENV HOME=/home/user \
+    PATH="/home/user/.local/bin:$PATH"
+
+# Tải mã nguồn Byparr từ GitHub trực tiếp vào thư mục /tmp
+ADD --chown=user:user https://github.com/ThePhaseless/Byparr/archive/refs/heads/main.tar.gz /tmp/byparr.tar.gz
+
+# Giải nén mã nguồn vào thư mục làm việc
+RUN tar -xzf /tmp/byparr.tar.gz --strip-components=1 -C /app && rm /tmp/byparr.tar.gz
+
+# --- ĐOẠN SỬA LỖI HEALTH CHECK CHO HUGGING FACE ---
+RUN sed -i '/app = FastAPI/a \\n@app.get("/")\ndef health_check():\n    return {"status": "healthy"}' main.py
+
+# Cài đặt các thư viện phụ thuộc bằng uv
+RUN uv sync
+
+# Ép Byparr chạy ở cổng 7860 để tương thích với Hugging Face Spaces
+ENV HOST=0.0.0.0
 ENV PORT=7860
 
+# Khai báo cổng hiển thị
 EXPOSE 7860
+
+# Lệnh khởi chạy ứng dụng thông qua uv
+CMD ["uv", "run", "main.py"]
