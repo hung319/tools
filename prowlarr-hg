@@ -14,7 +14,7 @@ RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
 # 2. Cấu hình biến môi trường
 ENV PORT_CHAMBER=7860 \
     BACKUP_DIR="/data" \
-    BACKUP_FILENAME="prowlarr_secure_backup.enc" \
+    BACKUP_FILENAME="prowlarr_backup.enc" \
     BACKUP_PASS="123456"
 
 # 3. Tạo script bằng tính năng [custom-init] CHÍNH CHỦ của Linuxserver
