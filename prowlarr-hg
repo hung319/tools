@@ -1,0 +1,101 @@
+# Sử dụng base image Alpine của Linuxserver Prowlarr
+FROM docker.io/linuxserver/prowlarr:latest
+
+USER root
+
+# 1. Cài đặt công cụ bổ sung cho script sync (Dùng apk cho Alpine)
+RUN apk update && apk add --no-cache psmisc bash openssl && rm -rf /var/cache/apk/*
+
+# ========================================================
+# TỰ ĐỘNG BUST CACHE BẰNG THỜI GIAN (BẤM RESTART LÀ ĐỔI)
+# ========================================================
+RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
+
+# 2. Cấu hình biến môi trường
+ENV PORT_CHAMBER=7860 \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="prowlarr_secure_backup.enc" \
+    BACKUP_PASS="123456"
+
+# 3. Tạo script bằng tính năng [custom-init] CHÍNH CHỦ của Linuxserver
+RUN mkdir -p /custom-cont-init.d && cat <<'EOF' > /custom-cont-init.d/prowlarr-sync.sh
+#!/bin/bash
+
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_PATH="/tmp/temp_prowlarr.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SYNC] $1"; }
+
+# --- HÀM PHỤC HỒI ---
+if [ -f "$BACKUP_PATH" ]; then
+    log "Phát hiện file backup cũ. Đang tiến hành phục hồi dữ liệu từ $BACKUP_FILENAME..."
+    if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
+        log "Phục hồi dữ liệu thành công!"
+    else
+        log "Phục hồi thất bại (Mật khẩu sai hoặc file mã hóa bị lỗi)."
+    fi
+else
+    log "Không tìm thấy dữ liệu cũ trong vùng /data. Khởi tạo cấu hình mặc định."
+fi
+
+# --- ÉP PORT 7860 VÀ ĐỔI LOG LEVEL THÀNH WARN (DISABLE INFO LOG) ---
+mkdir -p /config
+if [ ! -f /config/config.xml ]; then
+    # Thay đổi LogLevel từ info -> warn ở file cấu hình tạo mới
+    echo "<Config><Port>${PORT_CHAMBER}</Port><UrlBase></UrlBase><LogLevel>warn</LogLevel><AuthenticationMethod>None</AuthenticationMethod></Config>" > /config/config.xml
+else
+    # Nếu file đã tồn tại, dùng sed để ép Port và sửa LogLevel thành warn
+    sed -i "s|<Port>.*</Port>|<Port>${PORT_CHAMBER}</Port>|g" /config/config.xml
+    sed -i "s|<LogLevel>.*</LogLevel>|<LogLevel>warn</LogLevel>|g" /config/config.xml
+fi
+
+# VÁ LỖI PHÂN QUYỀN CHÍ MẠNG:
+# Ép lại toàn bộ quyền sở hữu thư mục /config cho user 'abc' (uid: 911, gid: 911)
+chown -R 911:911 /config
+
+# --- TẠO TIẾN TRÌNH WATCHER SAO LƯU NGẦM (CHẠY ĐỘC LẬP) ---
+cat << 'INNER_EOF' > /tmp/watcher.sh
+#!/bin/bash
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_PATH="/tmp/temp_prowlarr.enc"
+log_watch() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WATCHER] $1"; }
+
+do_backup() {
+    if [ ! "$(ls -A /config 2>/dev/null)" ]; then return; fi
+    if [ -f "$BACKUP_PATH" ]; then
+        CHANGED=$(find /config -type f ! -name "*.log" ! -name "*.pid" ! -name "*.db-journal" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED" ]; then return; fi
+    fi
+
+    log_watch "Phát hiện thay đổi cấu hình, đang đóng gói mã hóa..."
+    mkdir -p "$BACKUP_DIR"
+    if tar -cz -C / --exclude='config/*.log' --exclude='config/*.pid' --exclude='config/*.db-journal' config | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+        mv "$TEMP_PATH" "$BACKUP_PATH"
+        log_watch "Cập nhật bản sao lưu mã hóa lên /data thành công."
+    else
+        rm -f "$TEMP_PATH"
+    fi
+}
+
+while true; do
+    sleep 120
+    do_backup
+done
+INNER_EOF
+
+# Làm sạch định dạng dòng và cấp quyền cho watcher ngầm
+sed -i 's/\r$//' /tmp/watcher.sh
+chmod +x /tmp/watcher.sh
+/tmp/watcher.sh &
+
+EOF
+
+# Cấp quyền chạy và gột sạch ký tự xuống dòng Windows cho file init chính
+RUN sed -i 's/\r$//' /custom-cont-init.d/prowlarr-sync.sh && \
+    chmod +x /custom-cont-init.d/prowlarr-sync.sh
+
+# 4. Mở cổng mạng mặc định
+EXPOSE 7860
+
+# Trả lại quyền chạy khởi động PID 1 mặc định cho Image gốc
+ENTRYPOINT ["/init"]
