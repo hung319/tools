@@ -22,7 +22,8 @@ ENV PORT=7860 \
     BACKUP_FILENAME="zoraxy_backup.enc" \
     BACKUP_PASS="123456"
 
-RUN mkdir -p /app/sys1 /app/sys2 /data && chown -R 1000:1000 /app /data WORKDIR /app
+RUN mkdir -p /app/sys1 /app/sys2 /data && chown -R 1000:1000 /app /data
+WORKDIR /app
 
 COPY --from=fetcher --chown=1000:1000 /downloads/z_bin /app/sys1/srv_a
 COPY --from=fetcher --chown=1000:1000 /downloads/c_bin /app/sys2/srv_b
