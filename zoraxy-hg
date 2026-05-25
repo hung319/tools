@@ -22,7 +22,7 @@ ENV PORT=7860 \
     BACKUP_FILENAME="zoraxy_backup.enc" \
     BACKUP_PASS="123456"
 
-RUN mkdir -p /app/sys1 /app/sys2 /data && chown -R 1000:1000 /app /data
+RUN mkdir -p /app/sys1 /app/sys2 /app/data /data && chown -R 1000:1000 /app /data
 WORKDIR /app
 
 COPY --from=fetcher --chown=1000:1000 /downloads/z_bin /app/sys1/srv_a
@@ -52,38 +52,22 @@ restore_data() {
 }
 
 backup_data() {
-    if [ ! -f "/app/zoraxy.db" ] && [ ! -d "/app/config" ]; then return; fi
+    if [ ! -f "/app/sys.db" ] && [ ! -d "/app/data" ] && [ ! -f "/app/zoraxy.db" ]; then return; fi
 
     if [ -f "$BACKUP_FILE" ]; then
-        CHANGED_FILES=$(find /app -type f \
-            -not -path "/app/sys1/*" \
-            -not -path "/app/sys2/*" \
-            -not -name "entrypoint.sh" \
-            -not -name "*.log" \
-            -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
-        
+        CHANGED_FILES=$(find /app -type f -not -path "/app/sys1/*" -not -path "/app/sys2/*" -not -name "entrypoint.sh" -not -name "*.log" -newer "$BACKUP_FILE" -print -quit 2>/dev/null || true)
         if [ -z "$CHANGED_FILES" ]; then return; fi
     fi
 
-    log "--- [BACKUP] Phát hiện thay đổi cấu hình! Đang đóng gói... ---"
+    log "--- [BACKUP] Phát hiện thay đổi cấu hình! Đang tiến hành đóng gói... ---"
     
-    if tar -cz -C / \
-        --exclude='app/sys1' \
-        --exclude='app/sys2' \
-        --exclude='app/entrypoint.sh' \
-        --exclude='*.log' \
-        app/zoraxy.db app/config 2>/dev/null || tar -cz -C / --exclude='app/sys1' --exclude='app/sys2' --exclude='app/entrypoint.sh' --exclude='*.log' app; then
-        
-        if tar -cz -C / --exclude='app/sys1' --exclude='app/sys2' --exclude='app/entrypoint.sh' --exclude='*.log' app | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
-            mkdir -p "$BACKUP_DIR"
-            mv "$TEMP_FILE" "$BACKUP_FILE"
-            log "--- [BACKUP] HOÀN TẤT: $BACKUP_FILENAME ---"
-        else
-            log "--- [BACKUP] LỖI: Mã hóa thất bại! ---"
-            rm -f "$TEMP_FILE"
-        fi
+    if tar -cz -C / --exclude='app/sys1' --exclude='app/sys2' --exclude='app/entrypoint.sh' --exclude='*.log' app | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        mkdir -p "$BACKUP_DIR"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] HOÀN TẤT SAO LƯU: $BACKUP_FILENAME ---"
     else
-        log "--- [BACKUP] LỖI: Đóng gói thất bại! ---"
+        log "--- [BACKUP] LỖI: Mã hóa hoặc đóng gói thất bại! ---"
+        rm -f "$TEMP_FILE"
     fi
 }
 
@@ -98,6 +82,8 @@ cleanup() {
 }
 
 trap 'cleanup' TERM INT QUIT
+
+mkdir -p /app/data "$BACKUP_DIR"
 
 restore_data
 backup_data
@@ -117,7 +103,7 @@ if [ ! -z "$TUNNEL_TOKEN" ]; then
 fi
 
 log "Khởi động Zoraxy trên Port: ${PORT}..."
-/app/sys1/srv_a -port=:"${PORT}" -docker &
+/app/sys1/srv_a -port=:"${PORT}" -docker -default_inbound_port=8443 &
 APP_PID=$!
 
 wait "$APP_PID" || true
