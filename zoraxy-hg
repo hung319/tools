@@ -103,7 +103,7 @@ if [ ! -z "$TUNNEL_TOKEN" ]; then
 fi
 
 log "Khởi động Zoraxy trên Port: ${PORT}..."
-/app/sys1/srv_a -port=:"${PORT}" -docker -default_inbound_port=8443 &
+/app/sys1/srv_a -port=:"${PORT}" -docker -default_inbound_port=80 &
 APP_PID=$!
 
 wait "$APP_PID" || true
