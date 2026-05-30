@@ -1,0 +1,214 @@
+# Giai đoạn 1: Lấy tài nguyên đã build chuẩn của LibreChat
+FROM ghcr.io/danny-avila/librechat-dev:latest AS librechat_source
+
+# Giai đoạn 2: Sử dụng nền tảng Debian Bullseye Slim ổn định
+FROM node:20-bullseye-slim
+
+USER root
+
+# 1. Cài đặt các công cụ hệ thống thiết yếu và MongoDB 7.0 chính thức kèm các công cụ dump dữ liệu
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git ssh build-essential tini procps unzip psmisc \
+        make g++ python3 tar openssl findutils gnupg \
+    && curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg \
+    && echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] http://repo.mongodb.org/apt/debian bullseye/mongodb-org/7.0 main" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list \
+    && apt-get update && apt-get install -y mongodb-org-server mongodb-org-tools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Cài đặt UV (Trình quản lý gói Python tốc độ cao cho MCP/Agents)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# Tự động hủy cache build khi bấm Restart Space
+RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
+
+# 3. Tạo các thư mục hệ thống và đồng bộ mã nguồn LibreChat vào container
+RUN mkdir -p /app /app/mongodb_data /var/log/mongodb /tmp/db_dump /data
+COPY --from=librechat_source /app /app
+
+# 4. KHAI BÁO BIẾN MÔI TRƯỜNG TRỰC TIẾP QUA "ENV" CỦA DOCKER
+ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
+    HOST=0.0.0.0 \
+    PORT=7860 \
+    NODE_ENV=production \
+    ALLOW_REGISTRATION=true \
+    MONGO_URI="mongodb://127.0.0.1:27017/LibreChat" \
+    JWT_SECRET="16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef" \
+    JWT_REFRESH_SECRET="eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418" \
+    MONGO_DATA_DIR="/app/mongodb_data" \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="librechat_backup.enc" \
+    BACKUP_PASS="ChamberPass2026"
+
+WORKDIR /app
+
+# 5. Tạo Script Entrypoint
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+log "--- [CONFIG] Dọn dẹp tệp tin .env cũ để ép hệ thống dùng ENV Docker ---"
+rm -f /app/.env /app/.env.* /app/api/.env /app/api/server/.env
+
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_PATH="/tmp/temp_librechat.enc"
+DUMP_DIR="/tmp/db_dump"
+HASH_FILE="/tmp/last_db_hash.md5"
+EXTRACT_DIR="/tmp/extracted_backup"
+
+# Hàm khôi phục dữ liệu cốt lõi
+restore_pre_start() {
+    if [ -f "$BACKUP_PATH" ]; then
+        log "--- [RESTORE] Phát hiện bản lưu tại $BACKUP_DIR. Đang tiến hành giải mã... ---"
+        rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
+        
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C "$EXTRACT_DIR" 2>/dev/null; then
+            log "--- [RESTORE] Giải mã thành công. Chuẩn bị nạp dữ liệu... ---"
+            
+            # 1. Khôi phục thư mục dữ liệu thô MongoDB
+            if [ -d "$EXTRACT_DIR$MONGO_DATA_DIR" ]; then
+                log "[RESTORE] Ghi đè thư mục dữ liệu thô MongoDB..."
+                rm -rf "$MONGO_DATA_DIR"/*
+                cp -r "$EXTRACT_DIR$MONGO_DATA_DIR"/* "$MONGO_DATA_DIR"/ 2>/dev/null || true
+                
+                # Xóa các file lock tồn dư
+                rm -f "$MONGO_DATA_DIR/mongod.lock" "$MONGO_DATA_DIR/WiredTiger.lock" 2>/dev/null || true
+                
+                log "[RESTORE] Thực hiện sửa chữa ngầm dữ liệu thô (mongod --repair)..."
+                mongod --dbpath "$MONGO_DATA_DIR" --repair >/dev/null 2>&1 || log "⚠️ Cảnh báo nhẹ khi sửa chữa dữ liệu thô (Bỏ qua)."
+            fi
+            
+            # 2. Khôi phục các thư mục chứa File Upload của người dùng
+            log "[RESTORE] Khôi phục các tệp tin upload cá nhân..."
+            if [ -d "$EXTRACT_DIR/app/client/public/images" ]; then
+                mkdir -p /app/client/public/images
+                cp -r "$EXTRACT_DIR/app/client/public/images"/* /app/client/public/images/ 2>/dev/null || true
+            fi
+            if [ -d "$EXTRACT_DIR/app/uploads" ]; then
+                mkdir -p /app/uploads
+                cp -r "$EXTRACT_DIR/app/uploads"/* /app/uploads/ 2>/dev/null || true
+            fi
+            
+            HAS_RESTORE_DUMP=true
+        else
+            log "--- [RESTORE] Thất bại khi giải mã file backup ---"
+            HAS_RESTORE_DUMP=false
+        fi
+    else
+        log "--- [RESTORE] Không tìm thấy bản lưu cũ trong $BACKUP_DIR. Khởi tạo phiên làm việc mới. ---"
+        HAS_RESTORE_DUMP=false
+    fi
+}
+
+# Hàm nạp bổ sung dữ liệu dump
+restore_post_start() {
+    if [ "$HAS_RESTORE_DUMP" = true ] && [ -d "$EXTRACT_DIR/tmp/db_dump" ]; then
+        log "[RESTORE] Tiến hành mongorestore nạp lại dữ liệu bổ sung..."
+        mongorestore --host 127.0.0.1:27017 --dir "$EXTRACT_DIR/tmp/db_dump" --drop --quiet || log "⚠️ Cảnh báo từ mongorestore (bỏ qua)."
+    fi
+    
+    # Dọn dẹp rác tạm sau khi hoàn tất
+    rm -rf "$EXTRACT_DIR"
+    rm -f "$MONGO_DATA_DIR/mongod.lock" "$MONGO_DATA_DIR/WiredTiger.lock" 2>/dev/null || true
+    
+    rm -rf "$DUMP_DIR" && mkdir -p "$DUMP_DIR"
+    if mongodump --host 127.0.0.1:27017 --out "$DUMP_DIR" --quiet 2>/dev/null; then
+        find "$DUMP_DIR" -type f -print0 | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}' > "$HASH_FILE" || true
+    fi
+    log "--- [RESTORE] Hoàn tất toàn bộ quy trình khôi phục hệ thống! ---"
+}
+
+# Hàm đóng gói CHỈ CHỌN các thư mục dữ liệu quan trọng
+backup_data() {
+    local force_run=$1
+
+    rm -rf "$DUMP_DIR" && mkdir -p "$DUMP_DIR"
+    if ! mongodump --host 127.0.0.1:27017 --out "$DUMP_DIR" --quiet 2>/dev/null; then
+        return
+    fi
+
+    local current_hash=""
+    current_hash=$(find "$DUMP_DIR" -type f -print0 | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}')
+
+    if [ "$force_run" != "force" ] && [ -f "$HASH_FILE" ]; then
+        local last_hash=""
+        last_hash=$(cat "$HASH_FILE")
+        if [ "$current_hash" = "$last_hash" ] && [ -f "$BACKUP_PATH" ]; then
+            return
+        fi
+    fi
+
+    log "--- [BACKUP] Phát hiện có thay đổi! Đang thực hiện sao lưu dữ liệu tinh gọn... ---"
+    
+    # Khóa DB để đóng gói an toàn
+    mongosh --eval "db.fsyncLock()" --quiet 2>/dev/null || mongosh --port 27017 --eval "db.fsyncLock()" --quiet 2>/dev/null || true
+
+    mkdir -p "$BACKUP_DIR"
+    
+    local targets=""
+    [ -d "/app/mongodb_data" ] && targets="$targets app/mongodb_data"
+    [ -d "/app/client/public/images" ] && targets="$targets app/client/public/images"
+    [ -d "/app/uploads" ] && targets="$targets app/uploads"
+    [ -d "/tmp/db_dump" ] && targets="$targets tmp/db_dump"
+
+    if tar -cz -C / $targets 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH" 2>/dev/null; then
+        # Mở khóa DB
+        mongosh --eval "db.fsyncUnlock()" --quiet 2>/dev/null || mongosh --port 27017 --eval "db.fsyncUnlock()" --quiet 2>/dev/null || true
+
+        mv "$TEMP_PATH" "$BACKUP_PATH"
+        echo "$current_hash" > "$HASH_FILE"
+        log "--- [BACKUP] Cập nhật bản sao lưu THÀNH CÔNG tại $BACKUP_PATH ---"
+    else
+        mongosh --eval "db.fsyncUnlock()" --quiet 2>/dev/null || mongosh --port 27017 --eval "db.fsyncUnlock()" --quiet 2>/dev/null || true
+        rm -f "$TEMP_PATH"
+        log "--- [BACKUP] Đóng gói thất bại! ---"
+    fi
+}
+
+cleanup() {
+    log "!!! [STOP] Nhận tín hiệu tắt từ Space. Tiến hành sao lưu khẩn cấp dữ liệu tinh gọn... !!!"
+    backup_data "force"
+    [ -n "$LIBRE_PID" ] && kill -TERM "$LIBRE_PID"
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+log "Đang giải phóng cổng kết nối mạng ${PORT}..."
+fuser -k "${PORT}/tcp" 2>/dev/null || true
+
+# Bước 1: Chuẩn bị data trước khi khởi động DB
+restore_pre_start
+
+# Bước 2: Bật instance Database duy nhất lên
+log "Khởi động máy chủ cơ sở dữ liệu MongoDB chính thức..."
+rm -f "$MONGO_DATA_DIR/mongod.lock" "$MONGO_DATA_DIR/WiredTiger.lock" 2>/dev/null || true
+mongod --dbpath "$MONGO_DATA_DIR" --bind_ip 127.0.0.1 --fork --logpath /var/log/mongodb/mongod.log
+sleep 3
+
+# Bước 3: Đồng bộ nốt dữ liệu từ mongorestore vào DB vừa bật
+restore_post_start
+
+# Watcher sao lưu tự động định kỳ 120 giây
+(
+    while true; do
+        sleep 120
+        backup_data "check"
+    done
+) &
+
+log "Khởi chạy máy chủ ứng dụng LibreChat qua npm backend..."
+npm run backend &
+
+LIBRE_PID=$!
+wait "$LIBRE_PID"
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 6. Mở cổng kết nối
+EXPOSE 7860
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
