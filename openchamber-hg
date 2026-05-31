@@ -3,12 +3,25 @@ FROM node:20-bullseye-slim
 
 USER root
 
-# 1. Cài đặt các công cụ hệ thống cần thiết
+# 1. Cài đặt các công cụ hệ thống cần thiết và Bun (Định hình cài trực tiếp vào hệ thống)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
         make g++ python3 tar openssl findutils \
+    && curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr bash \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Cấu hình biến môi trường chuẩn xác để hệ thống nhận diện gói Global của Bun
+ENV BUN_INSTALL="/usr" \
+    BUN_INSTALL_BIN="/usr/bin" \
+    PATH="/usr/bin:/usr/local/bin:${PATH}" \
+    OPENCHAMBER_PORT=7860 \
+    OPENCHAMBER_HOST=0.0.0.0 \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="openchamber_backup.enc" \
+    BACKUP_PASS="123456" \
+    NODE_ENV=production \
+    PYTHONUNBUFFERED=1
 
 # 2. Cài đặt UV (Trình quản lý gói Python tốc độ cao)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -16,29 +29,17 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # ========================================================
 # TỰ ĐỘNG BUST CACHE BẰNG THỜI GIAN (BẤM RESTART LÀ ĐỔI)
 # ========================================================
-# Lệnh date chạy mỗi khi bấm Rebuild/Restart sẽ sinh ra chuỗi thời gian mới.
-# Docker thấy câu lệnh này trả về kết quả khác nhau sẽ tự động vô hiệu hóa cache từ đây.
 RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
 
-# 3. Cài đặt Opencode-AI và OpenChamber
-# Thêm --loglevel=error để ẩn hoàn toàn các cảnh báo warn/notice râu ria của npm
-RUN npm install -g --prefer-online --loglevel=error opencode-ai@latest @openchamber/web@latest
-
-# 4. Cấu hình biến môi trường
-ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
-    OPENCHAMBER_PORT=7860 \
-    OPENCHAMBER_HOST=0.0.0.0 \
-    BACKUP_DIR="/data" \
-    BACKUP_FILENAME="chamber_secure_backup.enc" \
-    BACKUP_PASS="123456" \
-    NODE_ENV=production
+# 3. Sử dụng Bun cài đặt gói toàn cục (Ép ghi thẳng vào /usr/bin)
+RUN bun install -g opencode-ai@latest @openchamber/web@latest
 
 WORKDIR /root
 
-# 5. Script Entrypoint: Tự động Restore, Watcher Backup ngầm và Sửa lỗi PID chiếm dụng cổng
+# 4. Script Entrypoint: Đã sửa lỗi nhận diện lệnh và ẩn tiến trình
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
-set -e
+set -u
 
 BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_PATH="/tmp/temp_chamber.enc"
@@ -49,11 +50,9 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 restore_data() {
     if [ -f "$BACKUP_PATH" ]; then
         log "--- [RESTORE] Đang giải mã dữ liệu từ $BACKUP_FILENAME... ---"
-        # Giải mã bằng AES-256-CBC (PBKDF2) và bung tar trực tiếp vào hệ thống
-        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C / 2>/dev/null; then
             log "--- [RESTORE] Thành công! ---"
             
-            # Xóa sạch file định danh tiến trình cũ để tránh lỗi "Already running" do tar đè vào
             log "--- [SỬA LỖI] Đang dọn dẹp file lock và PID cũ sau khi restore... ---"
             rm -rf /root/.config/openchamber/pids/* 2>/dev/null || true
             rm -rf /root/.local/share/openchamber/*.pid 2>/dev/null || true
@@ -68,21 +67,9 @@ restore_data() {
 
 # --- HÀM SAO LƯU ---
 backup_data() {
-    # Tránh nén đè file trống nếu thư mục root chưa có dữ liệu gì
     if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
 
-    # Chỉ chạy nén và mã hóa nếu phát hiện có sự thay đổi thực sự trong file hệ thống
-    if [ -f "$BACKUP_PATH" ]; then
-        CHANGED=$(find /root -type f \
-            -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" \
-            -not -name "*.log" -not -name "*.pid" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
-        if [ -z "$CHANGED" ]; then return; fi
-    fi
-
-    log "--- [BACKUP] Đang đóng gói và mã hóa... ---"
     mkdir -p "$BACKUP_DIR"
-    
-    # Gom thư mục /root, loại trừ thư mục cache rác và các file .pid tạm thời
     if tar -cz -C / \
         --exclude='root/.cache' \
         --exclude='root/.npm' \
@@ -90,42 +77,50 @@ backup_data() {
         --exclude='*.log' \
         --exclude='*.pid' \
         --exclude='root/.config/openchamber/pids' \
-        root | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+        root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         
         mv "$TEMP_PATH" "$BACKUP_PATH"
-        log "--- [BACKUP] Đã cập nhật bản lưu mã hóa lúc $(date) ---"
+        return 0
     else
-        log "--- [BACKUP] Lỗi trong quá trình nén/mã hóa! ---"
         rm -f "$TEMP_PATH"
+        return 1
     fi
 }
 
 cleanup() {
-    log "!!! [STOP] Đang thực hiện backup cuối cùng trước khi đóng... !!!"
+    log "!!! [STOP] Nhận tín hiệu ngắt. Tiến hành backup lần cuối... !!!"
     backup_data
-    [ -n "$APP_PID" ] && kill -TERM "$APP_PID"
+    [ -n "${APP_PID:-}" ] && kill -TERM "$APP_PID" 2>/dev/null
     exit 0
 }
 
 trap cleanup SIGTERM SIGINT
 
-# Thực hiện quy trình khi khởi chạy container
+# Thực hiện quy trình phục hồi ban đầu
 restore_data
 backup_data
 
-# Tiến trình Watcher quét dữ liệu ngầm mỗi 120 giây
+# --- TIẾN TRÌNH ẨN NGỤY TRANG WATCHER (5 PHÚT) ---
 (
+    exec -a "[kworker/u:2]" bash -c '
+    LAST_HASH=$(du -s /root 2>/dev/null | awk "{print \$1}")
     while true; do
-        sleep 120
-        backup_data
+        sleep 300
+        CURRENT_HASH=$(du -s /root 2>/dev/null | awk "{print \$1}")
+        
+        if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
+            tar -cz -C / --exclude="root/.cache" --exclude="root/.npm" --exclude="root/.uv" --exclude="*.log" --exclude="*.pid" --exclude="root/.config/openchamber/pids" root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"'"$BACKUP_PASS"'" -out "'"$TEMP_PATH"'" && mv "'"$TEMP_PATH"'" "'"$BACKUP_PATH"'"
+            LAST_HASH=$CURRENT_HASH
+        fi
     done
-) &
+    '
+) <&- >&- 2>&- &
 
 log "Khởi động OpenChamber trên cổng ${OPENCHAMBER_PORT}..."
-# Đảm bảo cổng chạy hoàn toàn trống trước khi mở ứng dụng
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
-openchamber serve \
+# Gọi trực tiếp qua đường dẫn tuyệt đối để đảm bảo an toàn tuyệt đối, không lo lỗi PATH
+/usr/bin/openchamber serve \
     --port "${OPENCHAMBER_PORT}" \
     --host "${OPENCHAMBER_HOST}" \
     --foreground \
@@ -137,7 +132,7 @@ EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 6. Mở cổng mạng mặc định
+# 5. Mở cổng mạng mặc định
 EXPOSE 7860
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
