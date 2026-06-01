@@ -1,0 +1,173 @@
+FROM ghcr.io/stackblitz-labs/bolt.diy:latest
+
+# 1. Cấu hình các biến môi trường hệ thống
+ENV PORT=7860 \
+    HOSTNAME=0.0.0.0 \
+    # MẶC ĐỊNH ĐỂ TRỐNG (Mở công cộng, không có mật khẩu)
+    # Nếu muốn dùng, hãy điền vào ví dụ: APP_USERNAME="admin"
+    APP_USERNAME="" \
+    APP_PASSWORD="" \
+    # Cấu hình đường dẫn Backup mã hóa dữ liệu tự động
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="bolt_diy_backup.enc" \
+    BACKUP_PASS="bolt_secure_123" \
+    # Ép npm cho phép chạy lệnh toàn cục dưới quyền root
+    NPM_CONFIG_UNSAFE_PERM=true
+
+# Chuyển sang root và duy trì quyền root cho toàn bộ vòng đời container
+USER root
+
+# 2. Cài đặt các gói bổ sung, Wrangler và thư viện HTTP-PROXY cho lớp bảo mật
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tini openssl findutils procps psmisc tar apache2-utils \
+    && npm install -g wrangler http-proxy \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tạo sẵn các thư mục cần thiết trực tiếp trong không gian của root
+RUN mkdir -p /data /app/.wrangler
+
+WORKDIR /app
+
+# 3. Tạo Script Entrypoint tích hợp Password và Auto-Sync tự động
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_bolt_backup.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# --- HÀM PHỤC HỒI DỮ LIỆU ---
+restore_data() {
+    log "--- [RESTORE] Kiểm tra bản lưu cũ tại $BACKUP_FILE ---"
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] Đang giải mã và phục hồi dữ liệu phiên làm việc trước vào /app... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+            log "--- [RESTORE] PHỤC HỒI THÀNH CÔNG! ---"
+        else
+            log "--- [RESTORE] LỖI: Không thể giải mã hoặc giải nén file backup. ---"
+        fi
+    else
+        log "--- [RESTORE] Không tìm thấy dữ liệu cũ. Tạo phiên làm việc mới hoàn toàn. ---"
+    fi
+}
+
+# --- HÀM TỰ ĐỘNG SAO LƯU DỮ LIỆU MÃ HÓA ---
+backup_data() {
+    if [ ! "$(ls -A /app 2>/dev/null)" ]; then return; fi
+
+    # Kiểm tra xem có file nào mới hơn bản backup hiện tại không
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED_FILES=$(find /app -type f \
+            -not -path "*/.cache/*" \
+            -not -path "*/.npm/*" \
+            -not -path "*/.wrangler/*" \
+            -not -path "*/node_modules/*" \
+            -not -name "*.log" \
+            -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        
+        if [ -z "$CHANGED_FILES" ]; then return; fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi trong dự án! Đang mã hóa đóng gói... ---"
+    
+    if tar -cz -C / \
+        --exclude='app/.cache' \
+        --exclude='app/.npm' \
+        --exclude='app/.wrangler' \
+        --exclude='app/node_modules' \
+        --exclude='*.log' \
+        app | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] ĐÃ ĐỒNG BỘ THÀNH CÔNG: $BACKUP_FILENAME ---"
+    else
+        log "--- [BACKUP] LỖI: Quá trình tự động sao lưu thất bại! ---"
+        rm -f "$TEMP_FILE"
+    fi
+}
+
+# --- XỬ LÝ KHI CONTAINER BỊ TẮT ĐỘT NGỘT ---
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Hugging Face đang dừng Space! Tiến hành sao lưu an toàn lần cuối... !!!"
+    kill $WATCHER_PID 2>/dev/null || true
+    backup_data
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    kill -TERM "$PROXY_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+# Khôi phục dữ liệu ban đầu
+restore_data
+backup_data
+
+# Thiết lập Watcher quét thay đổi ngầm mỗi 60 giây
+(
+    while true; do
+        sleep 60
+        backup_data
+    done
+) &
+WATCHER_PID=$!
+
+# Tự động tạo proxy bảo mật linh hoạt (Chỉ Auth khi có cấu hình mật khẩu)
+log "Cấu hình lớp định tuyến cổng 7860..."
+cat << 'NODEEOF' > /tmp/proxy.js
+const http = require('http');
+const httpProxy = require('/usr/local/lib/node_modules/http-proxy');
+const proxy = httpProxy.createProxyServer({});
+
+const username = process.env.APP_USERNAME ? process.env.APP_USERNAME.trim() : "";
+const password = process.env.APP_PASSWORD ? process.env.APP_PASSWORD.trim() : "";
+
+http.createServer((req, res) => {
+  // NẾU KHÔNG CẤU HÌNH PASSWORD -> CHO QUA THẲNG (KHÔNG CÓ AUTH)
+  if (!username || !password) {
+    proxy.web(req, res, { target: 'http://127.0.0.1:5173' });
+    return;
+  }
+
+  // NẾU CÓ CẤU HÌNH -> BẬT BASIC AUTH
+  const auth = req.headers['authorization'];
+  if (!auth) {
+    res.statusCode = 401;
+    res.setHeader('WWW-Authenticate', 'Basic realm="Secure Area"');
+    res.end('Vui long dang nhap de truy cap Bolt.diy');
+    return;
+  }
+
+  const tmp = auth.split(' ');
+  const buf = Buffer.from(tmp[1], 'base64');
+  const plain_auth = buf.toString();
+  const [creds_user, creds_password] = plain_auth.split(':');
+
+  if (creds_user === username && creds_password === password) {
+    proxy.web(req, res, { target: 'http://127.0.0.1:5173' });
+  } else {
+    res.statusCode = 401;
+    res.setHeader('WWW-Authenticate', 'Basic realm="Secure Area"');
+    res.end('Sai tai khoan hoac mat khau!');
+  }
+}).listen(7860, '0.0.0.0');
+NODEEOF
+
+node /tmp/proxy.js &
+PROXY_PID=$!
+
+log "Khởi động Bolt.diy dưới quyền root chạy trên cổng nội bộ 5173..."
+bindings=$(./bindings.sh) && wrangler pages dev ./build/client $bindings --ip 127.0.0.1 --port 5173 --no-show-interactive-dev-session &
+APP_PID=$!
+
+wait "$APP_PID" || true
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 7860
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
