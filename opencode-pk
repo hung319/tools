@@ -1,0 +1,152 @@
+# Sử dụng Debian Bullseye Slim làm nền tảng
+FROM node:20-bullseye-slim
+
+USER root
+
+# 1. Cài đặt các công cụ hệ thống cần thiết
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git ssh build-essential tini procps unzip psmisc \
+        make g++ python3 tar openssl findutils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Cài đặt UV và BUN toàn cục
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+RUN curl -fsSL https://bun.sh/install | bash \
+    && mv /root/.bun/bin/bun /usr/local/bin/bun \
+    && rm -rf /root/.bun
+
+# 3. Cài đặt OpenCode AI CLI/Backend gốc
+RUN npm install -g opencode-ai@latest && npm cache clean --force
+
+# 4. Clone chính xác repository `pk-opencode-webui` và thiết lập build tĩnh
+WORKDIR /opt/pk-opencode-webui
+RUN git clone https://github.com/prokube/pk-opencode-webui.git . \
+    && cd app-prefixable \
+    && bun install \
+    && bun run build.ts
+
+# 5. Cấu hình tập trung các biến môi trường
+ENV PATH="/usr/local/bin:/usr/bin:${PATH}" \
+    PORT=7860 \
+    HOSTNAME=0.0.0.0 \
+    API_URL="http://127.0.0.1:4096" \
+    BASE_PATH="/" \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="opencode_backup.enc" \
+    BACKUP_PASS="123456"
+
+WORKDIR /root
+
+# 6. Tạo Entrypoint Script quản lý song song hai dịch vụ và bọc logic sao lưu bảo mật
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_backup.enc"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# --- HÀM PHỤC HỒI ---
+restore_data() {
+    log "--- [RESTORE] Kiểm tra bản lưu tại $BACKUP_FILE ---"
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] Đang giải mã và phục hồi toàn bộ môi trường /root... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+            log "--- [RESTORE] THÀNH CÔNG! ---"
+        else
+            log "--- [RESTORE] LỖI: Không thể giải mã hoặc giải nén. ---"
+        fi
+    else
+        log "--- [RESTORE] Không tìm thấy dữ liệu cũ. Bắt đầu phiên mới. ---"
+    fi
+}
+
+# --- HÀM SAO LƯU ---
+backup_data() {
+    if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
+
+    # Chỉ quét thay đổi ở những nơi quan trọng, bỏ qua cache để tránh loop vô hạn
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED_FILES=$(find /root -type f \
+            -not -path "*/.cache/*" \
+            -not -path "*/.npm/*" \
+            -not -path "*/.uv/cache/*" \
+            -not -path "*/.bun/install/cache/*" \
+            -not -name "*.log" \
+            -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        
+        if [ -z "$CHANGED_FILES" ]; then return; fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi dữ liệu/binary! Đang đóng gói... ---"
+    
+    # NÉN TOÀN BỘ /ROOT (Giữ lại database, cài đặt cấu hình WebUI)
+    if tar -cz -C / \
+        --exclude='root/.cache' \
+        --exclude='root/.npm' \
+        --exclude='root/.uv/cache' \
+        --exclude='root/.bun/install/cache' \
+        --exclude='*.log' \
+        root | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        
+        mkdir -p "$BACKUP_DIR"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] HOÀN TẤT: $BACKUP_FILENAME ---"
+    else
+        log "--- [BACKUP] LỖI: Sao lưu thất bại! ---"
+        rm -f "$TEMP_FILE"
+    fi
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Đang nhanh chóng backup an toàn lần cuối... !!!"
+    kill $WATCHER_PID 2>/dev/null || true
+    backup_data
+    kill -TERM "$WEBUI_PID" "$BACKEND_PID" 2>/dev/null || true
+    wait "$WEBUI_PID" "$BACKEND_PID" 2>/dev/null || true
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+# Thực hiện khôi phục dữ liệu trước khi chạy ứng dụng
+restore_data
+backup_data
+
+# Watcher quét định kỳ mỗi 60 giây
+(
+    while true; do
+        sleep 60
+        backup_data
+    done
+) &
+WATCHER_PID=$!
+
+# 1. KHỞI ĐỘNG OPENCODE BACKEND (Chạy ngầm ở cổng nội bộ 4096 để WebUI gọi API)
+log "Khởi động Opencode-AI Backend trên cổng 4096..."
+opencode serve --port 4096 --hostname 127.0.0.1 &
+BACKEND_PID=$!
+
+# Chờ 3 giây đảm bảo cổng API 4096 đã sẵn sàng đón nhận kết nối từ giao diện
+sleep 3
+
+# 2. KHỞI ĐỘNG FRONTEND WEB UI (Phục vụ ra internet công cộng thông qua PORT 7860)
+log "Khởi động pk-opencode-webui (Bun) trên cổng: ${PORT}..."
+log "Cấu hình tiền tố URL (BASE_PATH): ${BASE_PATH}"
+
+cd /opt/pk-opencode-webui/app-prefixable
+PORT="${PORT}" API_URL="${API_URL}" BASE_PATH="${BASE_PATH}" bun run dev &
+WEBUI_PID=$!
+
+# Gắn container vào vòng đời của WebUI chính
+wait "$WEBUI_PID" || true
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 7. Khai báo cổng chạy và khởi chạy thông qua tini để tránh zombie process
+EXPOSE 7860
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
