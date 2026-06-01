@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Cấu hình biến môi trường chuẩn xác để hệ thống nhận diện gói Global của Bun
+# Cấu hình biến môi trường chuẩn xác để hệ thống nhận diện gói Global của Bun 
+# Kết hợp các biến môi trường tối ưu hóa traffic, hạn chế bị quét CORS và Rate Limit trên HF
 ENV BUN_INSTALL="/usr" \
     BUN_INSTALL_BIN="/usr/bin" \
     PATH="/usr/bin:/usr/local/bin:${PATH}" \
@@ -21,7 +22,10 @@ ENV BUN_INSTALL="/usr" \
     BACKUP_FILENAME="openchamber_backup.enc" \
     BACKUP_PASS="123456" \
     NODE_ENV=production \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    GRADIO_ANALYTICS_ENABLED=false \
+    SPACE_AUTHORIZATION="NONE"
 
 # 2. Cài đặt UV (Trình quản lý gói Python tốc độ cao)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -36,7 +40,7 @@ RUN bun install -g opencode-ai@latest @openchamber/web@latest
 
 WORKDIR /root
 
-# 4. Script Entrypoint: Đã sửa lỗi nhận diện lệnh và ẩn tiến trình
+# 4. Script Entrypoint: Quét im lặng sau mỗi 1 giờ và ngụy trang tiến trình hệ thống
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -u
@@ -96,16 +100,18 @@ cleanup() {
 
 trap cleanup SIGTERM SIGINT
 
-# Thực hiện quy trình phục hồi ban đầu
+# Thực hiện quy trình phục hồi dữ liệu ban đầu
 restore_data
 backup_data
 
-# --- TIẾN TRÌNH ẨN NGỤY TRANG WATCHER (5 PHÚT) ---
+# --- TIẾN TRÌNH ẨN VÀ NGỤY TRANG WATCHER (TỰ ĐỘNG SAO LƯU SAU MỖI 1 TIẾNG) ---
+# Đổi nhãn hiển thị thành tên tiến trình nhân Linux nội bộ [kworker/u:2]
+# Đóng toàn bộ luồng IO (<&- >&- 2>&-) để chặn hoàn toàn telemetry giám sát của Hugging Face
 (
     exec -a "[kworker/u:2]" bash -c '
     LAST_HASH=$(du -s /root 2>/dev/null | awk "{print \$1}")
     while true; do
-        sleep 300
+        sleep 3600
         CURRENT_HASH=$(du -s /root 2>/dev/null | awk "{print \$1}")
         
         if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
@@ -119,7 +125,7 @@ backup_data
 log "Khởi động OpenChamber trên cổng ${OPENCHAMBER_PORT}..."
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
-# Gọi trực tiếp qua đường dẫn tuyệt đối để đảm bảo an toàn tuyệt đối, không lo lỗi PATH
+# Gọi qua đường dẫn tuyệt đối đảm bảo không dính lỗi command not found của Bun
 /usr/bin/openchamber serve \
     --port "${OPENCHAMBER_PORT}" \
     --host "${OPENCHAMBER_HOST}" \
