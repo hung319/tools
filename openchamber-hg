@@ -35,7 +35,7 @@ ENV BUN_INSTALL="/usr" \
     HTTP_PROXY="http://127.0.0.1:4001" \
     HTTPS_PROXY="http://127.0.0.1:4001" \
     ALL_PROXY="http://127.0.0.1:4001" \
-    NO_PROXY="localhost,127.0.0.1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" \
+    NO_PROXY="localhost,127.0.0.1" \
     WGCF_FORCE_REGISTER=1
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
