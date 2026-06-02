@@ -46,7 +46,6 @@ RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" bun install -g opencode-ai@latest 
 
 WORKDIR /root
 
-# Đảm bảo tạo trước tất cả thư mục lưu trữ và cấp quyền ghi tuyệt đối để tránh lỗi "error writing"
 RUN mkdir -p /root/.config/openchamber /data /tmp/wgcf_temp && chmod -R 777 /root /data
 
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
@@ -98,14 +97,13 @@ WCONF
 restore_data() {
     if [ -f "$BACKUP_PATH" ]; then
         log "--- [RESTORE] Tìm thấy bản lưu. Đang giải mã và phục hồi dữ liệu OpenChamber... ---"
-        # Bỏ chặn log lỗi 2>/dev/null để nhìn thấy nếu giải nén thất bại
         if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
             rm -rf /root/.config/openchamber/pids/* 2>/dev/null || true
             rm -rf /root/.local/share/openchamber/*.pid 2>/dev/null || true
             fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
             log "--- [RESTORE] Phục hồi toàn bộ cấu hình thành công! ---"
         else
-            log "--- [RESTORE] Giải mã thất bại (File lỗi hoặc cấu trúc không hợp lệ) ---"
+            log "--- [RESTORE] Giải mã thất bại ---"
         fi
     else
         log "--- [RESTORE] Không tìm thấy bản lưu cũ tại $BACKUP_PATH. Chạy môi trường mới. ---"
@@ -116,7 +114,7 @@ backup_data() {
     if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
     
     if [ -f "$BACKUP_PATH" ]; then
-        CHANGED=$(find /root -type f -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" -not -name "*.log" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
+        CHANGED=$(find /root -type f -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" -not -name "*.log" -not -name "*.pid" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
         if [ -z "$CHANGED" ]; then return; fi
     fi
 
@@ -124,7 +122,7 @@ backup_data() {
     mkdir -p "$BACKUP_DIR"
     if tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='root/.uv' --exclude='*.log' --exclude='*.pid' --exclude='root/.config/openchamber/pids' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         mv "$TEMP_PATH" "$BACKUP_PATH"
-        log "--- [BACKUP] Sao lưu thành công bản lưu mã hóa! ---"
+        log "--- [BACKUP] Đã ghi đè cập nhật bản lưu mã hóa thành công! ---"
     else
         rm -f "$TEMP_PATH"
         log "--- [BACKUP] Thất bại trong quá trình đóng gói ---"
@@ -141,16 +139,19 @@ cleanup() {
 trap cleanup SIGTERM SIGINT
 
 start_warp_proxy
-
 restore_data
 backup_data
 
-# --- TIẾN TRÌNH TỰ ĐỘNG SAO LƯU (1 TIẾNG/LẦN) & XOAY IP (6 TIẾNG/LẦN) ---
+# Xuất hàm ra môi trường cho tiến trình ngầm sử dụng công khai
+export -f backup_data
+export -f log
+export BACKUP_DIR BACKUP_FILENAME BACKUP_PASS TEMP_PATH
+
+# --- TIẾN TRÌNH AUTO KIỂM TRA ĐỊNH KỲ (1 TIẾNG/LẦN) & XOAY IP (6 TIẾNG/LẦN) ---
 (
-    exec -a "[kworker/u:2]" bash -c '
     TIMER_COUNT=0
     while true; do
-        sleep 300
+        sleep 3600
         ((TIMER_COUNT+=1))
         
         backup_data
@@ -160,8 +161,7 @@ backup_data
             TIMER_COUNT=0
         fi
     done
-    '
-) <&- >&- 2>&- &
+) &
 
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
