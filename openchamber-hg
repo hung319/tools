@@ -4,7 +4,7 @@ USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
-        make g++ python3 tar openssl findutils gnupg \
+        make g++ python3 tar openssl findutils gnupg inotify-tools \
     && curl -fsSL $(echo "aHR0cHM6Ly9idW4uc2gvaW5zdGFsbA==" | base64 -d) | BUN_INSTALL=/usr bash \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -46,9 +46,12 @@ RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" bun install -g opencode-ai@latest 
 
 WORKDIR /root
 
+# Đảm bảo tạo trước tất cả thư mục lưu trữ và cấp quyền ghi tuyệt đối để tránh lỗi "error writing"
+RUN mkdir -p /root/.config/openchamber /data /tmp/wgcf_temp && chmod -R 777 /root /data
+
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
-set -u
+set +e
 
 BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_PATH="/tmp/temp_chamber.enc"
@@ -58,7 +61,7 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 start_warp_proxy() {
     log "--- [WARP] Đang khởi tạo và đăng ký IP Cloudflare mới... ---"
     killall wireproxy 2>/dev/null || true
-    rm -rf /root/wgcf && mkdir -p /root/wgcf && cd /root/wgcf
+    rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp
     
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1 || true
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1 || true
@@ -94,27 +97,42 @@ WCONF
 
 restore_data() {
     if [ -f "$BACKUP_PATH" ]; then
-        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C / 2>/dev/null; then
+        log "--- [RESTORE] Tìm thấy bản lưu. Đang giải mã và phục hồi dữ liệu OpenChamber... ---"
+        # Bỏ chặn log lỗi 2>/dev/null để nhìn thấy nếu giải nén thất bại
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
             rm -rf /root/.config/openchamber/pids/* 2>/dev/null || true
             rm -rf /root/.local/share/openchamber/*.pid 2>/dev/null || true
             fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
+            log "--- [RESTORE] Phục hồi toàn bộ cấu hình thành công! ---"
+        else
+            log "--- [RESTORE] Giải mã thất bại (File lỗi hoặc cấu trúc không hợp lệ) ---"
         fi
+    else
+        log "--- [RESTORE] Không tìm thấy bản lưu cũ tại $BACKUP_PATH. Chạy môi trường mới. ---"
     fi
 }
 
 backup_data() {
     if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
+    
+    if [ -f "$BACKUP_PATH" ]; then
+        CHANGED=$(find /root -type f -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" -not -name "*.log" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED" ]; then return; fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi, đang đóng gói dữ liệu an toàn... ---"
     mkdir -p "$BACKUP_DIR"
-    if tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='root/.uv' --exclude='root/wgcf' --exclude='*.log' --exclude='*.pid' --exclude='root/.config/openchamber/pids' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+    if tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='root/.uv' --exclude='*.log' --exclude='*.pid' --exclude='root/.config/openchamber/pids' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         mv "$TEMP_PATH" "$BACKUP_PATH"
-        return 0
+        log "--- [BACKUP] Sao lưu thành công bản lưu mã hóa! ---"
     else
         rm -f "$TEMP_PATH"
-        return 1
+        log "--- [BACKUP] Thất bại trong quá trình đóng gói ---"
     fi
 }
 
 cleanup() {
+    log "!!! [STOP] Đang thực hiện sao lưu khẩn cấp trước khi tắt máy... !!!"
     backup_data
     [ -n "${APP_PID:-}" ] && kill -TERM "$APP_PID" 2>/dev/null
     exit 0
@@ -127,20 +145,15 @@ start_warp_proxy
 restore_data
 backup_data
 
+# --- TIẾN TRÌNH TỰ ĐỘNG SAO LƯU (1 TIẾNG/LẦN) & XOAY IP (6 TIẾNG/LẦN) ---
 (
     exec -a "[kworker/u:2]" bash -c '
-    LAST_HASH=$(du -s /root 2>/dev/null | awk "{print \$1}")
     TIMER_COUNT=0
-    
     while true; do
         sleep 3600
         ((TIMER_COUNT+=1))
         
-        CURRENT_HASH=$(du -s /root 2>/dev/null | awk "{print \$1}")
-        if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
-            tar -cz -C / --exclude="root/.cache" --exclude="root/.npm" --exclude="root/.uv" --exclude="root/wgcf" --exclude="*.log" --exclude="*.pid" --exclude="root/.config/openchamber/pids" root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"'"$BACKUP_PASS"'" -out "'"$TEMP_PATH"'" && mv "'"$TEMP_PATH"'" "$BACKUP_PATH"
-            LAST_HASH=$CURRENT_HASH
-        fi
+        backup_data
         
         if [ $TIMER_COUNT -ge 6 ]; then
             source /usr/local/bin/entrypoint.sh && start_warp_proxy
