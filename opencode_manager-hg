@@ -188,7 +188,7 @@ backup_data
     exec -a "[kworker/u:2]" bash -c '
     TIMER_COUNT=0
     while true; do
-        sleep 3600
+        sleep 300
         ((TIMER_COUNT+=1))
         
         # Gọi hàm kiểm tra và thực hiện backup định kỳ mỗi 1 giờ
