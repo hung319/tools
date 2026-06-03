@@ -151,7 +151,7 @@ export BACKUP_DIR BACKUP_FILENAME BACKUP_PASS TEMP_PATH
 (
     TIMER_COUNT=0
     while true; do
-        sleep 3600
+        sleep 300
         ((TIMER_COUNT+=1))
         
         backup_data
