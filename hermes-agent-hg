@@ -1,0 +1,155 @@
+# ========================================================
+# GIAI ĐOẠN 1: Lấy môi trường Agent nâng cao (SWE, Codex, WhatsApp)
+# ========================================================
+FROM ghcr.io/xmbshwll/hermes-agent-docker:latest AS agent_source
+
+# ========================================================
+# GIAI ĐOẠN 2: Build bản AIO chạy trên Hugging Face Spaces
+# ========================================================
+FROM ghcr.io/nesquena/hermes-webui:latest
+
+# Bắt đầu cấu hình bằng quyền root
+USER root
+
+# 1. Cài đặt các công cụ hệ thống cần thiết cho cả Agent và cơ chế Backup
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini tar openssl findutils ffmpeg procps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Trích xuất lõi, thư mục cài đặt agent và các công cụ từ Giai đoạn 1 sang
+COPY --from=agent_source /home/agent/hermes-agent /home/hermeswebui/.hermes/hermes-agent
+COPY --from=agent_source /home/agent/.local /home/hermeswebui/.local
+COPY --from=agent_source /usr/local/bin/hermes-entrypoint /usr/local/bin/hermes-entrypoint
+COPY --from=agent_source /usr/local/share/hermes-home /usr/local/share/hermes-home
+
+# 3. Cấu hình các biến môi trường hệ thống cố định (Bắt buộc giữ lại ENV ở đây)
+ENV HOME=/home/hermeswebui
+ENV PATH="/home/hermeswebui/.local/bin:${PATH}"
+
+ENV HERMES_HOME=/home/hermeswebui/.hermes
+ENV HERMES_WEBUI_PORT=7860
+ENV HERMES_WEBUI_HOST=0.0.0.0
+ENV HERMES_WEBUI_AGENT_DIR=/home/hermeswebui/.hermes/hermes-agent
+ENV HERMES_WEBUI_DEFAULT_WORKSPACE=/workspace
+# ĐÂY LÀ DÒNG FIX LỖI: Khai báo cứng biến môi trường để khi script tự reload không bị mất
+ENV HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+
+# --- PLACEHOLDER CẤU HÌNH MẬT KHẨU WEBUI & BACKUP ---
+ENV HERMES_WEBUI_PASSWORD=""
+ENV BACKUP_DIR=/data
+ENV BACKUP_FILENAME="hermes_agent_backup.enc"
+ENV BACKUP_PASS="123456"
+
+# 4. Tạo các thư mục làm việc và cấp quyền ghi tuyệt đối cho cả root và user 1024
+RUN mkdir -p /home/hermeswebui/.hermes/webui /workspace /app /uv_cache /data \
+    && chown -R 1024:0 /home/hermeswebui /workspace /app /uv_cache /data \
+    && chmod -R 777 /home/hermeswebui /workspace /app /uv_cache /data
+
+# 5. Script Entrypoint xử lý logic chính
+RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+STATE_DIR="/home/hermeswebui/.hermes/webui"
+WORKSPACE_DIR="/workspace"
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_backup.enc"
+MOCK_DIR="/tmp/hermes_snap"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ENTRYPOINT] $1"; }
+
+# --- HÀM PHỤC HỒI ---
+restore_data() {
+    log "--- [RESTORE] Đang kiểm tra file backup tại $BACKUP_FILE ---"
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] TÌM THẤY bản sao lưu. Đang giải mã và phục hồi... ---"
+        # Giải mã và bung trực tiếp đè vào gốc hệ thống
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+            log "--- [RESTORE] THÀNH CÔNG! ---"
+        else
+            log "--- [RESTORE] LỖI: Giải mã thất bại. ---"
+        fi
+    else
+        log "--- [RESTORE] Không có dữ liệu cũ. Bắt đầu phiên mới. ---"
+    fi
+}
+
+# --- HÀM SAO LƯU THÔNG MINH ---
+backup_data() {
+    # Tạo vùng đệm tạm an toàn để gom dữ liệu
+    rm -rf "$MOCK_DIR" && mkdir -p "$MOCK_DIR/home/hermeswebui/.hermes"
+    cp -r "$STATE_DIR" "$MOCK_DIR/home/hermeswebui/.hermes/webui" 2>/dev/null || true
+    cp -r "$WORKSPACE_DIR" "$MOCK_DIR/workspace" 2>/dev/null || true
+
+    if [ ! "$(ls -A $MOCK_DIR/workspace 2>/dev/null)" ] && [ ! "$(ls -A $MOCK_DIR/home/hermeswebui/.hermes/webui 2>/dev/null)" ]; then 
+        rm -rf "$MOCK_DIR"
+        return
+    fi
+
+    # KIỂM TRA THAY ĐỔI dựa trên mốc thời gian file cũ
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED_STATE=$(find "$STATE_DIR" -type f -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        CHANGED_WORK=$(find "$WORKSPACE_DIR" -type f -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED_STATE" ] && [ -z "$CHANGED_WORK" ]; then
+            rm -rf "$MOCK_DIR"
+            return
+        fi
+    fi
+
+    log "--- [BACKUP] Phát hiện thay đổi dữ liệu! Đang nén và mã hóa... ---"
+    
+    # Đóng gói và mã hóa luồng, lưu ra ổ cứng tạm /tmp trước
+    if tar -cz --exclude='cache/**' --exclude='*.log' -C "$MOCK_DIR" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        # Cấp quyền cho file .enc để tránh lỗi ghi đè từ phân quyền người dùng đám mây
+        chmod 777 "$TEMP_FILE"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP] HOÀN TẤT cập nhật bản sao lưu ($BACKUP_FILENAME) ---"
+    else
+        log "--- [BACKUP] LỖI trong quá trình sao lưu! ---"
+        rm -f "$TEMP_FILE"
+    fi
+    rm -rf "$MOCK_DIR"
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Đang tiến hành đồng bộ dữ liệu lần cuối trước khi ngắt kết nối... !!!"
+    # Gọi trực tiếp hàm backup lần cuối
+    backup_data
+    log "!!! [SHUTDOWN] Dữ liệu sao lưu hoàn tất. Tắt máy an toàn! !!!"
+    exit 0
+}
+
+# Đăng ký nhận tín hiệu tắt từ Hugging Face để kích hoạt sao lưu khẩn cấp
+trap 'cleanup' TERM INT QUIT
+
+# 1. Kích hoạt entrypoint gốc của Agent để setup cấu hình nền tảng
+/usr/local/bin/hermes-entrypoint true
+
+# 2. Thực hiện khôi phục dữ liệu từ thư mục mạng /data nếu có sẵn file .enc cũ
+restore_data
+
+# 3. Khởi chạy Smart Watcher quét ngầm định kỳ mỗi 5 phút (300 giây)
+(
+    while true; do
+        sleep 300
+        backup_data
+    done
+) &
+WATCHER_PID=$!
+
+# Đảm bảo phân quyền toàn vẹn một lần cuối trước khi bàn giao quyền lực
+chmod -R 777 /home/hermeswebui /workspace /data 2>/dev/null || true
+
+# 4. KHỞI ĐỘNG CHÍNH THỨC: Bàn giao quyền kiểm tra tối cao trực tiếp sang script gốc bằng lệnh exec
+log "Đang bàn giao tiến trình khởi động chính cho bộ khởi tạo gốc..."
+exec /hermeswebui_init.bash
+EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 6. Cấu hình thực thi bằng quyền ROOT mặc định ban đầu
+USER root
+EXPOSE 7860
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
