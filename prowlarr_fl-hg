@@ -5,15 +5,15 @@ WORKDIR /downloads
 
 # 1. Tải Prowlarr Core
 RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9Qcm93bGFyci9Qcm93bGFyci9yZWxlYXNlcy9sYXRlc3Q=" | base64 -d) | jq -r .tag_name) && \
-    mkdir -p /downloads/sys_net && \
-    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1Byb3dsYXJyL1Byb3dsYXJyL3JlbGVhc2VzL2Rvd25sb2FkLw==" | base64 -d)${v_core}/Prowlarr.master.${v_core#v}.linux-core-x64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1
+    mkdir -p /downloads/prowlarr_bin && \
+    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1Byb3dsYXJyL1Byb3dsYXJyL3JlbGVhc2VzL2Rvd25sb2FkLw==" | base64 -d)${v_core}/Prowlarr.master.${v_core#v}.linux-core-x64.tar.gz" | tar xz -C /downloads/prowlarr_bin --strip-components=1
 
-# 2. Tải wgcf (Đã sửa link chuẩn gốc ViRb3/wgcf)
+# 2. Tải wgcf 
 RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
     wget -O /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
     chmod +x /downloads/kworker_net
 
-# 3. Tải wireproxy (Chuẩn gốc windtf/wireproxy)
+# 3. Tải wireproxy
 RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /tmp/wire && \
     wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
@@ -21,7 +21,7 @@ RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd
     chmod +x /downloads/syslog_daemon && \
     rm -rf /tmp/wire
 
-# 4. Tải flaresolverr-rs (Chuẩn gốc eben0/flaresolverr-rs)
+# 4. Tải flaresolverr-rs
 RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/app && \
     wget -O /downloads/app/flaresolverr-rs "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2ViZW4wL2ZsYXJlc29sdmVyci1ycy9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_solv}/flaresolverr-rs-linux-amd64" && \
@@ -55,7 +55,8 @@ RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'max_timeout_ms  = 120000' >> config.toml && \
     echo 'context_limit   = 20' >> config.toml
 
-COPY --from=fetcher /downloads/sys_net /opt/sys_net
+# Fix lỗi AppData: Chuyển binaries của Prowlarr sang thư mục /opt/prowlarr_bin độc lập
+COPY --from=fetcher /downloads/prowlarr_bin /opt/prowlarr_bin
 COPY --from=fetcher /downloads/kworker_net /usr/local/bin/kworker_net
 COPY --from=fetcher /downloads/syslog_daemon /usr/local/bin/syslog_daemon
 
@@ -71,8 +72,8 @@ ENV FLARESOLVERR_HEADLESS=false
 ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
 
 RUN id -u sys_runner >/dev/null 2>&1 || useradd -m sys_runner
-RUN mkdir -p /opt/sys_net/.config/Prowlarr /data /opt/app_runtime /app \
-    && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app /app
+RUN mkdir -p /opt/sys_net/.config/Prowlarr /data /opt/app_runtime /app /opt/prowlarr_bin \
+    && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app /opt/prowlarr_bin
 
 WORKDIR /opt/app_runtime
 
@@ -82,32 +83,49 @@ set -e
 
 BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_FILE="/tmp/temp_sys.enc"
-TARGET_CONFIG_DIR="opt/sys_net/.config"
+HASH_FILE="/tmp/config_hash.md5"
 PROWLARR_CONFIG_DIR="/opt/sys_net/.config/Prowlarr"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
+get_current_hash() {
+    # Tính toán hash không gian config Prowlarr, loại bỏ log và sqlite tạm
+    find /opt/sys_net/.config -type f -not -name "*.log" -not -name "*.db-wal" -not -name "*.db-shm" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
+}
+
 restore_data() {
     if [ -f "$BACKUP_FILE" ]; then
         log "--- [RESTORE] Tìm thấy file sao lưu. Đang phục hồi dữ liệu cũ... ---"
-        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C / >/dev/null 2>&1 || true
+        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /opt/sys_net/ >/dev/null 2>&1 || true
         chown -R sys_runner:sys_runner /opt/sys_net/.config || true
         log "--- [RESTORE] Phục hồi cấu hình thành công! ---"
     else
         log "--- [RESTORE] Không tìm thấy dữ liệu sao lưu trước đó. Chạy cấu hình mới. ---"
     fi
+    get_current_hash > "$HASH_FILE"
 }
 
 backup_data() {
-    if [ ! "$(ls -A /$TARGET_CONFIG_DIR 2>/dev/null)" ]; then 
+    if [ ! "$(ls -A /opt/sys_net/.config 2>/dev/null)" ]; then 
         return
     fi
+
+    if [ -f "$BACKUP_FILE" ] && [ -f "$HASH_FILE" ]; then
+        OLD_HASH=$(cat "$HASH_FILE")
+        NEW_HASH=$(get_current_hash)
+        if [ "$OLD_HASH" = "$NEW_HASH" ]; then
+            log "--- [BACKUP] Không phát hiện thay đổi cấu hình. Bỏ qua. ---"
+            return
+        fi
+    fi
+
     log "--- [BACKUP] Đang tiến hành sao lưu cấu hình tự động... ---"
-    tar -cz -C / --exclude='*.log' --exclude='*.db-wal' --exclude='*.db-shm' "$TARGET_CONFIG_DIR" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE" 2>/dev/null || true
+    tar -cz -C /opt/sys_net --exclude='*.log' --exclude='*.db-wal' --exclude='*.db-shm' ".config" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE" 2>/dev/null || true
     if [ -f "$TEMP_FILE" ]; then
         mkdir -p "$BACKUP_DIR"
         mv "$TEMP_FILE" "$BACKUP_FILE"
         chown sys_runner:sys_runner "$BACKUP_FILE" || true
+        get_current_hash > "$HASH_FILE"
         log "--- [BACKUP] Đã cập nhật file lưu trữ an toàn: $BACKUP_FILE ---"
     fi
 }
@@ -181,8 +199,10 @@ PEOF
 fi
 chown -R sys_runner:sys_runner /opt/sys_net
 
-# Luồng ngầm tự động lưu (Backup) cấu hình sau mỗi 5 phút khi bạn nhập tay xong
+# Đặt thời gian check nhạy hơn ở những phút đầu tiên để người dùng thấy kết quả backup luôn
 (
+    sleep 30
+    backup_data
     while true; do
         sleep 300
         backup_data
@@ -191,9 +211,15 @@ chown -R sys_runner:sys_runner /opt/sys_net
 WATCHER_PID=$!
 
 log "=== Khởi động Engine 2 (Prowlarr UI) ==="
-cd /opt/sys_net
+cd /opt/prowlarr_bin
 chmod +x ./Prowlarr
-exec gosu sys_runner ./Prowlarr -nobrowser -data=/opt/sys_net/.config/Prowlarr
+
+# ĐÃ FIX: Loại bỏ `exec` để giữ lại tiến trình theo dõi tín hiệu tắt hệ thống
+gosu sys_runner ./Prowlarr -nobrowser -data=/opt/sys_net/.config/Prowlarr &
+PROWLARR_PID=$!
+
+wait "$PROWLARR_PID" || true
+backup_data
 EOF
 
 RUN chmod +x /opt/app_runtime/entrypoint.sh
