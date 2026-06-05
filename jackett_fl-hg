@@ -3,22 +3,13 @@ RUN apk add --no-cache curl jq tar wget
 
 WORKDIR /downloads
 
+# 1. Tải Jackett Core Binaries (Đã fix link chuẩn)
 RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/sys_net && \
     wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL0phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
     mv /downloads/sys_net/jackett /downloads/sys_net/srv_core
 
-RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
-    wget -O /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
-    chmod +x /downloads/kworker_net
-
-RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
-    mkdir -p /tmp/wire && \
-    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
-    mv /tmp/wire/wireproxy /downloads/syslog_daemon && \
-    chmod +x /downloads/syslog_daemon && \
-    rm -rf /tmp/wire
-
+# 2. Tải FlareSolverr-RS (Bản Rust thuần nhẹ)
 RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/app && \
     wget -O /downloads/app/flaresolverr-rs "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2ViZW4wL2ZsYXJlc29sdmVyci1ycy9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_solv}/flaresolverr-rs-linux-amd64" && \
@@ -27,7 +18,6 @@ RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGF
 FROM ubuntu:24.04
 
 USER root
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,9 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
 COPY --from=fetcher /downloads/app/flaresolverr-rs ./
 
+# Cấu hình FlareSolverr-RS chạy trực tiếp tại cổng 8191
 RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'port            = 8191' >> config.toml && \
     echo 'log_level       = "info"' >> config.toml && \
@@ -53,8 +43,6 @@ RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'context_limit   = 20' >> config.toml
 
 COPY --from=fetcher /downloads/sys_net /opt/sys_net
-COPY --from=fetcher /downloads/kworker_net /usr/local/bin/kworker_net
-COPY --from=fetcher /downloads/syslog_daemon /usr/local/bin/syslog_daemon
 
 ENV PORT=7860
 ENV BACKUP_DIR="/data"
@@ -83,7 +71,6 @@ HASH_FILE="/tmp/config_hash.md5"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# Hàm tính mã hash hiện tại của thư mục config (bỏ qua log)
 get_current_hash() {
     find /opt/sys_net/.config -type f -not -name "*.log" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
 }
@@ -97,7 +84,6 @@ restore_data() {
     else
         log "--- [RESTORE] No prior backup file found at $BACKUP_FILE. Skipping. ---"
     fi
-    # Ghi nhận trạng thái hash ngay sau khi restore thành công
     get_current_hash > "$HASH_FILE"
 }
 
@@ -107,7 +93,6 @@ backup_data() {
         return
     fi
     
-    # Kiểm tra thay đổi bằng MD5 thay vì thời gian file (mtime)
     if [ -f "$BACKUP_FILE" ] && [ -f "$HASH_FILE" ]; then
         OLD_HASH=$(cat "$HASH_FILE")
         NEW_HASH=$(get_current_hash)
@@ -123,7 +108,7 @@ backup_data() {
         mkdir -p "$BACKUP_DIR"
         mv "$TEMP_FILE" "$BACKUP_FILE"
         chown sys_runner:sys_runner "$BACKUP_FILE" || true
-        get_current_hash > "$HASH_FILE" # Cập nhật lại hash mới
+        get_current_hash > "$HASH_FILE"
         log "--- [BACKUP] Successfully updated backup: $BACKUP_FILE ---"
     else
         log "--- [BACKUP] ERROR: Failed to create encrypted backup package. ---"
@@ -143,56 +128,16 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos > /dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
-if [ ! -f "net-profile.conf" ]; then kworker_net generate > /dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
-
-cat <<WEOF > net_dns.cfg
-[Interface]
-PrivateKey = $(grep PrivateKey net-profile.conf | awk '{print $3}')
-Address = $(grep Address net-profile.conf | awk '{print $3}' | paste -sd, -)
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $(grep PublicKey net-profile.conf | awk '{print $3}')
-Endpoint = $(grep Endpoint net-profile.conf | awk '{print $3}')
-
-[Http]
-BindAddress = 127.0.0.1:4000
-WEOF
-
-syslog_daemon -c net_dns.cfg > /dev/null 2>&1 &
-sleep 5
-
 restore_data
 
-export PROXY_URL="http://127.0.0.1:4000"
 export HOME=/opt/sys_net
 export XDG_CONFIG_HOME=/opt/sys_net/.config
 
-log "=== Starting Engine 1 (FlareSolverr-RS Binary via Proxy) ==="
+log "=== Starting Engine 1 (FlareSolverr-RS Original Binary) ==="
 cd /app
-PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
+HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
 RS_SOLVER_PID=$!
 sleep 4
-
-if [ ! -f "/opt/sys_net/.config/Jackett/ServerConfig.json" ]; then
-    log "--- [CONFIG] ServerConfig.json not found. Generating default... ---"
-    mkdir -p /opt/sys_net/.config/Jackett
-    cat <<JEOF > /opt/sys_net/.config/Jackett/ServerConfig.json
-{
-  "Port": 7860,
-  "AllowExternal": true,
-  "ProxyType": 0,
-  "ProxyUrl": "http://127.0.0.1",
-  "ProxyPort": 4000,
-  "FlareSolverrUrl": "http://127.0.0.1:8191",
-  "FlareSolverrTimeout": 120000,
-  "BasePath": ""
-}
-JEOF
-else
-    log "--- [CONFIG] ServerConfig.json already restored from backup. Preserving keys and password. ---"
-fi
 
 chown -R sys_runner:sys_runner /opt/sys_net/.config
 
