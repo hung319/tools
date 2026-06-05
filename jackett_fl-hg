@@ -1,0 +1,203 @@
+FROM alpine:latest AS fetcher
+RUN apk add --no-cache curl jq tar wget
+
+WORKDIR /downloads
+
+RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
+    mkdir -p /downloads/sys_net && \
+    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL0phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
+    mv /downloads/sys_net/jackett /downloads/sys_net/srv_core
+
+RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
+    wget -O /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
+    chmod +x /downloads/kworker_net
+
+RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
+    mkdir -p /tmp/wire && \
+    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
+    mv /tmp/wire/wireproxy /downloads/syslog_daemon && \
+    chmod +x /downloads/syslog_daemon && \
+    rm -rf /tmp/wire
+
+RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
+    mkdir -p /downloads/app && \
+    wget -O /downloads/app/flaresolverr-rs "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2ViZW4wL2ZsYXJlc29sdmVyci1ycy9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_solv}/flaresolverr-rs-linux-amd64" && \
+    chmod +x /downloads/app/flaresolverr-rs
+
+FROM ubuntu:24.04
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget gnupg ca-certificates libssl3 curl jq tar findutils procps tini gosu libicu-dev \
+    fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxrandr2 libgbm1 libasound2t64 xvfb \
+    && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=fetcher /downloads/app/flaresolverr-rs ./
+
+RUN echo 'host            = "127.0.0.1"' > config.toml && \
+    echo 'port            = 8191' >> config.toml && \
+    echo 'log_level       = "info"' >> config.toml && \
+    echo 'headless        = false' >> config.toml && \
+    echo 'virtual_display = true' >> config.toml && \
+    echo 'max_timeout_ms  = 120000' >> config.toml && \
+    echo 'context_limit   = 20' >> config.toml
+
+COPY --from=fetcher /downloads/sys_net /opt/sys_net
+COPY --from=fetcher /downloads/kworker_net /usr/local/bin/kworker_net
+COPY --from=fetcher /downloads/syslog_daemon /usr/local/bin/syslog_daemon
+
+ENV PORT=7860
+ENV BACKUP_DIR="/data"
+ENV BACKUP_FILENAME="jackett_backup.enc"
+ENV BACKUP_PASS="123456"
+ENV HOST=127.0.0.1
+
+ENV FLARESOLVERR_HOST="127.0.0.1"
+ENV FLARESOLVERR_PORT=8191
+ENV FLARESOLVERR_HEADLESS=false
+ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
+
+RUN id -u sys_runner >/dev/null 2>&1 || useradd -m sys_runner
+RUN mkdir -p /opt/sys_net/.config/Jackett /data /opt/app_runtime /app \
+    && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app /app
+
+WORKDIR /opt/app_runtime
+
+RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
+#!/bin/bash
+set -e
+
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_sys.enc"
+TARGET_CONFIG_DIR="opt/sys_net/.config"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+restore_data() {
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] Found backup file. Restoring service cache... ---"
+        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C / >/dev/null 2>&1 || true
+        chown -R sys_runner:sys_runner /opt/sys_net/.config || true
+        log "--- [RESTORE] Cache restoration completed successfully. ---"
+    else
+        log "--- [RESTORE] No prior backup file found at $BACKUP_FILE. Skipping. ---"
+    fi
+}
+
+backup_data() {
+    if [ ! "$(ls -A /$TARGET_CONFIG_DIR 2>/dev/null)" ]; then 
+        log "--- [BACKUP] Target config directory is empty. Skipping backup. ---"
+        return
+    fi
+    if [ -f "$BACKUP_FILE" ]; then
+        CHANGED_FILES=$(find /$TARGET_CONFIG_DIR -type f -not -name "*.log" -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
+        if [ -z "$CHANGED_FILES" ]; then 
+            log "--- [BACKUP] No configuration changes detected. Skipping backup. ---"
+            return
+        fi
+    fi
+    log "--- [BACKUP] Changes detected. Archiving and encrypting configuration... ---"
+    tar -cz -C / --exclude='*.log' "$TARGET_CONFIG_DIR" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE" 2>/dev/null || true
+    if [ -f "$TEMP_FILE" ]; then
+        mkdir -p "$BACKUP_DIR"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        chown sys_runner:sys_runner "$BACKUP_FILE" || true
+        log "--- [BACKUP] Successfully updated backup: $BACKUP_FILE ---"
+    else
+        log "--- [BACKUP] ERROR: Failed to create encrypted backup package. ---"
+    fi
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Stopping core engine safely... !!!"
+    kill $WATCHER_PID 2>/dev/null || true
+    backup_data
+    kill -TERM "$JACKETT_PID" 2>/dev/null || true
+    kill -TERM "$RS_SOLVER_PID" 2>/dev/null || true
+    wait "$JACKETT_PID" 2>/dev/null || true
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos > /dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
+if [ ! -f "net-profile.conf" ]; then kworker_net generate > /dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
+
+cat <<WEOF > net_dns.cfg
+[Interface]
+PrivateKey = $(grep PrivateKey net-profile.conf | awk '{print $3}')
+Address = $(grep Address net-profile.conf | awk '{print $3}' | paste -sd, -)
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $(grep PublicKey net-profile.conf | awk '{print $3}')
+Endpoint = $(grep Endpoint net-profile.conf | awk '{print $3}')
+
+[Http]
+BindAddress = 127.0.0.1:4000
+WEOF
+
+syslog_daemon -c net_dns.cfg > /dev/null 2>&1 &
+sleep 5
+
+restore_data
+
+export PROXY_URL="http://127.0.0.1:4000"
+export HOME=/opt/sys_net
+export XDG_CONFIG_HOME=/opt/sys_net/.config
+
+log "=== Starting Engine 1 (FlareSolverr-RS Binary via Proxy) ==="
+cd /app
+PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
+RS_SOLVER_PID=$!
+sleep 4
+
+mkdir -p /opt/sys_net/.config/Jackett
+cat <<JEOF > /opt/sys_net/.config/Jackett/ServerConfig.json
+{
+  "Port": 7860,
+  "AllowExternal": true,
+  "ProxyType": 0,
+  "ProxyUrl": "http://127.0.0.1",
+  "ProxyPort": 4000,
+  "FlareSolverrUrl": "http://127.0.0.1:8191",
+  "FlareSolverrTimeout": 120000,
+  "BasePath": ""
+}
+JEOF
+chown -R sys_runner:sys_runner /opt/sys_net/.config
+
+(
+    sleep 30
+    backup_data
+    while true; do
+        sleep 300
+        backup_data
+    done
+) &
+WATCHER_PID=$!
+
+log "=== Starting Engine 2 (Jackett Core Engine) ==="
+gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /opt/sys_net/.config/Jackett &
+JACKETT_PID=$!
+
+wait "$JACKETT_PID" || true
+backup_data
+EOF
+
+RUN chmod +x /opt/app_runtime/entrypoint.sh
+
+EXPOSE 7860
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/app_runtime/entrypoint.sh"]
