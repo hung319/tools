@@ -1,0 +1,203 @@
+FROM alpine:latest AS fetcher
+RUN apk add --no-cache curl jq tar wget
+
+WORKDIR /downloads
+
+# 1. Tải Prowlarr Core
+RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9Qcm93bGFyci9Qcm93bGFyci9yZWxlYXNlcy9sYXRlc3Q=" | base64 -d) | jq -r .tag_name) && \
+    mkdir -p /downloads/sys_net && \
+    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1Byb3dsYXJyL1Byb3dsYXJyL3JlbGVhc2VzL2Rvd25sb2FkLw==" | base64 -d)${v_core}/Prowlarr.master.${v_core#v}.linux-core-x64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1
+
+# 2. Tải wgcf (Đã sửa link chuẩn gốc ViRb3/wgcf)
+RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
+    wget -O /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
+    chmod +x /downloads/kworker_net
+
+# 3. Tải wireproxy (Chuẩn gốc windtf/wireproxy)
+RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
+    mkdir -p /tmp/wire && \
+    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
+    mv /tmp/wire/wireproxy /downloads/syslog_daemon && \
+    chmod +x /downloads/syslog_daemon && \
+    rm -rf /tmp/wire
+
+# 4. Tải flaresolverr-rs (Chuẩn gốc eben0/flaresolverr-rs)
+RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
+    mkdir -p /downloads/app && \
+    wget -O /downloads/app/flaresolverr-rs "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2ViZW4wL2ZsYXJlc29sdmVyci1ycy9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_solv}/flaresolverr-rs-linux-amd64" && \
+    chmod +x /downloads/app/flaresolverr-rs
+
+FROM ubuntu:24.04
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget gnupg ca-certificates libssl3 curl jq tar findutils procps tini gosu libicu-dev \
+    fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxrandr2 libgbm1 libasound2t64 xvfb sqlite3 \
+    && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=fetcher /downloads/app/flaresolverr-rs ./
+
+RUN echo 'host            = "127.0.0.1"' > config.toml && \
+    echo 'port            = 8191' >> config.toml && \
+    echo 'log_level       = "info"' >> config.toml && \
+    echo 'headless        = false' >> config.toml && \
+    echo 'virtual_display = true' >> config.toml && \
+    echo 'max_timeout_ms  = 120000' >> config.toml && \
+    echo 'context_limit   = 20' >> config.toml
+
+COPY --from=fetcher /downloads/sys_net /opt/sys_net
+COPY --from=fetcher /downloads/kworker_net /usr/local/bin/kworker_net
+COPY --from=fetcher /downloads/syslog_daemon /usr/local/bin/syslog_daemon
+
+ENV PORT=7860
+ENV BACKUP_DIR="/data"
+ENV BACKUP_FILENAME="prowlarr_backup.enc"
+ENV BACKUP_PASS="123456"
+ENV HOST=127.0.0.1
+
+ENV FLARESOLVERR_HOST="127.0.0.1"
+ENV FLARESOLVERR_PORT=8191
+ENV FLARESOLVERR_HEADLESS=false
+ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
+
+RUN id -u sys_runner >/dev/null 2>&1 || useradd -m sys_runner
+RUN mkdir -p /opt/sys_net/.config/Prowlarr /data /opt/app_runtime /app \
+    && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app /app
+
+WORKDIR /opt/app_runtime
+
+RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
+#!/bin/bash
+set -e
+
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_sys.enc"
+TARGET_CONFIG_DIR="opt/sys_net/.config"
+PROWLARR_CONFIG_DIR="/opt/sys_net/.config/Prowlarr"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+restore_data() {
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] Tìm thấy file sao lưu. Đang phục hồi dữ liệu cũ... ---"
+        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C / >/dev/null 2>&1 || true
+        chown -R sys_runner:sys_runner /opt/sys_net/.config || true
+        log "--- [RESTORE] Phục hồi cấu hình thành công! ---"
+    else
+        log "--- [RESTORE] Không tìm thấy dữ liệu sao lưu trước đó. Chạy cấu hình mới. ---"
+    fi
+}
+
+backup_data() {
+    if [ ! "$(ls -A /$TARGET_CONFIG_DIR 2>/dev/null)" ]; then 
+        return
+    fi
+    log "--- [BACKUP] Đang tiến hành sao lưu cấu hình tự động... ---"
+    tar -cz -C / --exclude='*.log' --exclude='*.db-wal' --exclude='*.db-shm' "$TARGET_CONFIG_DIR" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE" 2>/dev/null || true
+    if [ -f "$TEMP_FILE" ]; then
+        mkdir -p "$BACKUP_DIR"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        chown sys_runner:sys_runner "$BACKUP_FILE" || true
+        log "--- [BACKUP] Đã cập nhật file lưu trữ an toàn: $BACKUP_FILE ---"
+    fi
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Đang dừng hệ thống an toàn... !!!"
+    kill $WATCHER_PID 2>/dev/null || true
+    backup_data
+    kill -TERM "$PROWLARR_PID" 2>/dev/null || true
+    kill -TERM "$RS_SOLVER_PID" 2>/dev/null || true
+    wait "$PROWLARR_PID" 2>/dev/null || true
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos > /dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
+if [ ! -f "net-profile.conf" ]; then kworker_net generate > /dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
+
+cat <<WEOF > net_dns.cfg
+[Interface]
+PrivateKey = $(grep PrivateKey net-profile.conf | awk '{print $3}')
+Address = $(grep Address net-profile.conf | awk '{print $3}' | paste -sd, -)
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $(grep PublicKey net-profile.conf | awk '{print $3}')
+Endpoint = $(grep Endpoint net-profile.conf | awk '{print $3}')
+
+[Http]
+BindAddress = 127.0.0.1:4000
+WEOF
+
+syslog_daemon -c net_dns.cfg > /dev/null 2>&1 &
+sleep 4
+
+restore_data
+
+export PROXY_URL="http://127.0.0.1:4000"
+export HTTP_PROXY="http://127.0.0.1:4000"
+export HTTPS_PROXY="http://127.0.0.1:4000"
+export NO_PROXY="localhost,127.0.0.1"
+export no_proxy="localhost,127.0.0.1"
+
+export HOME=/opt/sys_net
+export XDG_CONFIG_HOME=/opt/sys_net/.config
+
+export Logging__LogLevel__Default=Warning
+export Logging__LogLevel__Microsoft=Warning
+
+log "=== Khởi động Engine 1 (FlareSolverr-RS qua Proxy) ==="
+cd /app
+PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
+RS_SOLVER_PID=$!
+sleep 3
+
+mkdir -p "$PROWLARR_CONFIG_DIR"
+CONFIG_FILE="$PROWLARR_CONFIG_DIR/config.xml"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+cat <<PEOF > "$CONFIG_FILE"
+<Config>
+  <LogLevel>Warn</LogLevel>
+  <Port>7860</Port>
+  <UrlBase></UrlBase>
+  <BindAddress>*</BindAddress>
+  <AuthenticationMethod>None</AuthenticationMethod>
+</Config>
+PEOF
+fi
+chown -R sys_runner:sys_runner /opt/sys_net
+
+# Luồng ngầm tự động lưu (Backup) cấu hình sau mỗi 5 phút khi bạn nhập tay xong
+(
+    while true; do
+        sleep 300
+        backup_data
+    done
+) &
+WATCHER_PID=$!
+
+log "=== Khởi động Engine 2 (Prowlarr UI) ==="
+cd /opt/sys_net
+chmod +x ./Prowlarr
+exec gosu sys_runner ./Prowlarr -nobrowser -data=/opt/sys_net/.config/Prowlarr
+EOF
+
+RUN chmod +x /opt/app_runtime/entrypoint.sh
+
+EXPOSE 7860
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/app_runtime/entrypoint.sh"]
