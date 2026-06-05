@@ -8,20 +8,7 @@ RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9Qcm93bGFyci9
     mkdir -p /downloads/prowlarr_bin && \
     wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1Byb3dsYXJyL1Byb3dsYXJyL3JlbGVhc2VzL2Rvd25sb2FkLw==" | base64 -d)${v_core}/Prowlarr.master.${v_core#v}.linux-core-x64.tar.gz" | tar xz -C /downloads/prowlarr_bin --strip-components=1
 
-# 2. Tải wgcf 
-RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
-    wget -O /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
-    chmod +x /downloads/kworker_net
-
-# 3. Tải wireproxy
-RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
-    mkdir -p /tmp/wire && \
-    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
-    mv /tmp/wire/wireproxy /downloads/syslog_daemon && \
-    chmod +x /downloads/syslog_daemon && \
-    rm -rf /tmp/wire
-
-# 4. Tải flaresolverr-rs
+# 2. Tải flaresolverr-rs
 RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/app && \
     wget -O /downloads/app/flaresolverr-rs "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2ViZW4wL2ZsYXJlc29sdmVyci1ycy9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_solv}/flaresolverr-rs-linux-amd64" && \
@@ -30,7 +17,6 @@ RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGF
 FROM ubuntu:24.04
 
 USER root
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -44,9 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
 COPY --from=fetcher /downloads/app/flaresolverr-rs ./
 
+# Cấu hình FlareSolverr-RS chạy trực tiếp trên cổng mặc định 8191
 RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'port            = 8191' >> config.toml && \
     echo 'log_level       = "info"' >> config.toml && \
@@ -55,10 +41,7 @@ RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'max_timeout_ms  = 120000' >> config.toml && \
     echo 'context_limit   = 20' >> config.toml
 
-# Fix lỗi AppData: Chuyển binaries của Prowlarr sang thư mục /opt/prowlarr_bin độc lập
 COPY --from=fetcher /downloads/prowlarr_bin /opt/prowlarr_bin
-COPY --from=fetcher /downloads/kworker_net /usr/local/bin/kworker_net
-COPY --from=fetcher /downloads/syslog_daemon /usr/local/bin/syslog_daemon
 
 ENV PORT=7860
 ENV BACKUP_DIR="/data"
@@ -76,7 +59,6 @@ RUN mkdir -p /opt/sys_net/.config/Prowlarr /data /opt/app_runtime /app /opt/prow
     && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app /opt/prowlarr_bin
 
 WORKDIR /opt/app_runtime
-
 RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
 #!/bin/bash
 set -e
@@ -89,7 +71,6 @@ PROWLARR_CONFIG_DIR="/opt/sys_net/.config/Prowlarr"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
 get_current_hash() {
-    # Tính toán hash không gian config Prowlarr, loại bỏ log và sqlite tạm
     find /opt/sys_net/.config -type f -not -name "*.log" -not -name "*.db-wal" -not -name "*.db-shm" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
 }
 
@@ -143,43 +124,14 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos > /dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
-if [ ! -f "net-profile.conf" ]; then kworker_net generate > /dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
-
-cat <<WEOF > net_dns.cfg
-[Interface]
-PrivateKey = $(grep PrivateKey net-profile.conf | awk '{print $3}')
-Address = $(grep Address net-profile.conf | awk '{print $3}' | paste -sd, -)
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $(grep PublicKey net-profile.conf | awk '{print $3}')
-Endpoint = $(grep Endpoint net-profile.conf | awk '{print $3}')
-
-[Http]
-BindAddress = 127.0.0.1:4000
-WEOF
-
-syslog_daemon -c net_dns.cfg > /dev/null 2>&1 &
-sleep 4
-
 restore_data
-
-export PROXY_URL="http://127.0.0.1:4000"
-export HTTP_PROXY="http://127.0.0.1:4000"
-export HTTPS_PROXY="http://127.0.0.1:4000"
-export NO_PROXY="localhost,127.0.0.1"
-export no_proxy="localhost,127.0.0.1"
 
 export HOME=/opt/sys_net
 export XDG_CONFIG_HOME=/opt/sys_net/.config
 
-export Logging__LogLevel__Default=Warning
-export Logging__LogLevel__Microsoft=Warning
-
-log "=== Khởi động Engine 1 (FlareSolverr-RS qua Proxy) ==="
+log "=== Khởi động Engine 1 (FlareSolverr-RS Nguyên bản) ==="
 cd /app
-PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
+HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
 RS_SOLVER_PID=$!
 sleep 3
 
@@ -199,7 +151,6 @@ PEOF
 fi
 chown -R sys_runner:sys_runner /opt/sys_net
 
-# Đặt thời gian check nhạy hơn ở những phút đầu tiên để người dùng thấy kết quả backup luôn
 (
     sleep 30
     backup_data
@@ -214,7 +165,6 @@ log "=== Khởi động Engine 2 (Prowlarr UI) ==="
 cd /opt/prowlarr_bin
 chmod +x ./Prowlarr
 
-# ĐÃ FIX: Loại bỏ `exec` để giữ lại tiến trình theo dõi tín hiệu tắt hệ thống
 gosu sys_runner ./Prowlarr -nobrowser -data=/opt/sys_net/.config/Prowlarr &
 PROWLARR_PID=$!
 
@@ -223,7 +173,5 @@ backup_data
 EOF
 
 RUN chmod +x /opt/app_runtime/entrypoint.sh
-
 EXPOSE 7860
-
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/app_runtime/entrypoint.sh"]
