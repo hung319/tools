@@ -61,7 +61,7 @@ COPY --from=builder /app/backend ./backend
 COPY --from=builder /app/frontend/dist ./frontend/dist
 COPY --from=source-fetcher /src/package.json /src/pnpm-workspace.yaml ./
 
-# Đắp cấu hình Proxy hệ thống giao thức http chuẩn chỉnh cho ứng dụng
+# Cấu hình biến môi trường hệ thống
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=7860 \
@@ -97,7 +97,6 @@ start_warp_proxy() {
     killall wireproxy 2>/dev/null || true
     rm -rf /root/wgcf && mkdir -p /root/wgcf && cd /root/wgcf
     
-    # Cô lập biến proxy để tránh nghẽn luồng đăng ký tài khoản lúc đầu
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1 || true
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1 || true
 
@@ -134,7 +133,8 @@ restore_data() {
     if [ -f "$BACKUP_PATH" ]; then
         log "--- [RESTORE] Tìm thấy bản lưu. Đang giải mã và phục hồi dữ liệu hệ thống... ---"
         if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C / 2>/dev/null; then
-            log "--- [RESTORE] Phục hồi dữ liệu thành công! ---"
+            log "--- [RESTORE] Phục hồi dữ liệu thành công! Bảo đảm cấp lại toàn quyền ghi... ---"
+            chmod -R 777 /root /data /app 2>/dev/null || true
         else
             log "--- [RESTORE] Thất bại (Sai mật khẩu hoặc file lỗi) ---"
         fi
@@ -146,23 +146,19 @@ restore_data() {
 backup_data() {
     if [ ! -d "/root/data" ] && [ ! -d "/root/.config" ]; then return; fi
 
-    if [ -f "$BACKUP_PATH" ]; then
-        CHANGED=$(find /root -type f -not -path "*/.cache/*" -not -path "*/.npm/*" -not -name "*.log" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
-        if [ -z "$CHANGED" ]; then return; fi
-    fi
-
-    log "--- [BACKUP] Đang đóng gói và mã hóa toàn bộ dữ liệu cấu hình + workspace... ---"
+    log "--- [BACKUP] Kích hoạt tiến trình nén và mã hóa dữ liệu... ---"
     mkdir -p "$BACKUP_DIR"
     
     if tar -cz -C / \
         --exclude='root/.cache' \
         --exclude='root/.npm' \
         --exclude='root/wgcf' \
+        --exclude='root/data/*.db-journal' \
         --exclude='*.log' \
         root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         
         mv "$TEMP_PATH" "$BACKUP_PATH"
-        log "--- [BACKUP] Đã cập nhật bản lưu mã hóa bảo mật lúc $(date) ---"
+        log "--- [BACKUP] Đã cập nhật bản lưu mã hóa thành công lúc $(date) ---"
     else
         log "--- [BACKUP] Lỗi trong quá trình nén hoặc mã hóa dữ liệu! ---"
         rm -f "$TEMP_PATH"
@@ -170,38 +166,51 @@ backup_data() {
 }
 
 cleanup() {
-    log "!!! [STOP] Đang thực hiện sao lưu an toàn cuối cùng... !!!"
-    backup_data
+    log "!!! [STOP] Container đang bị dừng! Tiến hành chạy cứu hộ dữ liệu khẩn cấp... !!!"
+    if [ -d "/root/data" ] || [ -d "/root/.config" ]; then
+        tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='root/wgcf' --exclude='root/data/*.db-journal' --exclude='*.log' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$BACKUP_PATH"
+        log "!!! [STOP] Đã cứu hộ backup thành công trước khi tắt máy !!!"
+    fi
     exit 0
 }
 
+# Đăng ký tín hiệu shutdown từ hệ thống
 trap cleanup SIGTERM SIGINT
 
-# Gọi khởi chạy WARP lần đầu
+# Khởi chạy dịch vụ ban đầu
 start_warp_proxy
-
 restore_data
 backup_data
 
-# --- TIẾN TRÌNH NGỤY TRANG: AUTO BACKUP (1 GIỜ/LẦN) & XOAY IP WARP (6 GIỜ/LẦN) ---
+# --- TIẾN TRÌNH THEO DÕI SỰ KIỆN THEO THỜI GIAN THỰC (INOTIFYWAIT) ---
 (
-    exec -a "[kworker/u:2]" bash -c '
-    TIMER_COUNT=0
+    LAST_WARP_ROTATE=$(date +%s)
+
     while true; do
+        # Đóng băng luồng, chỉ thức dậy khi nhân Linux báo cáo có file bị thay đổi (0% CPU Polling)
+        inotifywait -r -e modify -e create -e delete -e move \
+            --exclude '(\.cache|\.npm|wgcf|\.db-journal|\.log)' \
+            /root /app 2>/dev/null
+
+        log "--- [INOTIFY] Phát hiện hệ thống có tệp tin vừa thay đổi! ---"
+        log "--- [INOTIFY] Bắt đầu đếm ngược 5 phút (Debounce) trước khi cập nhật file lưu... ---"
+        
+        # Ngủ 5 phút để gom cụm toàn bộ các thao tác ghi tiếp theo (tránh spam nén file liên tục)
         sleep 300
-        ((TIMER_COUNT+=1))
         
-        # Gọi hàm kiểm tra và thực hiện backup định kỳ mỗi 1 giờ
+        # Tiến hành backup dữ liệu mới
         backup_data
-        
-        # Đủ 6 chu kỳ (6 tiếng) -> Tiến hành xoay IP một lần
-        if [ $TIMER_COUNT -ge 6 ]; then
-            source /usr/local/bin/entrypoint.sh && start_warp_proxy
-            TIMER_COUNT=0
+
+        # Kiểm tra chu kỳ xoay IP WARP (Mỗi 6 tiếng = 21600 giây)
+        NOW=$(date +%s)
+        RUN_TIME=$((NOW - LAST_WARP_ROTATE))
+        if [ $RUN_TIME -ge 21600 ]; then
+            log "--- [WARP-ROTATE] Đã đạt chu kỳ 6 giờ. Tiến hành làm mới định tuyến mạng... ---"
+            start_warp_proxy
+            LAST_WARP_ROTATE=$NOW
         fi
     done
-    '
-) <&- >&- 2>&- &
+) &
 
 log "Đang khởi động Opencode Manager tại /app trên cổng $PORT..."
 exec bun backend/src/index.ts
