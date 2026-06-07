@@ -112,15 +112,18 @@ restore_data() {
 
 backup_data() {
     if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
-    
-    if [ -f "$BACKUP_PATH" ]; then
-        CHANGED=$(find /root -type f -not -path "*/.cache/*" -not -path "*/.npm/*" -not -path "*/.uv/*" -not -name "*.log" -not -name "*.pid" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
-        if [ -z "$CHANGED" ]; then return; fi
-    fi
 
-    log "--- [BACKUP] Phát hiện thay đổi, đang đóng gói dữ liệu an toàn... ---"
+    log "--- [BACKUP] Kích hoạt tiến trình nén và mã hóa dữ liệu... ---"
     mkdir -p "$BACKUP_DIR"
-    if tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='root/.uv' --exclude='*.log' --exclude='*.pid' --exclude='root/.config/openchamber/pids' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+    if tar -cz -C / \
+        --exclude='root/.cache' \
+        --exclude='root/.npm' \
+        --exclude='root/.uv' \
+        --exclude='*.log' \
+        --exclude='*.pid' \
+        --exclude='root/.config/openchamber/pids' \
+        root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+        
         mv "$TEMP_PATH" "$BACKUP_PATH"
         log "--- [BACKUP] Đã ghi đè cập nhật bản lưu mã hóa thành công! ---"
     else
@@ -131,6 +134,7 @@ backup_data() {
 
 cleanup() {
     log "!!! [STOP] Đang thực hiện sao lưu khẩn cấp trước khi tắt máy... !!!"
+    # Khi container tắt, ép chạy backup luôn không cần đợi inotify kích hoạt
     backup_data
     [ -n "${APP_PID:-}" ] && kill -TERM "$APP_PID" 2>/dev/null
     exit 0
@@ -142,23 +146,32 @@ start_warp_proxy
 restore_data
 backup_data
 
-# Xuất hàm ra môi trường cho tiến trình ngầm sử dụng công khai
-export -f backup_data
-export -f log
-export BACKUP_DIR BACKUP_FILENAME BACKUP_PASS TEMP_PATH
-
-# --- TIẾN TRÌNH AUTO KIỂM TRA ĐỊNH KỲ (1 TIẾNG/LẦN) & XOAY IP (6 TIẾNG/LẦN) ---
+# --- TIẾN TRÌNH THEO DÕI SỰ KIỆN REALT-TIME (INOTIFYWAIT EVENT-DRIVEN) ---
 (
-    TIMER_COUNT=0
+    LAST_WARP_ROTATE=$(date +%s)
+
     while true; do
+        # Lắng nghe thay đổi trực tiếp trên thư mục /root (Loại trừ cache và logs)
+        inotifywait -r -e modify -e create -e delete -e move \
+            --exclude '(\.cache|\.npm|\.uv|\.pid|pids|.*\.log)' \
+            /root 2>/dev/null
+
+        log "--- [INOTIFY] Phát hiện hệ thống có tệp tin vừa thay đổi! ---"
+        log "--- [INOTIFY] Bắt đầu đếm ngược 5 phút (Debounce) trước khi cập nhật file lưu... ---"
+        
+        # Đợi 5 phút để gom toàn bộ dữ liệu ghi dồn dập (tránh spam nén liên tục)
         sleep 300
-        ((TIMER_COUNT+=1))
         
+        # Tiến hành nén
         backup_data
-        
-        if [ $TIMER_COUNT -ge 6 ]; then
-            source /usr/local/bin/entrypoint.sh && start_warp_proxy
-            TIMER_COUNT=0
+
+        # Kiểm tra chu kỳ xoay IP WARP (Mỗi 6 tiếng = 21600 giây)
+        NOW=$(date +%s)
+        RUN_TIME=$((NOW - LAST_WARP_ROTATE))
+        if [ $RUN_TIME -ge 21600 ]; then
+            log "--- [WARP-ROTATE] Đã đạt chu kỳ 6 giờ. Tiến hành làm mới định tuyến mạng... ---"
+            start_warp_proxy
+            LAST_WARP_ROTATE=$NOW
         fi
     done
 ) &
