@@ -28,7 +28,7 @@ FROM node:24.13.0-slim AS runner
 
 # Cài đặt công cụ nền và tải WGCF + Wireproxy phiên bản cố định ổn định
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl lsof ripgrep ca-certificates grep gawk sed findutils \
+    git curl lsof ripgrep ca-certificates grep gawk sed findutils openssh-client \
     coreutils procps jq less tree file python3 python3-pip python3-venv \
     tar openssl unzip inotify-tools tini chromium bash psmisc \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
