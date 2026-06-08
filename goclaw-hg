@@ -1,187 +1,178 @@
-# ==============================================================================
-# GIAI ĐOẠN 1: Tải Lightpanda Browser cục bộ
-# ==============================================================================
-FROM alpine:3.19 AS browser-builder
-WORKDIR /opt/lightpanda
-RUN apk add --no-cache curl && \
-    curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && \
-    chmod a+x ./lightpanda
-
-# ==============================================================================
-# GIAI ĐOẠN 2: Hệ điều hành nền cài PostgreSQL 18 Local & Tích hợp Bộ Cứu Hộ
-# ==============================================================================
-FROM ubuntu:24.04
+FROM ghcr.io/nextlevelbuilder/goclaw:latest
 
 USER root
-ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Cài đặt các công cụ hệ thống thiết yếu và kho lưu trữ PostgreSQL
-RUN apt-get update && apt-get install -y curl gnupg ca-certificates tini psmisc openssl findutils tar && \
-    install -d /etc/apt/keyrings && \
-    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt noble-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+RUN apk update && apk add --no-cache \
+    curl ca-certificates \
+    postgresql18 postgresql18-contrib postgresql-pgvector \
+    python3 py3-pip python3-dev build-base libxml2-dev libxslt-dev zlib-dev jpeg-dev linux-headers \
+    nodejs npm \
+    chromium font-noto \
+    git lsof ripgrep grep gawk sed procps jq less tree file pandoc github-cli poppler-utils \
+    inotify-tools tini psmisc openssl tar sudo bash
 
-# 2. Cài đặt PostgreSQL 18 và Python3 cho Kỹ năng
-RUN apt-get update && apt-get install -y \
-    postgresql-18 \
-    postgresql-18-pgvector \
-    python3-pip \
-    python3-venv \
-    python3-dev \
-    libxml2-dev \
-    libxslt1-dev \
-    zlib1g-dev \
-    libjpeg-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --quiet --break-system-packages pypdf Pillow pdfplumber pdf2image defusedxml lxml openpyxl anthropic \
+    && npm install -g -q npm@latest > /dev/null 2>&1 \
+    && npm install -g -q --prefer-online docx@^9.6.1 pptxgenjs@^4.0.1 @googleworkspace/cli@0.22.5 @anthropic-ai/claude-code@^2.1.91 \
+    > /dev/null 2>&1
 
-# 3. Cài đặt các gói phụ thuộc Python cho GoClaw Skills
-RUN pip3 install --break-system-packages \
-    pypdf Pillow pdfplumber pdf2image \
-    defusedxml lxml openpyxl anthropic
+RUN ARCH=$(apk --print-arch) \
+    && if [ "$ARCH" = "x86_64" ]; then \
+         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hbWQ2NA==" | base64 -d) -o /usr/local/bin/wgcf; \
+         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hbWQ2NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
+       else \
+         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hcm02NA==" | base64 -d) -o /usr/local/bin/wgcf; \
+         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hbWQ2NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
+       fi \
+    && chmod +x /usr/local/bin/wgcf /usr/local/bin/wireproxy
 
-# 4. Sao chép file thực thi của Lightpanda và GoClaw vào hệ thống
-COPY --from=browser-builder /opt/lightpanda/lightpanda /usr/local/bin/lightpanda
-COPY --from=ghcr.io/nextlevelbuilder/goclaw:latest /app /app
 WORKDIR /app
 
-# ==============================================================================
-# CẤU HÌNH BIẾN MÔI TRƯỜNG & HỆ THỐNG BACKUP
-# ==============================================================================
 ENV GOCLAW_PORT=7860 \
-    BROWSER_WS_ENDPOINT=ws://127.0.0.1:9222 \
-    LIGHTPANDA_DISABLE_TELEMETRY=true \
+    GOCLAW_BROWSER_REMOTE_URL=ws://127.0.0.1:9222 \
     GOCLAW_JWT_SECRET=ThayDoiChuoiNayThanhMatKhauCuaBan2026! \
     GOCLAW_GATEWAY_TOKEN=MySuperSecretToken2026! \
     GOCLAW_POSTGRES_DSN=postgres://goclaw_user:goclaw_pass@127.0.0.1:5432/goclaw_db?sslmode=disable \
     GOCLAW_AUTO_UPGRADE=true \
     GOCLAW_ENCRYPTION_KEY=ChuoiBiMat32KyTuGoclawEncryptKey! \
+    GOCLAW_CONFIG=/app/config.json \
+    GOCLAW_WORKSPACE=/app/workspace \
+    GOCLAW_DATA_DIR=/app/data \
+    GOCLAW_SKILLS_DIR=/app/skills \
+    GOCLAW_MIGRATIONS_DIR=/app/migrations \
+    GOCLAW_HOST=0.0.0.0 \
     BACKUP_DIR="/data" \
     BACKUP_FILENAME="goclaw_backup.enc" \
-    BACKUP_PASS="123456"
+    BACKUP_PASS="123456" \
+    HTTP_PROXY="http://127.0.0.1:4001" \
+    HTTPS_PROXY="http://127.0.0.1:4001" \
+    ALL_PROXY="http://127.0.0.1:4001" \
+    NO_PROXY="localhost,127.0.0.1" \
+    PATH="/usr/local/bin:/app:/app/data/.runtime/bin:${PATH}" \
+    WGCF_FORCE_REGISTER=1
 
-RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
+RUN mkdir -p /app/workspace /app/data/.runtime/pip /app/data/.runtime/npm-global/lib \
+    /app/data/.runtime/pip-cache /app/data/.runtime/bin /app/data/.claude /app/skills \
+    /app/tsnet-state /app/.goclaw /root/.goclaw /var/lib/postgresql/data /data \
+    /app/migrations /app/bundled-skills /run/postgresql \
+    && chmod -R 777 /data /root /app /var/lib/postgresql /run/postgresql /tmp
 
-# ==============================================================================
-# 5. SCRIPT ENTRYPOINT: KHÔI PHỤC VÀ SAO LƯU (ĐÃ SỬA CÚ PHÁP NHÁY SQL)
-# ==============================================================================
-RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+COPY <<-"EOF" /usr/local/bin/entrypoint.sh
 #!/bin/bash
-set -e
+exec 2>&1
+set -x
 
-BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
-TEMP_PATH="/tmp/temp_goclaw.enc"
-INSIDE_SQL_PATH="/var/lib/postgresql/goclaw_backup.sql"
-
+echo "--- [SYSTEM] SCRIPT ĐÃ KÍCH HOẠT THÀNH CÔNG ---"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# --- HÀM PHỤC HỒI (RESTORE) ---
-restore_data() {
-    if [ -f "$BACKUP_PATH" ]; then
-        log "--- [RESTORE] Tìm thấy file $BACKUP_FILENAME. Đang giải mã khôi phục hệ thống... ---"
-        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
-            log "--- [RESTORE] Khôi phục thư mục gốc và file Dump thành công! ---"
-            
-            # Xóa file lock của Postgres cũ (nếu có)
-            rm -f /var/lib/postgresql/18/main/postmaster.pid 2>/dev/null || true
-            
-            fuser -k "7860/tcp" 2>/dev/null || true
-            fuser -k "9222/tcp" 2>/dev/null || true
-        else
-            log "--- [RESTORE] Thất bại (Mật khẩu sai hoặc tệp nén bị lỗi) ---"
-        fi
-    else
-        log "--- [RESTORE] Chưa có bản lưu nào tại $BACKUP_DIR. Khởi động môi trường mới hoàn toàn... ---"
-    fi
-}
-
-# --- HÀM SAO LƯU (GỘP CẢ THƯ MỤC BAN ĐẦU + DUMP SQL VÀO FILE .ENC) ---
-backup_data() {
-    if [ -f /var/lib/postgresql/18/main/postmaster.pid ]; then
-        if [ -f "$BACKUP_PATH" ]; then
-            CHANGED=$(find /var/lib/postgresql /root/.goclaw -type f \
-                -not -name "*.log" -not -name "*.pid" -not -name "postmaster.pid" -not -name "goclaw_backup.sql" -newer "$BACKUP_PATH" -print -quit 2>/dev/null)
-            if [ -z "$CHANGED" ]; then return; fi
-        fi
-
-        log "--- [BACKUP] Phát hiện thay đổi dữ liệu. Tiến hành sao lưu tổng lực... ---"
-        mkdir -p "$BACKUP_DIR"
-
-        # Bước 1: Xuất file Raw SQL đút vào bên trong thư mục /var/lib/postgresql
-        if su - postgres -c "pg_dump -d goclaw_db --clean --inserts" > "$INSIDE_SQL_PATH" 2>/dev/null; then
-            log "--- [BACKUP] Đã cập nhật file Raw SQL ẩn bên trong thư mục dữ liệu. ---"
-        else
-            log "--- [BACKUP] Lỗi khi trích xuất pg_dump SQL! ---"
-        fi
-
-        # Bước 2: Đóng gói và mã hóa
-        if tar -cz -C / \
-            --exclude='*.log' \
-            --exclude='*.pid' \
-            --exclude='var/lib/postgresql/18/main/postmaster.pid' \
-            var/lib/postgresql \
-            root/.goclaw 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
-            
-            mv "$TEMP_PATH" "$BACKUP_PATH"
-            log "--- [BACKUP] Thành công! Đã đồng bộ tất cả vào tệp mã hóa duy nhất: $BACKUP_PATH ---"
-        else
-            log "--- [BACKUP] Quá trình đóng gói mã hóa bị lỗi! ---"
-            rm -f "$TEMP_PATH"
-        fi
+start_warp_proxy() {
+    log "--- [WARP] Đang khởi tạo Proxy mạng sạch... ---"
+    killall wireproxy 2>/dev/null || true
+    rm -rf /root/wgcf && mkdir -p /root/wgcf && cd /root/wgcf
+    
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1
+    
+    if [ -f "wgcf-profile.conf" ]; then
+        PRIVATE_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+        PUBLIC_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+        ADDRESS=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
         
-        rm -f "$INSIDE_SQL_PATH"
+        cat <<WCONF > wireproxy.conf
+[Interface]
+PrivateKey = $PRIVATE_KEY
+Address = $ADDRESS
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PUBLIC_KEY
+Endpoint = $ENDPOINT
+
+[http]
+BindAddress = 127.0.0.1:4001
+WCONF
+
+        wireproxy -c wireproxy.conf >/dev/null 2>&1 &
+        sleep 2
+        log "--- [WARP] Đã lên mạng sạch thành công tại cổng 4001 ---"
+    else
+        log "--- [WARP] Không thể đăng ký cấu hình mới, bypass proxy hệ thống ---"
+        unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
     fi
+    cd /app
 }
 
-cleanup() {
-    log "!!! [STOP] Nhận lệnh tắt từ Hugging Face. Đang nén sao lưu khẩn cấp... !!!"
-    backup_data
-    [ -n "$GOCLAW_PID" ] && kill -TERM "$GOCLAW_PID"
-    exit 0
+restore_data() {
+    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
+        log "--- [RESTORE] Tìm thấy bản sao lưu cũ, tiến hành khôi phục dữ liệu... ---"
+        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_DIR/$BACKUP_FILENAME" | tar -xz -C / 2>/dev/null || true
+        rm -f /var/lib/postgresql/data/postmaster.pid 2>/dev/null || true
+    fi
+    chown -R postgres:postgres /var/lib/postgresql /run/postgresql 2>/dev/null || true
+    chmod 777 /app /app/workspace /app/skills /data /root /tmp 2>/dev/null || true
 }
 
-trap cleanup SIGTERM SIGINT
+do_backup() {
+    log "--- [AUTO-BACKUP] Đang thực hiện sao lưu dữ liệu... ---"
+    mkdir -p "$BACKUP_DIR"
+    su - postgres -c "psql -h /tmp -c 'CHECKPOINT;'" >/dev/null 2>&1 || true
+    tar -cz -C / var/lib/postgresql/data app/workspace app/data app/skills 2>/dev/null | \
+    openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$BACKUP_DIR/$BACKUP_FILENAME.tmp"
+    mv "$BACKUP_DIR/$BACKUP_FILENAME.tmp" "$BACKUP_DIR/$BACKUP_FILENAME"
+    log "--- [AUTO-BACKUP] Hoàn thành lưu bản backup an toàn ---"
+}
 
-# Thực hiện khôi phục trước khi bật Database
+watch_and_backup() {
+    sleep 10
+    log "--- [WATCHER] Kích hoạt chế độ theo dõi thay đổi file bằng inotify ---"
+    
+    while true; do
+        inotifywait -r -e modify -e create -e delete -e move /app/workspace /app/skills /app/data 2>/dev/null
+        log "--- [WATCHER] Phát hiện thay đổi, đợi 5 phút (300s) ổn định để gom cụm backup ---"
+        sleep 300
+        do_backup
+    done
+}
+
+start_warp_proxy
 restore_data
 
-# Khởi động PostgreSQL 18
-service postgresql start
+log "--- [DATABASE] Khởi tạo PostgreSQL 18... ---"
+if [ ! -s "/var/lib/postgresql/data/PG_VERSION" ]; then
+    su - postgres -c "initdb -D /var/lib/postgresql/data"
+fi
+chmod 700 /var/lib/postgresql/data
+su - postgres -c "pg_ctl -D /var/lib/postgresql/data -o '-k /tmp' -l /tmp/postgres.log start"
 sleep 3
 
-# [ĐÃ SỬA TẠI ĐÂY]: Dọn sạch các ký tự escape gạch chéo (\) thừa thãi giúp SQL chạy mượt mà
-if ! su - postgres -c "psql -lqt" | cut -d \| -f 1 | grep -qw goclaw_db; then
-    log "--- [DATABASE] Khởi tạo database GoClaw ban đầu... ---"
-    su - postgres -c "psql -c \"CREATE USER goclaw_user WITH PASSWORD 'goclaw_pass';\""
-    su - postgres -c "psql -c \"CREATE DATABASE goclaw_db OWNER goclaw_user;\""
-    su - postgres -c "psql -d goclaw_db -c \"CREATE EXTENSION IF NOT EXISTS vector;\""
+if ! su - postgres -c "psql -h /tmp -lqt" | cut -d \| -f 1 | grep -qw goclaw_db; then
+    su - postgres -c "psql -h /tmp -c \"CREATE USER goclaw_user WITH PASSWORD 'goclaw_pass';\""
+    su - postgres -c "psql -h /tmp -c \"CREATE DATABASE goclaw_db OWNER goclaw_user;\""
+    su - postgres -c "psql -h /tmp -d goclaw_db -c \"CREATE EXTENSION IF NOT EXISTS vector;\""
 fi
 
-# Khởi chạy trình duyệt Lightpanda
-lightpanda serve --host 127.0.0.1 --port 9222 &
+log "--- [BROWSER] Kích hoạt Chrome Headless (CDP :9222) ---"
+rm -rf /tmp/chromium && mkdir -p /tmp/chromium && chmod 777 /tmp/chromium
+chromium-browser --headless=new --no-sandbox --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --remote-allow-origins=* --disable-gpu --disable-dev-shm-usage --user-data-dir=/tmp/chromium &
 sleep 2
 
-# Tạo bản lưu dự phòng đầu tiên
-backup_data
+if [ -f "/app/pkg-helper" ]; then
+    /app/pkg-helper &
+    sleep 1
+elif [ -f "/usr/local/bin/pkg-helper" ]; then
+    /usr/local/bin/pkg-helper &
+    sleep 1
+fi
 
-# Watcher chạy ngầm mỗi 120 giây
-(
-    while true; do
-        sleep 120
-        backup_data
-    done
-) &
+watch_and_backup &
 
-log "Khởi động bộ não AI GoClaw trên cổng ${GOCLAW_PORT}..."
-fuser -k "${GOCLAW_PORT}/tcp" 2>/dev/null || true
-
-./goclaw &
-GOCLAW_PID=$!
-
-wait "$GOCLAW_PID"
+log "--- [GOCLAW] Khởi động ứng dụng chính thức ---"
+exec /app/goclaw
 EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-EXPOSE 7860
+ENTRYPOINT []
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/bash", "/usr/local/bin/entrypoint.sh"]
