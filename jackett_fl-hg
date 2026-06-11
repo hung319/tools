@@ -1,48 +1,49 @@
 FROM alpine:latest AS fetcher
-RUN apk add --no-cache curl jq tar wget
+
+# Cài đặt thêm xz để hỗ trợ nếu cần, xử lý tải file thuần bằng curl
+RUN apk add --no-cache curl jq tar ca-certificates
 
 WORKDIR /downloads
 
+# 1. Tải Jackett Core
 RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/sys_net && \
-    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL0phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
+    curl -sSL "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
     mv /downloads/sys_net/jackett /downloads/sys_net/srv_core
 
+# 2. Tải FlareSolverr-RS
+RUN api_url=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
+    dl_url=$(curl -s "$api_url" | jq -r '.assets[] | select(.name == "flaresolverr-rs-linux-amd64") | .browser_download_url') && \
+    curl -sSL -o /downloads/flaresolverr-rs-bin "$dl_url" && \
+    chmod +x /downloads/flaresolverr-rs-bin
+
+# 3. Tải kworker_net (wgcf)
 RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
-    wget -O /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
+    curl -sSL -o /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
     chmod +x /downloads/kworker_net
 
+# 4. SỬA LỖI TẠI ĐÂY: Dùng curl -sSL để tải wireproxy chuẩn xác thông qua GitHub Redirect
 RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /tmp/wire && \
-    wget -qO- "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
+    curl -sSL "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
     mv /tmp/wire/wireproxy /downloads/syslog_daemon && \
     chmod +x /downloads/syslog_daemon && \
     rm -rf /tmp/wire
 
-RUN v_solv=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
-    mkdir -p /downloads/app && \
-    wget -O /downloads/app/flaresolverr-rs "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2ViZW4wL2ZsYXJlc29sdmVyci1ycy9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_solv}/flaresolverr-rs-linux-amd64" && \
-    chmod +x /downloads/app/flaresolverr-rs
 
-FROM ubuntu:24.04
+FROM debian:stable-slim
 
 USER root
 
-ENV DEBIAN_FRONTEND=noninteractive
-
+# Tối ưu hóa tầng chạy chính với Chromium nhẹ của Debian
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget gnupg ca-certificates libssl3 curl jq tar findutils procps tini gosu libicu-dev \
-    fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
-    libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
-    libxrandr2 libgbm1 libasound2t64 xvfb \
-    && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    wget ca-certificates libssl3 curl jq tar findutils procps tini gosu \
+    chromium xvfb inotify-tools bash libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=fetcher /downloads/app/flaresolverr-rs ./
+COPY --from=fetcher /downloads/flaresolverr-rs-bin ./flaresolverr-rs
 
 RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'port            = 8191' >> config.toml && \
@@ -67,7 +68,9 @@ ENV FLARESOLVERR_PORT=8191
 ENV FLARESOLVERR_HEADLESS=false
 ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
 
-RUN id -u sys_runner >/dev/null 2>&1 || useradd -m sys_runner
+RUN getent group sys_runner || groupadd -r sys_runner && \
+    getent passwd sys_runner || useradd -r -g sys_runner -d /opt/sys_net -s /sbin/nologin sys_runner
+
 RUN mkdir -p /opt/sys_net/.config/Jackett /data /opt/app_runtime /app \
     && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app
 
@@ -75,44 +78,40 @@ WORKDIR /opt/app_runtime
 
 RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
 #!/bin/bash
-set -e
 
 BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_FILE="/tmp/temp_sys.enc"
 HASH_FILE="/tmp/config_hash.md5"
+CONFIG_DIR="/opt/sys_net/.config"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# Hàm tính mã hash hiện tại của thư mục config (bỏ qua log)
 get_current_hash() {
-    find /opt/sys_net/.config -type f -not -name "*.log" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
+    find "$CONFIG_DIR" -type f -not -name "*.log" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
 }
 
 restore_data() {
     if [ -f "$BACKUP_FILE" ]; then
         log "--- [RESTORE] Found backup file. Restoring service cache... ---"
-        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /opt/sys_net/ >/dev/null 2>&1 || true
-        chown -R sys_runner:sys_runner /opt/sys_net/.config || true
+        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /opt/sys_net/ 2>&1 || true
+        chown -R sys_runner:sys_runner "$CONFIG_DIR" || true
         log "--- [RESTORE] Cache restoration completed successfully. ---"
     else
         log "--- [RESTORE] No prior backup file found at $BACKUP_FILE. Skipping. ---"
     fi
-    # Ghi nhận trạng thái hash ngay sau khi restore thành công
     get_current_hash > "$HASH_FILE"
 }
 
 backup_data() {
-    if [ ! "$(ls -A /opt/sys_net/.config 2>/dev/null)" ]; then 
+    if [ ! "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]; then 
         log "--- [BACKUP] Target config directory is empty. Skipping backup. ---"
         return
     fi
     
-    # Kiểm tra thay đổi bằng MD5 thay vì thời gian file (mtime)
     if [ -f "$BACKUP_FILE" ] && [ -f "$HASH_FILE" ]; then
         OLD_HASH=$(cat "$HASH_FILE")
         NEW_HASH=$(get_current_hash)
         if [ "$OLD_HASH" = "$NEW_HASH" ]; then
-            log "--- [BACKUP] No configuration changes detected via MD5. Skipping backup. ---"
             return
         fi
     fi
@@ -123,7 +122,7 @@ backup_data() {
         mkdir -p "$BACKUP_DIR"
         mv "$TEMP_FILE" "$BACKUP_FILE"
         chown sys_runner:sys_runner "$BACKUP_FILE" || true
-        get_current_hash > "$HASH_FILE" # Cập nhật lại hash mới
+        get_current_hash > "$HASH_FILE"
         log "--- [BACKUP] Successfully updated backup: $BACKUP_FILE ---"
     else
         log "--- [BACKUP] ERROR: Failed to create encrypted backup package. ---"
@@ -143,8 +142,9 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos > /dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
-if [ ! -f "net-profile.conf" ]; then kworker_net generate > /dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
+log "--- Preparing kworker_net configs ---"
+if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos >/dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
+if [ ! -f "net-profile.conf" ]; then kworker_net generate >/dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
 
 cat <<WEOF > net_dns.cfg
 [Interface]
@@ -160,7 +160,8 @@ Endpoint = $(grep Endpoint net-profile.conf | awk '{print $3}')
 BindAddress = 127.0.0.1:4000
 WEOF
 
-syslog_daemon -c net_dns.cfg > /dev/null 2>&1 &
+log "--- Launching syslog_daemon ---"
+syslog_daemon -c net_dns.cfg >/dev/null 2>&1 &
 sleep 5
 
 restore_data
@@ -169,11 +170,12 @@ export PROXY_URL="http://127.0.0.1:4000"
 export HOME=/opt/sys_net
 export XDG_CONFIG_HOME=/opt/sys_net/.config
 
-log "=== Starting Engine 1 (FlareSolverr-RS Binary via Proxy) ==="
+log "=== Starting Engine 1 (FlareSolverr-RS Prebuilt Binary) ==="
 cd /app
+
 PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
 RS_SOLVER_PID=$!
-sleep 4
+sleep 5
 
 if [ ! -f "/opt/sys_net/.config/Jackett/ServerConfig.json" ]; then
     log "--- [CONFIG] ServerConfig.json not found. Generating default... ---"
@@ -190,17 +192,16 @@ if [ ! -f "/opt/sys_net/.config/Jackett/ServerConfig.json" ]; then
   "BasePath": ""
 }
 JEOF
-else
-    log "--- [CONFIG] ServerConfig.json already restored from backup. Preserving keys and password. ---"
 fi
 
 chown -R sys_runner:sys_runner /opt/sys_net/.config
 
 (
-    sleep 30
-    backup_data
     while true; do
+        inotifywait -r -e modify,create,delete,move --exclude '.*\.log' "$CONFIG_DIR" >/dev/null 2>&1
+        log "--- [WATCHER] Configuration changes detected! Cooldown timer initiated. Waiting 5 minutes to bundle updates... ---"
         sleep 300
+        log "--- [WATCHER] Cooldown finished. Evaluating and executing backup... ---"
         backup_data
     done
 ) &
