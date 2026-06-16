@@ -1,54 +1,225 @@
-# --- STAGE 1: BUILDER ---
-FROM debian:stable-slim AS builder
-RUN apt-get update && apt-get install -y curl
-WORKDIR /temp
-RUN curl -fsSL https://raw.githubusercontent.com/us/crw/main/install.sh | CRW_BINARY=crw-server sh
+FROM debian:stable-slim AS fetcher
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y curl unzip tar grep sed ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# --- STAGE 2: FINAL ---
+WORKDIR /tmp
+
+RUN set -eux; \
+    curl -fsSL $(echo "aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL3VzL2Nydy9tYWluL2luc3RhbGwuc2g=" | base64 -d) | CRW_BINARY=crw-server sh; \
+    WGCF_LATEST=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | grep "browser_download_url" | grep "linux_amd64" | head -n 1 | cut -d '"' -f 4); \
+    curl -fsSL -o /usr/local/bin/wgcf "$WGCF_LATEST"; \
+    chmod +x /usr/local/bin/wgcf; \
+    WIRE_LATEST=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | grep "browser_download_url" | grep "linux_amd64.tar.gz" | head -n 1 | cut -d '"' -f 4); \
+    curl -fsSL "$WIRE_LATEST" | tar -xz -C /usr/local/bin/ wireproxy
+
 FROM debian:stable-slim
 
-# 1. Cài đặt Runtime Dependencies
-RUN apt-get update && apt-get install -y \
-    tini curl ca-certificates socat procps \
-    libgbm1 libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUST_LOG=info \
+    CRW_CONFIG=/app/config.docker.toml \
+    CRW_SERVER__HOST=0.0.0.0 \
+    CRW_SERVER__PORT=7860 \
+    CRW_SERVER__RATE_LIMIT_RPS=0 \
+    CRW_REQUEST__DEADLINE_MS_DEFAULT=30000 \
+    CRW_REQUEST__AUTO_EXTEND_DEADLINE_FOR_LADDER=true \
+    CRW_RENDERER__MODE=auto \
+    CRW_RENDERER__HTTP_TIMEOUT_MS=4000 \
+    CRW_RENDERER__CHROME_TIMEOUT_MS=30000 \
+    CRW_RENDERER__CHROME_NAV_BUDGET_MS=12000 \
+    CRW_RENDERER__CHROME_INTERCEPT_RESOURCES=true \
+    CRW_RENDERER__CHROME_CONTEXT_POOL_ENABLED=true \
+    CRW_RENDERER__CHROME__WS_URL=ws://127.0.0.1:9222/ \
+    CRW_SEARCH__ENABLED=true \
+    CRW_SEARCH__SEARXNG_URL=http://127.0.0.1:8080 \
+    CLOAKBROWSER_AUTO_UPDATE=false \
+    NO_PROXY=localhost,127.0.0.1 \
+    no_proxy=localhost,127.0.0.1 \
+    SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini curl ca-certificates procps python3 python3-pip python3-venv python3-yaml netcat-openbsd \
+    libgbm1 libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 git openssl \
+    fonts-noto-color-emoji xfonts-utils fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 2. Copy các thành phần thực thi
-COPY --from=builder /usr/local/bin/crw-server /usr/local/bin/crw-server
-COPY --from=lightpanda/browser:latest /bin/lightpanda /usr/local/bin/lightpanda
-COPY --from=chromedp/headless-shell:latest /headless-shell /headless-shell
+COPY --from=fetcher /usr/local/bin/crw-server /usr/local/bin/crw-server
+COPY --from=fetcher /usr/local/bin/wgcf /usr/local/bin/wgcf
+COPY --from=fetcher /usr/local/bin/wireproxy /usr/local/bin/wireproxy
 
-# 3. Cấu hình Biến môi trường hệ thống
-ENV CRW_SERVER__HOST=0.0.0.0 \
-    CRW_SERVER__PORT=7860 \
-    RUST_LOG=info \
-    PATH="/headless-shell:${PATH}" \
-    CRW_RENDERER__MODE=auto \
-    CRW_RENDERER__LIGHTPANDA__WS_URL=ws://127.0.0.1:9224/ \
-    CRW_RENDERER__CHROME__WS_URL=ws://127.0.0.1:9222/
+RUN python3 -m venv /app/venv
+ENV PATH="/app/venv/bin:${PATH}"
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir cloakbrowser && \
+    python3 -m cloakbrowser install
+
+RUN git clone --depth 1 $(echo "aHR0cHM6Ly9naXRodWIuY29tL3NlYXJ4bmcvc2VhcnhuZy5naXQ=" | base64 -d) /usr/local/src/searxng && \
+    cd /usr/local/src/searxng && \
+    pip install --no-cache-dir -r requirements.txt
+
+RUN mkdir -p /root/.cloakbrowser/geoip /app/wg /etc/searxng
+
+RUN cat << 'EOF' > /etc/searxng/settings.yml
+use_default_settings: true
+server:
+  port: 8080
+  bind_address: '127.0.0.1'
+  secret_key: 'super_secret_crw_key_2026'
+search:
+  formats:
+    - json
+botdetection:
+  ip_limit:
+    link_token: false
+    filter_link_local: false
+  limiter: false
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    proxies: ""
+  - name: ahmia
+    engine: dummy
+    shortcut: ah
+    disabled: true
+  - name: torch
+    engine: dummy
+    shortcut: to
+    disabled: true
+outgoing:
+  proxies:
+    all://:
+      - socks5h://127.0.0.1:4000
+EOF
+
+RUN cat << 'EOF' > /app/config.docker.toml
+[server]
+host = "0.0.0.0"
+port = 7860
+rate_limit_rps = 0
+
+[request]
+deadline_ms_default = 30000
+auto_extend_deadline_for_ladder = true
+
+[renderer]
+mode = "auto"
+http_timeout_ms = 4000
+chrome_timeout_ms = 30000
+chrome_intercept_resources = true
+chrome_nav_budget_ms = 12000
+chrome_context_pool_enabled = true
+
+[renderer.chrome]
+ws_url = "ws://127.0.0.1:9222/"
+
+[search]
+enabled = true
+searxng_url = "http://127.0.0.1:8080"
+query_expand = true
+query_expand_variants = 3
+
+[document]
+sandbox = true
+max_concurrent_parses = 2
+EOF
+
+RUN cat << 'EOF' > /app/start.sh
+#!/bin/bash
+set -e
+
+echo "=== Checking Security Configuration ==="
+if [ -z "$CRW_SECRET_KEY" ]; then
+    echo "NOTICE: CRW_SECRET_KEY is empty. Running in OPEN PUBLIC mode."
+    echo -e "[auth]\napi_keys = []" > /app/config.local.toml
+else
+    echo "SUCCESS: CRW_SECRET_KEY detected. API Authentication is enabled."
+    echo -e "[auth]\napi_keys = [\"$CRW_SECRET_KEY\"]" > /app/config.local.toml
+fi
+
+cd /app/wg
+if [ ! -f wgcf-account.toml ]; then
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1
+fi
+HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1
+
+PRIVATE_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+PUBLIC_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+
+cat << WPEOF > /app/wg/wireproxy.conf
+[Interface]
+PrivateKey = $PRIVATE_KEY
+Address = 10.0.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PUBLIC_KEY
+Endpoint = $ENDPOINT
+
+[socks5]
+BindAddress = 127.0.0.1:4000
+WPEOF
+
+echo "=== Starting Wireproxy ==="
+wireproxy -c /app/wg/wireproxy.conf >/dev/null 2>&1 &
+
+echo "=== Waiting for Wireproxy SOCKS5 Proxy to be ready ==="
+while ! nc -z 127.0.0.1 4000; do sleep 1; done
+echo "=== Wireproxy Connection Success ==="
+
+echo "=== Starting Local SearXNG Engine ==="
+cd /usr/local/src/searxng
+export SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+export PYTHONPATH=/usr/local/src/searxng
+python3 searx/webapp.py &
+
+echo "=== Waiting for Local SearXNG Instance ==="
+for i in {1..20}; do
+    if nc -z 127.0.0.1 8080; then
+        echo "=== Local SearXNG is Up ==="
+        break
+    fi
+    sleep 1
+    if [ $i -eq 20 ]; then
+        echo "ERROR: SearXNG failed to start within 20 seconds."
+        exit 1
+    fi
+done
+
+CLOAK_BIN=$(find /root/.cloakbrowser -name "chrome" -o -name "chromium" 2>/dev/null | head -n 1)
+if [ -z "$CLOAK_BIN" ]; then
+    CLOAK_BIN=$(find /app -name "chrome" -o -name "chromium" 2>/dev/null | head -n 1)
+fi
+
+echo "=== Launching CloakBrowser Binary on Port 9222 ==="
+"$CLOAK_BIN" \
+    --headless=new \
+    --no-sandbox \
+    --disable-gpu \
+    --disable-dev-shm-usage \
+    --remote-debugging-port=9222 \
+    --remote-debugging-address=127.0.0.1 \
+    --remote-allow-origins=* \
+    --proxy-server="socks5://127.0.0.1:4000" \
+    --fingerprint-noise=true \
+    --fingerprint-platform=windows >/dev/null 2>&1 &
+
+echo "=== Waiting for CloakBrowser CDP Endpoint ==="
+while ! nc -z 127.0.0.1 9222; do sleep 1; done
+echo "=== CloakBrowser is Up and Running ==="
+
+echo "=== Starting CRW Server ==="
+cd /app
+exec crw-server
+EOF
+
+RUN chmod +x /app/start.sh
 
 EXPOSE 7860
 
-# 4. Script khởi động thông minh: Xử lý Secret và kích hoạt Browser
-RUN echo '#!/bin/bash\n\
-# Tạo cấu hình Auth động từ Secret của Hugging Face\n\
-SEC_KEY=${CRW_SECRET_KEY:-"default_key"}\n\
-echo "[auth]\napi_keys = [\"$SEC_KEY\"]" > /app/config.local.toml\n\
-\n\
-# Chạy Chrome Headless (qua socat 9222)\n\
-/headless-shell/run.sh --no-sandbox --remote-debugging-address=127.0.0.1 --remote-debugging-port=9223 --remote-allow-origins=* &\n\
-\n\
-# Chạy Lightpanda (cổng 9224)\n\
-lightpanda serve --host 127.0.0.1 --port 9224 &\n\
-\n\
-# Đợi hạ tầng trình duyệt sẵn sàng\n\
-sleep 10\n\
-\n\
-# Khởi động CRW Server chính\n\
-exec crw-server' > /app/start.sh && chmod +x /app/start.sh
-
-# 5. Khởi chạy với tini để quản lý process bền bỉ
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/app/start.sh"]
+CMD ["/bin/bash", "/app/start.sh"]
