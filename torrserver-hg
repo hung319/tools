@@ -1,8 +1,8 @@
-FROM ghcr.io/9000000/torrserver:master
+FROM debian:stable-slim
 
 USER root
 
-RUN apk update && apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     openssl \
     inotify-tools \
@@ -10,7 +10,20 @@ RUN apk update && apk add --no-cache \
     ca-certificates \
     procps \
     psmisc \
-    jq
+    jq \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ARCH=$(uname -m) \
+    && GITHUB_API="https://api.github.com/repos/9000000/TorrServer/releases/latest" \
+    && DOWNLOAD_URL=$(curl -fsSL "$GITHUB_API" | jq -r ".assets[].browser_download_url") \
+    && if [ "$ARCH" = "x86_64" ]; then \
+         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "TorrServer-linux-amd64$"); \
+       else \
+         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "TorrServer-linux-arm64$"); \
+       fi \
+    && curl -fsSL "$TS_URL" -o /usr/bin/torrserver \
+    && chmod +x /usr/bin/torrserver
 
 ENV TS_PORT=7860
 ENV TS_CONF_PATH="/root/.config/torrserver"
@@ -100,7 +113,7 @@ if [ "${TS_RDB}" = "1" ]; then
     RDB_FLAG="--rdb"
 fi
 
-log "--- [START] Khởi chạy TorrServer chính chủ trên cổng ${TS_PORT} (Chạy trực tiếp)... ---"
+log "--- [START] Khởi chạy TorrServer chính chủ trên cổng ${TS_PORT} (Nền tảng Debian)... ---"
 
 /usr/bin/torrserver \
     --port "${TS_PORT}" \
