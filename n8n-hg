@@ -1,156 +1,146 @@
-FROM n8nio/n8n:latest
+# ==============================================================================
+# GIAI ĐOẠN 1: Lấy các file thực thi Task Runner từ Image gốc của n8n
+# ==============================================================================
+FROM n8nio/runners:latest AS n8n-runners-source
 
-USER root
+# ==============================================================================
+# GIAI ĐOẠN 2: Runtime chính chạy Alpine sạch 100%
+# ==============================================================================
+FROM alpine:3.22
 
-# --- 1. Tạo script mã hóa AES-256 bằng Node.js ---
-RUN cat << 'EOF' > /crypto.js
-const crypto = require('crypto');
-const fs = require('fs');
+# --- 1. Cấu hình biến môi trường Smart Backup & Task Runner ---
+ENV N8N_PORT=7860 \
+    BACKUP_DIR=/data \
+    BACKUP_FILENAME=n8n_backup.enc \
+    BACKUP_PASS=MatKhauSaoLuuSieuCapVip123 \
+    N8N_RUNNERS_MODE=external \
+    N8N_RUNNERS_BROKER_LISTEN_ADDRESS=127.0.0.1 \
+    N8N_RUNNERS_AUTH_TOKEN=TokenNoiBoSieuBaoMat999 \
+    HOME=/home/node \
+    NODE_ENV=production
 
-const mode = process.argv[2];
-const inFile = process.argv[3];
-const outFile = process.argv[4];
-const pass = process.env.BACKUP_PASS;
+# --- 2. Cài đặt các công cụ hệ thống + Node.js + NPM + Python3 ---
+RUN apk add --no-cache \
+    curl \
+    bash \
+    inotify-tools \
+    openssl \
+    tar \
+    libstdc++ \
+    libc6-compat \
+    python3 \
+    tini \
+    nodejs \
+    npm
 
-if (!pass) {
-    console.error("LỖI: Thiếu biến môi trường BACKUP_PASS");
-    process.exit(1);
-}
+# --- 3. Dùng NPM cài đặt thẳng n8n toàn cục (Gọn gàng, chuẩn chỉ) ---
+RUN npm install -g n8n --omit=dev
 
-try {
-    const key = crypto.scryptSync(pass, 'n8n-backup-salt', 32);
-    
-    if (mode === 'enc') {
-        const iv = crypto.randomBytes(16);
-        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-        const input = fs.createReadStream(inFile);
-        const output = fs.createWriteStream(outFile);
-        output.write(iv); 
-        input.pipe(cipher).pipe(output).on('finish', () => process.exit(0));
-        
-    } else if (mode === 'dec') {
-        if (!fs.existsSync(inFile)) process.exit(1);
-        const fd = fs.openSync(inFile, 'r');
-        const iv = Buffer.alloc(16);
-        fs.readSync(fd, iv, 0, 16, 0);
-        fs.closeSync(fd);
-        
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        const input = fs.createReadStream(inFile, { start: 16 });
-        const output = fs.createWriteStream(outFile);
-        input.pipe(decipher).pipe(output).on('finish', () => process.exit(0));
-    }
-} catch (err) {
-    console.error("Lỗi Crypto:", err.message);
-    process.exit(1);
-}
-EOF
+# --- 4. Sao chép lõi Task Runner chuẩn của n8n sang để xử lý Code Node ---
+COPY --from=n8n-runners-source /opt/runners /opt/runners
+COPY --from=n8n-runners-source /usr/local/bin/task-runner-launcher /usr/local/bin/task-runner-launcher
+COPY --from=n8n-runners-source /etc/n8n-task-runners.json /etc/n8n-task-runners.json
 
-# --- 2. Tạo script Entrypoint điều khiển n8n và Smart Backup ---
-RUN cat << 'EOF' > /entrypoint.sh
-#!/bin/sh
+# --- 5. Fix đường dẫn Python & Sửa thư mục làm việc từ /home/runner thành /home/node ---
+RUN sed -i 's|/opt/runners/task-runner-python/.venv/bin/python|/usr/bin/python3|g' /etc/n8n-task-runners.json && \
+    sed -i 's|/home/runner|/home/node|g' /etc/n8n-task-runners.json
+
+# --- 6. Tạo Node User để Hugging Face vận hành an toàn ---
+RUN addgroup -g 1000 node && \
+    adduser -u 1000 -G node -s /bin/bash -D node
+
+# --- 7. Viết script Entrypoint điều khiển Smart Backup 5 phút ---
+RUN cat << 'EOF' > /my-entrypoint.sh
+#!/bin/bash
 set -e
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
 mkdir -p /home/node/.n8n "$BACKUP_DIR"
+INTERVAL_TIME=300
 
-# Hàm Phục hồi dữ liệu
 restore_data() {
-    log "--- [RESTORE] Đang kiểm tra file backup tại $BACKUP_DIR/$BACKUP_FILENAME ---"
-    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
-        log "--- [RESTORE] TÌM THẤY bản sao lưu. Đang giải mã..."
-        rm -f /tmp/n8n_temp.tar.gz
-        if node /crypto.js dec "$BACKUP_DIR/$BACKUP_FILENAME" /tmp/n8n_temp.tar.gz; then
-            log "--- [RESTORE] Đang bung file vào /home/node/.n8n ..."
-            tar -xzf /tmp/n8n_temp.tar.gz -C /home/node
-            log "--- [RESTORE] THÀNH CÔNG! ---"
+    BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+    log "--- [RESTORE] Đang kiểm tra file backup tại $BACKUP_FILE ---"
+    
+    if [ -f "$BACKUP_FILE" ]; then
+        log "--- [RESTORE] TÌM THẤY file backup mã hóa. Tiến hành phục hồi... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -pass "env:BACKUP_PASS" -in "$BACKUP_FILE" | tar -xzf - -C /home/node; then
+            log "--- [RESTORE] PHỤC HỒI DỮ LIỆU THÀNH CÔNG! ---"
         else
-            log "--- [RESTORE] LỖI: Giải mã thất bại. ---"
+            log "--- [RESTORE] LỖI: Giải mã thất bại. Vui lòng kiểm tra lại BACKUP_PASS. ---"
         fi
-        rm -f /tmp/n8n_temp.tar.gz
     else
-        log "--- [RESTORE] Không có file cũ trong Bucket. Bắt đầu như mới. ---"
+        log "--- [RESTORE] Không có file cũ. Khởi tạo môi trường mới. ---"
     fi
 }
 
-# Hàm Sao lưu dữ liệu (Smart Tracker + Packer)
 backup_data() {
     BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
-    
     if [ ! -d "/home/node/.n8n" ]; then return; fi
 
-    # 1. TRACKER: Bỏ qua thư mục rác, file .log và crash.journal
-    if [ -f "$BACKUP_FILE" ]; then
-        CHANGED_FILE=$(find /home/node/.n8n -type f ! -path '*/cache/*' ! -path '*/binaryData/*' ! -name '*.log' ! -name 'crash.journal' -newer "$BACKUP_FILE" 2>/dev/null | head -n 1)
-        
-        if [ -z "$CHANGED_FILE" ]; then
-            return
-        fi
-        log "--- [TRACKER] Phát hiện file thay đổi: $CHANGED_FILE ---"
-    fi
-
-    log "--- [BACKUP] Đang nén và sao lưu vào Bucket... ---"
-    rm -f /tmp/n8n_temp.tar.gz
-    
-    # 2. PACKER: Chỉ loại bỏ cache và binaryData (Vẫn nén log và journal)
-    tar -czf /tmp/n8n_temp.tar.gz --exclude='.n8n/binaryData' --exclude='.n8n/cache' -C /home/node .n8n
-    
-    if node /crypto.js enc /tmp/n8n_temp.tar.gz "$BACKUP_FILE"; then
-        log "--- [BACKUP] HOÀN TẤT lưu vào Bucket ---"
+    log "--- [BACKUP] Đang tiến hành nén tar và mã hóa AES-256... ---"
+    if tar -czf - --exclude='.n8n/binaryData' --exclude='.n8n/cache' -C /home/node .n8n | \
+       openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -pass "env:BACKUP_PASS" -out "$BACKUP_FILE"; then
+        log "--- [BACKUP] HOÀN TẤT cập nhật bản sao lưu mã hóa bảo mật ---"
     else
-        log "--- [BACKUP] LỖI khi mã hóa! ---"
+        log "--- [BACKUP] LỖI: Quá trình mã hóa/sao lưu thất bại! ---"
     fi
-    rm -f /tmp/n8n_temp.tar.gz
 }
 
-# Hàm xử lý khi tắt container
+watch_changes() {
+    log "--- [WATCHER] Đang theo dõi biến động tại /home/node/.n8n ---"
+    BACKUP_PENDING=false
+
+    inotifywait -m -r -e modify -e move -e create -e delete \
+        --exclude '(/cache/|/binaryData/|\.log$|crash\.journal$)' \
+        /home/node/.n8n 2>/dev/null | while read -r directory events filename; do
+        
+        if [ "$BACKUP_PENDING" = false ]; then
+            BACKUP_PENDING=true
+            log "--- [WATCHER] Phát hiện thay đổi dữ liệu. Sẽ tự động backup sau 5 phút... ---"
+            (
+                sleep $INTERVAL_TIME
+                backup_data
+                echo "RESET_PENDING" > /tmp/watcher_status
+            ) &
+        fi
+
+        if [ -f /tmp/watcher_status ]; then
+            rm -f /tmp/watcher_status
+            BACKUP_PENDING=false
+        fi
+    done
+}
+
 cleanup() {
-    trap - TERM INT QUIT
-    log "--- [SHUTDOWN] Bắt được tín hiệu tắt! Đang backup lần cuối... ---"
-    kill $WATCHER_PID 2>/dev/null || true
+    log "--- [SHUTDOWN] Nhận tín hiệu tắt từ Hugging Face! Đang backup khẩn cấp dòng cuối... ---"
     backup_data
-    kill -TERM "$N8N_PID" 2>/dev/null || true
-    wait "$N8N_PID" 2>/dev/null || true
-    log "--- [SHUTDOWN] Đã dừng hoàn toàn. Tạm biệt! ---"
+    log "--- [SHUTDOWN] Đã sao lưu an toàn. Hệ thống đóng! ---"
     exit 0
 }
 
-trap 'cleanup' TERM INT QUIT
+trap 'cleanup' EXIT INT TERM QUIT
 
-# --- THỰC THI ---
 restore_data
+watch_changes &
 
-# Khởi chạy Smart Watcher ngầm (Kiểm tra mỗi 30s)
-(
-    while true; do
-        sleep 30
-        backup_data
-    done
-) &
-WATCHER_PID=$!
+log "--- [LAUNCHER] Khởi động bộ xử lý Code Node (Python/JS) ---"
+N8N_RUNNERS_TASK_BROKER_URI="http://127.0.0.1:5679" \
+N8N_RUNNERS_AUTH_TOKEN="TokenNoiBoSieuBaoMat999" \
+task-runner-launcher javascript python &
 
-log "--- [START] n8n đang khởi động... ---"
-n8n start &
-N8N_PID=$!
-
-wait "$N8N_PID" || true
+log "--- [START] Khởi chạy tiến trình n8n chính thức qua Node.js ---"
+exec n8n
 EOF
 
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /my-entrypoint.sh
 
-# --- 3. Cấu hình biến môi trường ---
-# Hãy thay thế các giá trị mật khẩu/key này bằng chuỗi bí mật của riêng bạn
-ENV N8N_PORT=7860 \
-    BACKUP_DIR=/data \
-    BACKUP_FILENAME=n8n_backup.enc \
-    BACKUP_PASS=MatKhauSaoLuu123 \
-    N8N_ENCRYPTION_KEY=ChuoiBiMatCuaRiengBan_999
-
-# Cấp quyền cho user node
-RUN mkdir -p /data && chown -R node:node /data /home/node
+# --- 8. Cấp toàn quyền cho node user ---
+RUN mkdir -p /data /home/node && \
+    chown -R node:node /data /home/node /my-entrypoint.sh /opt/runners /etc/n8n-task-runners.json
 
 USER node
 EXPOSE 7860
 
-ENTRYPOINT ["tini", "--", "/bin/sh", "/entrypoint.sh"]
+ENTRYPOINT ["tini", "--", "/bin/sh", "/my-entrypoint.sh"]
