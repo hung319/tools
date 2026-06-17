@@ -4,7 +4,7 @@ USER root
 
 # 1. Cài đặt các công cụ hệ thống cần thiết
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini tar openssl findutils \
+    tini tar openssl findutils inotify-tools \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -36,6 +36,7 @@ set -e
 DATA_PATH="/app/backend/data"
 BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_FILE="/tmp/temp_backup.enc"
+INTERVAL_TIME=300 # Gom thay đổi và backup sau đúng 5 phút (300 giây)
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
@@ -58,15 +59,7 @@ restore_data() {
 backup_data() {
     if [ ! "$(ls -A $DATA_PATH 2>/dev/null)" ]; then return; fi
 
-    # KIỂM TRA THAY ĐỔI: Quét toàn bộ mọi file trong DATA_PATH
-    if [ -f "$BACKUP_FILE" ]; then
-        CHANGED_FILES=$(find "$DATA_PATH" -type f -newer "$BACKUP_FILE" -print -quit 2>/dev/null)
-        if [ -z "$CHANGED_FILES" ]; then
-            return
-        fi
-    fi
-
-    log "--- [BACKUP] Phát hiện thay đổi! Đang nén toàn bộ và mã hóa... ---"
+    log "--- [BACKUP] Tiến hành nén toàn bộ và mã hóa... ---"
     
     # Nén sạch 100% nội dung và mã hóa luồng bằng OpenSSL (AES-256-CBC)
     if tar -cz --exclude='cache' -C "$DATA_PATH" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
@@ -76,6 +69,38 @@ backup_data() {
         log "--- [BACKUP] LỖI trong quá trình sao lưu! ---"
         rm -f "$TEMP_FILE"
     fi
+}
+
+# --- HÀM XỬ LÝ LẮNG NGHE SỰ KIỆN VÀ GOM THỜI GIAN CỐ ĐỊNH (THROTTLING) ---
+watch_changes() {
+    log "--- [WATCHER] Đang khởi động inotify-tools để theo dõi $DATA_PATH ---"
+    
+    BACKUP_PENDING=false
+
+    # Lắng nghe liên tục các sự kiện thay đổi dữ liệu
+    inotifywait -m -r -e modify -e move -e create -e delete --exclude 'cache' "$DATA_PATH" 2>/dev/null | while read -r directory events filename; do
+        
+        # Nếu chưa kích hoạt bộ hẹn giờ gom thay đổi
+        if [ "$BACKUP_PENDING" = false ]; then
+            BACKUP_PENDING=true
+            log "--- [WATCHER] Phát hiện thay đổi đầu tiên. Bắt đầu gom tất cả thay đổi và sẽ backup sau đúng 5 phút... ---"
+            
+            # Chạy ngầm đếm ngược đúng 5 phút độc lập
+            (
+                sleep $INTERVAL_TIME
+                backup_data
+                
+                # Báo hiệu hoàn tất để sẵn sàng cho chu kỳ gom tiếp theo
+                echo "RESET_PENDING" > /tmp/watcher_status
+            ) &
+        fi
+
+        # Kiểm tra nếu tiến trình ngầm đã chạy xong để reset cờ hiệu chính
+        if [ -f /tmp/watcher_status ]; then
+            rm -f /tmp/watcher_status
+            BACKUP_PENDING=false
+        fi
+    done
 }
 
 cleanup() {
@@ -94,13 +119,8 @@ trap 'cleanup' TERM INT QUIT
 # Thực hiện Restore
 restore_data
 
-# Khởi chạy Smart Watcher ngầm (quét mỗi 30s)
-(
-    while true; do
-        sleep 30
-        backup_data
-    done
-) &
+# Khởi chạy Smart Watcher ngầm dựa trên inotify
+watch_changes &
 WATCHER_PID=$!
 
 # Khởi động Open WebUI
