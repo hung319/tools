@@ -1,0 +1,159 @@
+# ========================================================
+# BASE IMAGE: Sử dụng bản build nâng cao tích hợp sẵn SWE, Codex, WhatsApp
+# ========================================================
+FROM ghcr.io/xmbshwll/hermes-agent-docker:latest
+
+# ÉP CHUYỂN SANG USER ROOT TOÀN CỤC
+USER root
+
+# Cấu hình biến môi trường hệ thống cho Root
+ENV HOME=/root
+ENV PATH="/root/.local/bin:/home/agent/.local/bin:${PATH}"
+
+# 1. Cài đặt các công cụ hệ thống cần thiết (đặc biệt là inotify-tools để bắt sự kiện file)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini tar openssl findutils procps inotify-tools sudo git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. CHỈ CÀI ĐẶT THƯ VIỆN LÕI CHO WEB
+RUN pip install --no-cache-dir --break-system-packages fastapi uvicorn ptyprocess psutil
+
+# ========================================================
+# CẬP NHẬT MÃ NGUỒN HERMES AGENT MỚI NHẤT KHI BUILD (THEO DOCS)
+# ========================================================
+RUN git config --global --add safe.directory /home/agent/hermes-agent
+
+# Di chuyển vào thư mục cài đặt gốc và chạy lệnh cập nhật chính thức của hệ thống
+RUN cd /home/agent/hermes-agent && hermes update
+
+# ========================================================
+# CẤU HÌNH BIẾN MÔI TRƯỜNG (ENVIRONMENT VARIABLES)
+# ========================================================
+ENV HERMES_DASHBOARD_PORT=7860
+ENV HERMES_DASHBOARD_HOST=0.0.0.0
+
+# --- BẢO MẬT: TÀI KHOẢN ĐĂNG NHẬP WEB DASHBOARD ---
+ENV HERMES_DASHBOARD_BASIC_AUTH_USERNAME="admin"
+ENV HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="Doi_Mat_Khau_Nay_Khi_Deploy_2026"
+ENV HERMES_DASHBOARD_BASIC_AUTH_SECRET="ChuoiSecretNgauNhienTren32BytesDungChoCookie"
+
+# --- CẤU HÌNH ĐƯỜNG DẪN SAO LƯU DỮ LIỆU ---
+ENV BACKUP_DIR=/data
+ENV BACKUP_FILENAME="hermes_dashboard_backup.enc"
+ENV BACKUP_PASS="MatKhauMaHoaDuLieuAnToan"
+
+# 3. TỐI ƯU HÓA: Chỉ tạo và cấp quyền cho các thư mục lưu trữ thực tế, bỏ qua quét root/agent root
+RUN mkdir -p /home/agent/.hermes /home/agent/workspace /data /root/.hermes \
+    && chmod -R 777 /data /home/agent/workspace
+
+# ========================================================
+# SCRIPT ENTRYPOINT: XỬ LÝ LOGIC PHỤC HỒI & SAO LƯU (THROTTLE 5 PHÚT)
+# ========================================================
+RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
+#!/bin/sh
+set -e
+
+HERMES_HOME="/home/agent/.hermes"
+WORKSPACE_DIR="/home/agent/workspace"
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_backup.enc"
+MOCK_DIR="/tmp/hermes_snap"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
+
+# --- FIX TRIỆT ĐỂ LỖI GIT DUBIOUS OWNERSHIP CHO ROOT KHI RUNTIME ---
+log "Đang cấu hình Git Safe Directory toàn cục..."
+git config --global --add safe.directory '*' || true
+
+# Đồng bộ thư mục .hermes của root sang thư mục agent để tránh mất cấu hình
+ln -sfn "$HERMES_HOME" /root/.hermes
+
+# --- HÀM 1: PHỤC HỒI DỮ LIỆU KHI KHỞI ĐỘNG ---
+if [ -f "$BACKUP_FILE" ]; then
+    log "--- [RESTORE] Tìm thấy file backup tại $BACKUP_FILE. Đang giải mã phục hồi... ---"
+    if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+        log "--- [RESTORE] PHỤC HỒI THÀNH CÔNG! ---"
+    else
+        log "--- [RESTORE] LỖI: Giải mã thất bại. Khởi tạo phiên mới. ---"
+    fi
+else
+    log "--- [RESTORE] Không có dữ liệu cũ từ trước. Sinh dữ liệu mặc định ban đầu... ---"
+    /usr/local/bin/hermes-entrypoint true || true
+fi
+
+# --- HÀM 2: THỰC HIỆN ĐÓNG GÓI NÉN MÃ HÓA ---
+do_backup() {
+    log "--- [THROTTLE ACTION] Đang tiến hành đóng gói và sao lưu dữ liệu tích lũy... ---"
+    rm -rf "$MOCK_DIR" && mkdir -p "$MOCK_DIR/home/agent"
+    cp -r "$HERMES_HOME" "$MOCK_DIR/home/agent/.hermes" 2>/dev/null || true
+    cp -r "$WORKSPACE_DIR" "$MOCK_DIR/home/agent/workspace" 2>/dev/null || true
+
+    if tar -cz --exclude='cache/**' --exclude='*.log' -C "$MOCK_DIR" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        chmod 777 "$TEMP_FILE"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP SUCCESS] Bản sao lưu đã được cập nhật ra ổ đĩa mạng an toàn! ---"
+    else
+        log "--- [BACKUP ERROR] Có lỗi xảy ra trong quá trình nén hoặc mã hóa! ---"
+        rm -f "$TEMP_FILE"
+    fi
+    rm -rf "$MOCK_DIR"
+}
+
+# --- HÀM 3: THEO DÕI SỰ KIỆN FILE VÀ QUẢN LÝ THROTTLE 5 PHÚT (300 GIÂY) ---
+watch_and_throttle() {
+    local DIRTY_FLAG="/tmp/.hermes_dirty"
+    rm -f "$DIRTY_FLAG"
+
+    sleep 30
+
+    inotifywait -m -r -e modify -e move -e create -e delete \
+        --exclude "cache/|.*\.log" \
+        "$HERMES_HOME" "$WORKSPACE_DIR" 2>/dev/null | while read -r path action file; do
+            touch "$DIRTY_FLAG"
+    done &
+
+    while true; do
+        if [ -f "$DIRTY_FLAG" ]; then
+            log "Phát hiện có biến động dữ liệu! Kích hoạt bộ hẹn giờ Throttle: Chờ đúng 5 phút..."
+            rm -f "$DIRTY_FLAG"
+            
+            sleep 300
+            do_backup
+            rm -f "$DIRTY_FLAG"
+        else
+            sleep 5
+        fi
+    done
+}
+
+watch_and_throttle &
+
+# --- HÀM 4: SAO LƯU KHẨN CẤP KHI TẮT MÁY (GRACEFUL SHUTDOWN) ---
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Nhận tín hiệu ngắt kết nối từ Hugging Face. Tiến hành sao lưu khẩn cấp lần cuối... !!!"
+    do_backup
+    log "!!! [SHUTDOWN] Đã sao lưu dữ liệu an toàn. Tắt container! !!!"
+    exit 0
+}
+trap 'cleanup' TERM INT QUIT
+
+# Chỉ cấp quyền ghi cho vùng dữ liệu động cần thiết lúc runtime
+chmod -R 777 /data /home/agent/workspace 2>/dev/null || true
+
+# --- KHỞI ĐỘNG CHÍNH THỨC ---
+log "Đang bàn giao tiến trình khởi động sang Web Dashboard chính chủ dưới quyền root..."
+exec hermes dashboard --host 0.0.0.0 --port 7860 --no-open
+EOF
+
+# Cấp quyền thực thi cho script entrypoint mới
+RUN chmod +x /usr/local/bin/hf-entrypoint.sh
+
+# ========================================================
+# THIẾT LẬP KHỞI CHẠY CONTAINER VỚI QUYỀN ROOT
+# ========================================================
+USER root
+EXPOSE 7860
+WORKDIR /home/agent/workspace
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
