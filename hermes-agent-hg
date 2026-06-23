@@ -1,98 +1,148 @@
-# ========================================================
-# BASE IMAGE: Sử dụng bản build nâng cao tích hợp sẵn SWE, Codex, WhatsApp
-# ========================================================
 FROM ghcr.io/xmbshwll/hermes-agent-docker:latest
 
-# ÉP CHUYỂN SANG USER ROOT TOÀN CỤC
 USER root
 
-# Cấu hình biến môi trường hệ thống cho Root
 ENV HOME=/root
-ENV PATH="/root/.local/bin:/home/agent/.local/bin:${PATH}"
-
-# 1. Cài đặt các công cụ hệ thống cần thiết (đặc biệt là inotify-tools để bắt sự kiện file)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini tar openssl findutils procps inotify-tools sudo git \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. CHỈ CÀI ĐẶT THƯ VIỆN LÕI CHO WEB
-RUN pip install --no-cache-dir --break-system-packages fastapi uvicorn ptyprocess psutil
-
-# ========================================================
-# CẬP NHẬT MÃ NGUỒN HERMES AGENT MỚI NHẤT KHI BUILD (THEO DOCS)
-# ========================================================
-RUN git config --global --add safe.directory /home/agent/hermes-agent
-
-# Di chuyển vào thư mục cài đặt gốc và chạy lệnh cập nhật chính thức của hệ thống
-RUN cd /home/agent/hermes-agent && hermes update
-
-# ========================================================
-# CẤU HÌNH BIẾN MÔI TRƯỜNG (ENVIRONMENT VARIABLES)
-# ========================================================
-ENV HERMES_DASHBOARD_PORT=7860
+ENV PATH="/root/.local/bin:${PATH}"
 ENV HERMES_DASHBOARD_HOST=0.0.0.0
-
-# --- BẢO MẬT: TÀI KHOẢN ĐĂNG NHẬP WEB DASHBOARD ---
-ENV HERMES_DASHBOARD_BASIC_AUTH_USERNAME="admin"
-ENV HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="Doi_Mat_Khau_Nay_Khi_Deploy_2026"
-ENV HERMES_DASHBOARD_BASIC_AUTH_SECRET="ChuoiSecretNgauNhienTren32BytesDungChoCookie"
-
-# --- CẤU HÌNH ĐƯỜNG DẪN SAO LƯU DỮ LIỆU ---
+ENV HERMES_DASHBOARD_PORT=7860
+ENV WEB_USERNAME="admin"
+ENV WEB_PASSWORD="Doi_Mat_Khau_Nay_Khi_Deploy_2026"
 ENV BACKUP_DIR=/data
 ENV BACKUP_FILENAME="hermes_dashboard_backup.enc"
 ENV BACKUP_PASS="MatKhauMaHoaDuLieuAnToan"
+ENV WIREPROXY_SOCKS_PORT=4000
+ENV ALL_PROXY="socks5://127.0.0.1:4000"
+ENV all_proxy="socks5://127.0.0.1:4000"
 
-# 3. TỐI ƯU HÓA: Chỉ tạo và cấp quyền cho các thư mục lưu trữ thực tế, bỏ qua quét root/agent root
-RUN mkdir -p /home/agent/.hermes /home/agent/workspace /data /root/.hermes \
-    && chmod -R 777 /data /home/agent/workspace
+ENV URL_WGCF_API="aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA=="
+ENV URL_WIREPROXY_API="aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA=="
 
-# ========================================================
-# SCRIPT ENTRYPOINT: XỬ LÝ LOGIC PHỤC HỒI & SAO LƯU (THROTTLE 5 PHÚT)
-# ========================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini tar openssl findutils procps inotify-tools sudo git curl jq ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -e; \
+    API_WGCF=$(echo "$URL_WGCF_API" | base64 -d); \
+    API_WIREPROXY=$(echo "$URL_WIREPROXY_API" | base64 -d); \
+    VAL_WGCF=$(curl --noproxy "*" -s "$API_WGCF" | jq -r '.assets[] | select(.name | contains("linux_amd64")) | select(.name | contains("tar.gz") | not) | .browser_download_url'); \
+    VAL_WIREPROXY=$(curl --noproxy "*" -s "$API_WIREPROXY" | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
+    if [ -z "$VAL_WGCF" ] || [ "$VAL_WGCF" = "null" ]; then exit 1; fi; \
+    if [ -z "$VAL_WIREPROXY" ] || [ "$VAL_WIREPROXY" = "null" ]; then exit 1; fi; \
+    curl --noproxy "*" -L -o /usr/local/bin/wgcf "$VAL_WGCF"; \
+    chmod +x /usr/local/bin/wgcf; \
+    curl --noproxy "*" -L -o /tmp/wireproxy.tar.gz "$VAL_WIREPROXY"; \
+    tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin/ wireproxy; \
+    chmod +x /usr/local/bin/wireproxy; \
+    rm -f /tmp/wireproxy.tar.gz; \
+    wgcf --help >/dev/null && wireproxy --help >/dev/null
+
+RUN ALL_PROXY="" all_proxy="" pip install --no-cache-dir --break-system-packages fastapi uvicorn ptyprocess psutil
+
+RUN git config --global --add safe.directory /home/agent/hermes-agent
+RUN cd /home/agent/hermes-agent && ALL_PROXY="" all_proxy="" hermes update
+
+RUN mkdir -p /root/.hermes /root/workspace /data /etc/wireproxy \
+    && chmod -R 777 /data /root/workspace /root/.hermes
+
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
 set -e
 
-HERMES_HOME="/home/agent/.hermes"
-WORKSPACE_DIR="/home/agent/workspace"
+ROOT_HERMES="/root/.hermes"
+WORKSPACE_DIR="/root/workspace"
 BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_FILE="/tmp/temp_backup.enc"
 MOCK_DIR="/tmp/hermes_snap"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
-# --- FIX TRIỆT ĐỂ LỖI GIT DUBIOUS OWNERSHIP CHO ROOT KHI RUNTIME ---
-log "Đang cấu hình Git Safe Directory toàn cục..."
 git config --global --add safe.directory '*' || true
 
-# Đồng bộ thư mục .hermes của root sang thư mục agent để tránh mất cấu hình
-ln -sfn "$HERMES_HOME" /root/.hermes
-
-# --- HÀM 1: PHỤC HỒI DỮ LIỆU KHI KHỞI ĐỘNG ---
 if [ -f "$BACKUP_FILE" ]; then
-    log "--- [RESTORE] Tìm thấy file backup tại $BACKUP_FILE. Đang giải mã phục hồi... ---"
+    log "--- [RESTORE] Tìm thấy file backup cũ. Đang giải mã phục hồi vào hệ thống ROOT... ---"
     if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
         log "--- [RESTORE] PHỤC HỒI THÀNH CÔNG! ---"
     else
         log "--- [RESTORE] LỖI: Giải mã thất bại. Khởi tạo phiên mới. ---"
     fi
 else
-    log "--- [RESTORE] Không có dữ liệu cũ từ trước. Sinh dữ liệu mặc định ban đầu... ---"
+    log "--- [RESTORE] Không có dữ liệu cũ. Sinh dữ liệu mặc định ban đầu... ---"
     /usr/local/bin/hermes-entrypoint true || true
 fi
 
-# --- HÀM 2: THỰC HIỆN ĐÓNG GÓI NÉN MÃ HÓA ---
+chown -R root:root "$ROOT_HERMES" "$WORKSPACE_DIR" 2>/dev/null || true
+chmod -R 777 "$ROOT_HERMES" "$WORKSPACE_DIR" /data 2>/dev/null || true
+
+mkdir -p "$ROOT_HERMES"
+PASS_HASH=$(/home/agent/hermes-agent/venv/bin/python3 -c "
+import sys
+sys.path.append('/home/agent/hermes-agent')
+try:
+    from plugins.dashboard_auth.basic import hash_password
+    print(hash_password('$WEB_PASSWORD'))
+except Exception:
+    import passlib.hash
+    print(passlib.hash.bcrypt.hash('$WEB_PASSWORD'))
+")
+
+cat <<EOT > "$ROOT_HERMES/config.yaml"
+dashboard:
+  basic_auth:
+    username: "$WEB_USERNAME"
+    password_hash: "$PASS_HASH"
+plugins:
+  dashboard_auth:
+    basic:
+      enabled: true
+EOT
+
+cd /etc/wireproxy
+if [ ! -f "wgcf-profile.conf" ]; then
+    export WGCF_CONFIG_DIR="/etc/wireproxy"
+    ALL_PROXY="" all_proxy="" wgcf register --accept-tos >/dev/null 2>&1
+    ALL_PROXY="" all_proxy="" wgcf generate >/dev/null 2>&1
+fi
+
+if [ -f "wgcf-profile.conf" ] && [ ! -f "wireproxy.conf" ]; then
+    PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+    PUB_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+    ADDRESS_V4=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f1)
+    ADDRESS_V6=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f2)
+    ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+
+    cat <<EOT > wireproxy.conf
+[Interface]
+PrivateKey = $PRIV_KEY
+Address = $ADDRESS_V4, $ADDRESS_V6
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PUB_KEY
+Endpoint = $ENDPOINT
+
+[Socks5]
+BindAddress = 127.0.0.1:$WIREPROXY_SOCKS_PORT
+EOT
+fi
+
+if [ -f "wireproxy.conf" ]; then
+    wireproxy -c wireproxy.conf > /tmp/wireproxy.log 2>&1 &
+    sleep 3
+fi
+
 do_backup() {
-    log "--- [THROTTLE ACTION] Đang tiến hành đóng gói và sao lưu dữ liệu tích lũy... ---"
-    rm -rf "$MOCK_DIR" && mkdir -p "$MOCK_DIR/home/agent"
-    cp -r "$HERMES_HOME" "$MOCK_DIR/home/agent/.hermes" 2>/dev/null || true
-    cp -r "$WORKSPACE_DIR" "$MOCK_DIR/home/agent/workspace" 2>/dev/null || true
+    log "--- [THROTTLE ACTION] Tiến hành đóng gói dữ liệu của ROOT... ---"
+    rm -rf "$MOCK_DIR" 
+    mkdir -p "$MOCK_DIR/root"
+    cp -r "$ROOT_HERMES" "$MOCK_DIR/root/.hermes" 2>/dev/null || true
+    cp -r "$WORKSPACE_DIR" "$MOCK_DIR/root/workspace" 2>/dev/null || true
 
     if tar -cz --exclude='cache/**' --exclude='*.log' -C "$MOCK_DIR" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
         chmod 777 "$TEMP_FILE"
         mv "$TEMP_FILE" "$BACKUP_FILE"
-        log "--- [BACKUP SUCCESS] Bản sao lưu đã được cập nhật ra ổ đĩa mạng an toàn! ---"
+        log "--- [BACKUP SUCCESS] Bản sao lưu ROOT đã được cập nhật thành công! ---"
     else
         log "--- [BACKUP ERROR] Có lỗi xảy ra trong quá trình nén hoặc mã hóa! ---"
         rm -f "$TEMP_FILE"
@@ -100,24 +150,24 @@ do_backup() {
     rm -rf "$MOCK_DIR"
 }
 
-# --- HÀM 3: THEO DÕI SỰ KIỆN FILE VÀ QUẢN LÝ THROTTLE 5 PHÚT (300 GIÂY) ---
 watch_and_throttle() {
     local DIRTY_FLAG="/tmp/.hermes_dirty"
     rm -f "$DIRTY_FLAG"
-
-    sleep 30
-
+    sleep 15
+    log "Đang kích hoạt tiến trình inotifywait theo dõi ngầm hệ thống ROOT..."
+    
     inotifywait -m -r -e modify -e move -e create -e delete \
-        --exclude "cache/|.*\.log" \
-        "$HERMES_HOME" "$WORKSPACE_DIR" 2>/dev/null | while read -r path action file; do
-            touch "$DIRTY_FLAG"
+        --exclude "(cache/|.*\.log|venv/)" \
+        --format "%w%f|%e" \
+        "$ROOT_HERMES" "$WORKSPACE_DIR" 2>/dev/null | while IFS='|' read -r filepath action; do
+            if [ ! -f "$DIRTY_FLAG" ]; then
+                log "-> [EVENT TRIGGER] Phát hiện thay đổi dữ liệu. Đặt cờ chờ đóng gói sau 5 phút..."
+                touch "$DIRTY_FLAG"
+            fi
     done &
 
     while true; do
         if [ -f "$DIRTY_FLAG" ]; then
-            log "Phát hiện có biến động dữ liệu! Kích hoạt bộ hẹn giờ Throttle: Chờ đúng 5 phút..."
-            rm -f "$DIRTY_FLAG"
-            
             sleep 300
             do_backup
             rm -f "$DIRTY_FLAG"
@@ -127,33 +177,25 @@ watch_and_throttle() {
     done
 }
 
-watch_and_throttle &
-
-# --- HÀM 4: SAO LƯU KHẨN CẤP KHI TẮT MÁY (GRACEFUL SHUTDOWN) ---
 cleanup() {
     trap - TERM INT QUIT
-    log "!!! [SHUTDOWN] Nhận tín hiệu ngắt kết nối từ Hugging Face. Tiến hành sao lưu khẩn cấp lần cuối... !!!"
+    log "!!! [SHUTDOWN] Tiến hành sao lưu khẩn cấp lần cuối cho ROOT... !!!"
     do_backup
-    log "!!! [SHUTDOWN] Đã sao lưu dữ liệu an toàn. Tắt container! !!!"
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
 
-# Chỉ cấp quyền ghi cho vùng dữ liệu động cần thiết lúc runtime
-chmod -R 777 /data /home/agent/workspace 2>/dev/null || true
+log "Đang khởi chạy Web Dashboard trực tiếp dưới quyền root..."
+hermes dashboard --host $HERMES_DASHBOARD_HOST --port $HERMES_DASHBOARD_PORT --no-open &
+HERMES_PID=$!
 
-# --- KHỞI ĐỘNG CHÍNH THỨC ---
-log "Đang bàn giao tiến trình khởi động sang Web Dashboard chính chủ dưới quyền root..."
-exec hermes dashboard --host 0.0.0.0 --port 7860 --no-open
+watch_and_throttle &
+wait $HERMES_PID
 EOF
 
-# Cấp quyền thực thi cho script entrypoint mới
 RUN chmod +x /usr/local/bin/hf-entrypoint.sh
 
-# ========================================================
-# THIẾT LẬP KHỞI CHẠY CONTAINER VỚI QUYỀN ROOT
-# ========================================================
 USER root
 EXPOSE 7860
-WORKDIR /home/agent/workspace
+WORKDIR /root/workspace
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
