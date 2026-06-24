@@ -1,0 +1,179 @@
+FROM ghcr.io/diegosouzapw/omniroute:latest-web
+
+USER root
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tini tar openssl findutils procps inotify-tools redis-server curl jq ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -e; \
+    API_WGCF="https://api.github.com/repos/ViRb3/wgcf/releases/latest"; \
+    API_WIREPROXY="https://api.github.com/repos/windtf/wireproxy/releases/latest"; \
+    VAL_WGCF=$(curl -s "$API_WGCF" | jq -r '.assets[] | select(.name | contains("linux_amd64")) | select(.name | contains("tar.gz") | not) | .browser_download_url'); \
+    VAL_WIREPROXY=$(curl -s "$API_WIREPROXY" | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
+    curl -L -o /usr/local/bin/wgcf "$VAL_WGCF" && chmod +x /usr/local/bin/wgcf; \
+    curl -L -o /tmp/wireproxy.tar.gz "$VAL_WIREPROXY"; \
+    tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin/ wireproxy && chmod +x /usr/local/bin/wireproxy; \
+    rm -f /tmp/wireproxy.tar.gz
+
+ENV PORT=7860 \
+    HOSTNAME=0.0.0.0 \
+    REDIS_URL="redis://127.0.0.1:6379" \
+    OMNIROUTE_DISABLE_REDIS_AUTH_CACHE=0 \
+    AUTH_COOKIE_SECURE=true \
+    REQUIRE_API_KEY=true \
+    INITIAL_PASSWORD=CHANGEME_PROD \
+    DATA_DIR=/app/data \
+    OMNIROUTE_MIGRATIONS_DIR=/app/migrations \
+    JWT_SECRET="huggingface_space_omniroute_secret_jwt_key_placeholder" \
+    API_KEY_SECRET="huggingface_space_omniroute_secret_api_key_placeholder" \
+    STORAGE_ENCRYPTION_KEY="huggingface_space_omniroute_storage_encryption_key_placeholder" \
+    STORAGE_ENCRYPTION_KEY_VERSION="v1" \
+    NEXT_PUBLIC_BASE_URL="http://localhost:7860" \
+    ENABLE_SOCKS5_PROXY=true \
+    NEXT_PUBLIC_ENABLE_SOCKS5_PROXY=true \
+    BACKUP_DIR=/data \
+    BACKUP_FILENAME="omniroute_backup.enc" \
+    BACKUP_PASS="MatKhauMaHoaDuLieuAnToan" \
+    WIREPROXY_SOCKS_PORT=4000 \
+    OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS="true"
+
+RUN mkdir -p /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis \
+    && chmod -R 777 /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis
+
+RUN cp /etc/redis/redis.conf /tmp/redis.conf \
+    && sed -i 's/daemonize no/daemonize yes/' /tmp/redis.conf \
+    && sed -i 's/logfile .*/logfile ""/' /tmp/redis.conf \
+    && sed -i 's/pidfile .*/pidfile \/var\/run\/redis\/redis-server.pid/' /tmp/redis.conf \
+    && chmod 777 /tmp/redis.conf
+
+RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
+#!/bin/sh
+set -e
+
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_FILE="/tmp/temp_omni_backup.enc"
+MOCK_DIR="/tmp/omni_snap"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
+
+redis-server /tmp/redis.conf
+
+if [ -f "$BACKUP_FILE" ]; then
+    log "--- [RESTORE] Found backup file. Decrypting to /app/data... ---"
+    if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+        log "--- [RESTORE] SUCCESSFUL! ---"
+    else
+        log "--- [RESTORE] ERROR: Decryption failed. Starting fresh. ---"
+    fi
+else
+    log "--- [RESTORE] No backup file found. Starting fresh. ---"
+fi
+
+chmod -R 777 /app/data /data 2>/dev/null || true
+
+cd /etc/wireproxy
+if [ ! -f "wgcf-profile.conf" ]; then
+    export WGCF_CONFIG_DIR="/etc/wireproxy"
+    wgcf register --accept-tos >/dev/null 2>&1 || true
+    wgcf generate >/dev/null 2>&1 || true
+fi
+
+if [ -f "wgcf-profile.conf" ] && [ ! -f "wireproxy.conf" ]; then
+    PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+    PUB_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+    ADDRESS_V4=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f1)
+    ADDRESS_V6=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f2)
+    ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+
+    cat <<EOT > wireproxy.conf
+[Interface]
+PrivateKey = $PRIV_KEY
+Address = $ADDRESS_V4, $ADDRESS_V6
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PUB_KEY
+Endpoint = $ENDPOINT
+
+[Socks5]
+BindAddress = 127.0.0.1:$WIREPROXY_SOCKS_PORT
+EOT
+fi
+
+if [ -f "wireproxy.conf" ]; then
+    wireproxy -c wireproxy.conf > /tmp/wireproxy.log 2>&1 &
+    sleep 3
+fi
+
+do_backup() {
+    log "--- [THROTTLE ACTION] Packing OmniRoute data directory... ---"
+    rm -rf "$MOCK_DIR"
+    mkdir -p "$MOCK_DIR/app"
+    cp -r /app/data "$MOCK_DIR/app/data" 2>/dev/null || true
+
+    if tar -cz --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' --exclude='db_backups/**' -C "$MOCK_DIR" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
+        chmod 777 "$TEMP_FILE"
+        mv "$TEMP_FILE" "$BACKUP_FILE"
+        log "--- [BACKUP SUCCESS] Backup file updated successfully! ---"
+    else
+        log "--- [BACKUP ERROR] Packing or encryption failed! ---"
+        rm -f "$TEMP_FILE"
+    fi
+    rm -rf "$MOCK_DIR"
+}
+
+watch_and_throttle() {
+    local DIRTY_FLAG="/tmp/.omni_dirty"
+    rm -f "$DIRTY_FLAG"
+    sleep 20
+    log "Activating inotifywait database monitor..."
+
+    inotifywait -m -r -e modify -e move -e create -e delete \
+        --exclude "(\.sqlite-wal|\.sqlite-shm|db_backups/)" \
+        --format "%w%f|%e" \
+        /app/data 2>/dev/null | while IFS='|' read -r filepath action; do
+            if [ ! -f "$DIRTY_FLAG" ]; then
+                log "-> [EVENT TRIGGER] Data changed. Scheduling backup in 5 minutes..."
+                touch "$DIRTY_FLAG"
+            fi
+    done &
+
+    while true; do
+        if [ -f "$DIRTY_FLAG" ]; then
+            sleep 300
+            do_backup
+            rm -f "$DIRTY_FLAG"
+        else
+            sleep 5
+        fi
+    done
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "!!! [SHUTDOWN] Emergency final sync and backup... !!!"
+    do_backup
+    exit 0
+}
+trap 'cleanup' TERM INT QUIT
+
+watch_and_throttle &
+
+log "Starting OmniRoute Engine..."
+cd /app
+/tmp/check-permissions.sh node dev/run-standalone.mjs &
+OMNI_PID=$!
+
+wait $OMNI_PID
+EOF
+
+RUN chmod +x /usr/local/bin/hf-entrypoint.sh && chmod -R 777 /home/node && chmod 755 /tmp/check-permissions.sh
+
+USER root
+EXPOSE 7860
+WORKDIR /app
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
