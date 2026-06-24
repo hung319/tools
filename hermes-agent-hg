@@ -60,6 +60,8 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
 git config --global --add safe.directory '*' || true
 
+REAL_HERMES=$(which hermes)
+
 if [ -f "$BACKUP_FILE" ]; then
     log "--- [RESTORE] Tìm thấy file backup cũ. Đang giải mã phục hồi vào hệ thống ROOT... ---"
     if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
@@ -68,8 +70,9 @@ if [ -f "$BACKUP_FILE" ]; then
         log "--- [RESTORE] LỖI: Giải mã thất bại. Khởi tạo phiên mới. ---"
     fi
 else
-    log "--- [RESTORE] Không có dữ liệu cũ. Sinh dữ liệu mặc định ban đầu... ---"
-    /usr/local/bin/hermes-entrypoint true || true
+    log "--- [RESTORE] Không có dữ liệu cũ. Khởi tạo thư mục cấu hình mặc định... ---"
+    mkdir -p "$ROOT_HERMES"
+    $REAL_HERMES config init --data-dir "$ROOT_HERMES" >/dev/null 2>&1 || true
 fi
 
 chown -R root:root "$ROOT_HERMES" "$WORKSPACE_DIR" 2>/dev/null || true
@@ -184,6 +187,10 @@ cleanup() {
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
+
+# TỰ ĐỘNG KHỞI CHẠY GATEWAY: Ép gateway chạy trực tiếp bằng lệnh đúng chuẩn Docker ngay khi start container
+log "Đang tự động kích hoạt ngầm Hermes Gateway (hermes gateway run)..."
+$REAL_HERMES gateway run > /tmp/hermes_gateway.log 2>&1 &
 
 log "Đang khởi chạy Web Dashboard trực tiếp dưới quyền root..."
 hermes dashboard --host $HERMES_DASHBOARD_HOST --port $HERMES_DASHBOARD_PORT --no-open &
