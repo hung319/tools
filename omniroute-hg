@@ -3,7 +3,7 @@ FROM ghcr.io/diegosouzapw/omniroute:latest-web
 USER root
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
         tini tar openssl findutils procps inotify-tools redis-server curl jq ca-certificates \
@@ -75,21 +75,29 @@ fi
 
 chmod -R 777 /app/data /data 2>/dev/null || true
 
-cd /etc/wireproxy
-if [ ! -f "wgcf-profile.conf" ]; then
+init_or_rotate_warp() {
+    log "--- [WARP] Initializing / Rotating IP Address... ---"
+    cd /etc/wireproxy
+    
+    pkill wireproxy || true
+    rm -f wgcf-account.json wgcf-profile.conf wireproxy.conf 2>/dev/null || true
+
     export WGCF_CONFIG_DIR="/etc/wireproxy"
-    wgcf register --accept-tos >/dev/null 2>&1 || true
+    if ! wgcf register --accept-tos >/dev/null 2>&1; then
+        log "⚠️ [WARP ERROR] First attempt failed, retrying registration..."
+        sleep 3
+        wgcf register --accept-tos >/dev/null 2>&1 || true
+    fi
     wgcf generate >/dev/null 2>&1 || true
-fi
 
-if [ -f "wgcf-profile.conf" ] && [ ! -f "wireproxy.conf" ]; then
-    PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
-    PUB_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
-    ADDRESS_V4=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f1)
-    ADDRESS_V6=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f2)
-    ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+    if [ -f "wgcf-profile.conf" ]; then
+        PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+        PUB_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+        ADDRESS_V4=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f1)
+        ADDRESS_V6=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f2)
+        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
 
-    cat <<EOT > wireproxy.conf
+        cat <<EOT > wireproxy.conf
 [Interface]
 PrivateKey = $PRIV_KEY
 Address = $ADDRESS_V4, $ADDRESS_V6
@@ -102,12 +110,23 @@ Endpoint = $ENDPOINT
 [Socks5]
 BindAddress = 127.0.0.1:$WIREPROXY_SOCKS_PORT
 EOT
-fi
+        wireproxy -c wireproxy.conf > /tmp/wireproxy.log 2>&1 &
+        sleep 3
+        
+        CURRENT_IP=$(curl -s --socks5 127.0.0.1:$WIREPROXY_SOCKS_PORT https://ifconfig.me || echo "FAILED")
+        log "--- [WARP SUCCESS] SOCKS5 Tunnel ready on port $WIREPROXY_SOCKS_PORT | Public IP: $CURRENT_IP ---"
+    else
+        log "❌ [WARP ERROR] Profile generation failed. Tunnel offline!"
+    fi
+}
 
-if [ -f "wireproxy.conf" ]; then
-    wireproxy -c wireproxy.conf > /tmp/wireproxy.log 2>&1 &
-    sleep 3
-fi
+warp_scheduler_loop() {
+    while true; do
+        sleep 21600
+        log "--- [SCHEDULED EVENT] 6 Hours reached. Triggering WARP IP Rotation... ---"
+        init_or_rotate_warp
+    done
+}
 
 do_backup() {
     log "--- [THROTTLE ACTION] Packing OmniRoute data directory... ---"
@@ -161,6 +180,8 @@ cleanup() {
 }
 trap 'cleanup' TERM INT QUIT
 
+init_or_rotate_warp
+warp_scheduler_loop &
 watch_and_throttle &
 
 log "Starting OmniRoute Engine..."
