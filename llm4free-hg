@@ -1,0 +1,159 @@
+FROM python:3.10-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+USER root
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tini tar openssl findutils procps inotify-tools curl jq ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -e; \
+    API_WGCF=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d); \
+    VAL_WGCF=$(curl -s "$API_WGCF" | jq -r '.assets[] | select(.name | contains("linux_amd64")) | select(.name | contains("sha256") | not) | .browser_download_url'); \
+    curl -L -o /usr/local/bin/wgcf "$VAL_WGCF" && chmod +x /usr/local/bin/wgcf; \
+    API_WIREPROXY=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d); \
+    VAL_WIREPROXY=$(curl -s "$API_WIREPROXY" | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
+    curl -L -o /tmp/wireproxy.tar.gz "$VAL_WIREPROXY"; \
+    tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin/ wireproxy && chmod +x /usr/local/bin/wireproxy; \
+    rm -f /tmp/wireproxy.tar.gz
+
+WORKDIR /app
+# Thêm gói "httpx[socks]" để tích hợp sẵn module giải mã SOCKS proxy
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /app/.venv && \
+    . /app/.venv/bin/activate && \
+    uv pip install "llm4free[api]" "httpx[socks]" fastapi uvicorn
+
+ENV PORT=7860 \
+    PATH="/app/.venv/bin:$PATH" \
+    LLM4FREE_HOST=127.0.0.1 \
+    LLM4FREE_PORT=8000 \
+    LLM4FREE_API_KEY="sk-my-super-secret-key-2026" \
+    WIREPROXY_SOCKS_PORT=4000 \
+    HTTP_PROXY="socks5://127.0.0.1:4000" \
+    HTTPS_PROXY="socks5://127.0.0.1:4000"
+
+RUN mkdir -p /etc/wireproxy /app \
+    && chmod -R 777 /etc/wireproxy /app
+
+RUN cat <<'EOF' > /app/auth_wrapper.py
+import os
+import httpx
+from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+app = FastAPI(title="LLM4Free Auth Wrapper")
+security = HTTPBearer()
+API_KEY = os.getenv("LLM4FREE_API_KEY", "sk-my-super-secret-key-2026")
+TARGET_URL = "http://127.0.0.1:8000"
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if credentials.credentials != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key / Unauthorized")
+    return credentials.credentials
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
+async def proxy_gateway(path: str, request: Request, token: str = Depends(verify_token)):
+    if path in ["docs", "openapi.json", "redoc", "monitor/health"]:
+        pass
+
+    url = f"{TARGET_URL}/{path}"
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    # Thiết lập khống chế proxy nội bộ trống (trust_env=False) để tránh xung đột định tuyến
+    async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
+        req_content = await request.body()
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            params=dict(request.query_params),
+            content=req_content
+        )
+        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+EOF
+
+RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
+#!/bin/sh
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
+
+init_or_rotate_warp() {
+    cd /etc/wireproxy
+    
+    pkill wireproxy || true
+    rm -f wgcf-account.toml wgcf-profile.conf wireproxy.conf 2>/dev/null || true
+
+    API_ENDPOINT=$(echo "aHR0cHM6Ly9hcGkuY2xvdWRmbGFyZWNsaWVudC5jb20=" | base64 -d)
+    export WGCF_API_URL="$API_ENDPOINT"
+    
+    OLD_HTTP_PROXY="$HTTP_PROXY"
+    OLD_HTTPS_PROXY="$HTTPS_PROXY"
+    unset HTTP_PROXY
+    unset HTTPS_PROXY
+    
+    wgcf register --accept-tos > /dev/null 2>&1
+    wgcf generate > /dev/null 2>&1
+
+    export HTTP_PROXY="$OLD_HTTP_PROXY"
+    export HTTPS_PROXY="$OLD_HTTPS_PROXY"
+
+    if [ -f "wgcf-profile.conf" ]; then
+        PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+        ADDRESS_V4=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | cut -d',' -f1)
+        ADDRESS_V6=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | cut -d',' -f2)
+        PEER_PUB=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+
+        cat <<EOT > wireproxy.conf
+[Interface]
+PrivateKey = $PRIV_KEY
+Address = $ADDRESS_V4, $ADDRESS_V6
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PEER_PUB
+Endpoint = $ENDPOINT
+
+[Socks5]
+BindAddress = 127.0.0.1:$WIREPROXY_SOCKS_PORT
+EOT
+
+        wireproxy -c wireproxy.conf > /dev/null 2>&1 &
+        sleep 10
+        
+        URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
+        CURRENT_IP=$(curl -s --socks5 127.0.0.1:$WIREPROXY_SOCKS_PORT "$URL_CHECK" || echo "FAILED")
+        log "--- [WARP STATUS] SOCKS5 Port $WIREPROXY_SOCKS_PORT | Tunnel IP: $CURRENT_IP ---"
+    else
+        log "❌ [WGCF ERROR] Profile generation aborted!"
+    fi
+}
+
+warp_scheduler_loop() {
+    while true; do
+        sleep 21600
+        init_or_rotate_warp
+    done
+}
+
+init_or_rotate_warp
+warp_scheduler_loop &
+
+log "--- Starting LLM4Free Backend Server (Internal Port 8000)... ---"
+/app/.venv/bin/llm4free-server > /dev/null 2>&1 &
+
+log "--- Starting Authentication Wrapper Proxy (Public Port 7860)... ---"
+cd /app
+exec /app/.venv/bin/uvicorn auth_wrapper:app --host 0.0.0.0 --port 7860 --log-level info
+EOF
+
+RUN chmod +x /usr/local/bin/hf-entrypoint.sh
+
+EXPOSE 7860
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
