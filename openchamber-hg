@@ -133,10 +133,15 @@ backup_data() {
 }
 
 cleanup() {
-    log "!!! [STOP] Đang thực hiện sao lưu khẩn cấp trước khi tắt máy... !!!"
-    # Khi container tắt, ép chạy backup luôn không cần đợi inotify kích hoạt
-    backup_data
-    [ -n "${APP_PID:-}" ] && kill -TERM "$APP_PID" 2>/dev/null
+    # CHỈ tiến hành sao lưu khẩn cấp nếu ứng dụng đang hoạt động bình thường tại thời điểm tắt máy
+    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+        log "!!! [STOP] Đang thực hiện sao lưu khẩn cấp trước khi tắt máy... !!!"
+        # Khi container tắt, ép chạy backup luôn không cần đợi inotify kích hoạt
+        backup_data
+        kill -TERM "$APP_PID" 2>/dev/null
+    else
+        log "!!! [STOP] Ứng dụng đã bị sập (crash) hoặc chưa khởi tạo thành công. HỦY BỎ sao lưu để tránh ghi đè làm mất dữ liệu cũ hợp lệ !!!"
+    fi
     exit 0
 }
 
@@ -144,7 +149,6 @@ trap cleanup SIGTERM SIGINT
 
 start_warp_proxy
 restore_data
-backup_data
 
 # --- TIẾN TRÌNH THEO DÕI SỰ KIỆN REALT-TIME (INOTIFYWAIT EVENT-DRIVEN) ---
 (
@@ -162,8 +166,12 @@ backup_data
         # Đợi 5 phút để gom toàn bộ dữ liệu ghi dồn dập (tránh spam nén liên tục)
         sleep 300
         
-        # Tiến hành nén
-        backup_data
+        # Chỉ tiến hành nén khi ứng dụng gốc vẫn đang sống ổn định
+        if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+            backup_data
+        else
+            log "--- [INOTIFY] Phát hiện ứng dụng đã crash, hủy bỏ chu kỳ sao lưu định kỳ này để bảo vệ dữ liệu gốc ---"
+        fi
 
         # Kiểm tra chu kỳ xoay IP WARP (Mỗi 6 tiếng = 21600 giây)
         NOW=$(date +%s)
