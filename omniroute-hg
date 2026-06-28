@@ -6,7 +6,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        tini tar openssl findutils procps inotify-tools redis-server curl jq ca-certificates \
+        tini tar openssl findutils procps inotify-tools redis-server curl jq ca-certificates netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -e; \
@@ -33,22 +33,23 @@ ENV PORT=7860 \
     STORAGE_ENCRYPTION_KEY="huggingface_space_omniroute_storage_encryption_key_placeholder" \
     STORAGE_ENCRYPTION_KEY_VERSION="v1" \
     NEXT_PUBLIC_BASE_URL="http://localhost:7860" \
-    ENABLE_SOCKS5_PROXY=true \
-    NEXT_PUBLIC_ENABLE_SOCKS5_PROXY=true \
+    ENABLE_HTTP_PROXY=true \
+    NEXT_PUBLIC_ENABLE_HTTP_PROXY=true \
     BACKUP_DIR=/data \
     BACKUP_FILENAME="omniroute_backup.enc" \
     BACKUP_PASS="MatKhauMaHoaDuLieuAnToan" \
-    WIREPROXY_SOCKS_PORT=4000 \
+    WIREPROXY_HTTP_PORT=4000 \
     OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS="true"
 
-RUN mkdir -p /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis \
-    && chmod -R 777 /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis
+RUN mkdir -p /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis /home/node \
+    && chown -R node:node /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis /home/node \
+    && chmod -R 777 /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis /home/node
 
 RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/daemonize no/daemonize yes/' /tmp/redis.conf \
     && sed -i 's/logfile .*/logfile ""/' /tmp/redis.conf \
     && sed -i 's/pidfile .*/pidfile \/var\/run\/redis\/redis-server.pid/' /tmp/redis.conf \
-    && chmod 777 /tmp/redis.conf
+    && chown node:node /tmp/redis.conf && chmod 777 /tmp/redis.conf
 
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
@@ -63,20 +64,25 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 redis-server /tmp/redis.conf
 
 if [ -f "$BACKUP_FILE" ]; then
-    if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
+    if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -m --no-same-owner -C /; then
         log "--- [RESTORE] SUCCESSFUL! ---"
     else
-        log "--- [RESTORE] ERROR: Decryption failed. Starting fresh. ---"
+        log "--- [RESTORE] ERROR: Decryption/Extraction failed. Starting fresh. ---"
     fi
 else
     log "--- [RESTORE] No backup file found. Starting fresh. ---"
 fi
 
-chmod -R 777 /app/data /data 2>/dev/null || true
+check_port() {
+    if nc -z 127.0.0.1 7860 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
 
 init_or_rotate_warp() {
     cd /etc/wireproxy
-    
     pkill wireproxy || true
     rm -f wgcf-account.json wgcf-profile.conf wireproxy.conf 2>/dev/null || true
 
@@ -104,14 +110,14 @@ DNS = 1.1.1.1
 PublicKey = $PUB_KEY
 Endpoint = $ENDPOINT
 
-[Socks5]
-BindAddress = 127.0.0.1:$WIREPROXY_SOCKS_PORT
+[Http]
+BindAddress = 127.0.0.1:$WIREPROXY_HTTP_PORT
 EOT
         wireproxy -c wireproxy.conf > /tmp/wireproxy.log 2>&1 &
         sleep 3
         
-        CURRENT_IP=$(curl -s --socks5 127.0.0.1:$WIREPROXY_SOCKS_PORT $(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d) || echo "FAILED")
-        log "--- [WARP SUCCESS] SOCKS5 Tunnel ready on port $WIREPROXY_SOCKS_PORT | Public IP: $CURRENT_IP ---"
+        CURRENT_IP=$(curl -s -x http://127.0.0.1:$WIREPROXY_HTTP_PORT $(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d) || echo "FAILED")
+        log "--- [WARP SUCCESS] HTTP Proxy Tunnel ready on port $WIREPROXY_HTTP_PORT | Public IP: $CURRENT_IP ---"
     else
         log "❌ [WARP ERROR] Profile generation failed. Tunnel offline!"
     fi
@@ -125,16 +131,22 @@ warp_scheduler_loop() {
 }
 
 do_backup() {
+    log "[BACKUP-ENGINE] --- [CHECK] Đang kiểm tra cổng mạng 7860... ---"
+    if ! check_port; then
+        log "❌ [BACKUP-ENGINE] [ABORTED] Huỷ backup vì cổng 7860 chưa mở."
+        return 1
+    fi
+
+    log "[BACKUP-ENGINE] --- [START] Tiến hành nén thư mục dữ liệu... ---"
     rm -rf "$MOCK_DIR"
     mkdir -p "$MOCK_DIR/app"
     cp -r /app/data "$MOCK_DIR/app/data" 2>/dev/null || true
 
-    if tar -cz --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' --exclude='db_backups/**' -C "$MOCK_DIR" . | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
-        chmod 777 "$TEMP_FILE"
+    if tar -cz --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' -C "$MOCK_DIR" app | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
         mv "$TEMP_FILE" "$BACKUP_FILE"
-        log "--- [BACKUP SUCCESS] Backup file updated successfully! ---"
+        log "✅ [BACKUP-ENGINE] [SUCCESS] Đã cập nhật file backup mã hoá thành công tại $BACKUP_FILE"
     else
-        log "--- [BACKUP ERROR] Packing or encryption failed! ---"
+        log "❌ [BACKUP-ENGINE] [ERROR] Mã hoá openssl thất bại!"
         rm -f "$TEMP_FILE"
     fi
     rm -rf "$MOCK_DIR"
@@ -143,14 +155,17 @@ do_backup() {
 watch_and_throttle() {
     local DIRTY_FLAG="/tmp/.omni_dirty"
     rm -f "$DIRTY_FLAG"
+    
+    log "[WATCHER] Khởi động inotifywait theo dõi thư mục /app/data..."
     sleep 20
 
     inotifywait -m -r -e modify -e move -e create -e delete \
-        --exclude "(\.sqlite-wal|\.sqlite-shm|db_backups/)" \
+        --exclude "(\.sqlite-wal|\.sqlite-shm)" \
         --format "%w%f|%e" \
         -- \
         /app/data 2>/dev/null | while IFS='|' read -r filepath action; do
             if [ ! -f "$DIRTY_FLAG" ]; then
+                log "🔔 [WATCHER] Phát hiện biến động file: $filepath ($action). Thiết lập bộ đếm chờ 5 phút để tránh quá tải..."
                 touch "$DIRTY_FLAG"
             fi
     done &
@@ -158,6 +173,7 @@ watch_and_throttle() {
     while true; do
         if [ -f "$DIRTY_FLAG" ]; then
             sleep 300
+            log "[WATCHER] Hết thời gian chờ 5 phút. Tiến hành kích hoạt sao lưu dữ liệu..."
             do_backup
             rm -f "$DIRTY_FLAG"
         else
@@ -168,6 +184,7 @@ watch_and_throttle() {
 
 cleanup() {
     trap - TERM INT QUIT
+    log "[SHUTDOWN] Đang tắt hệ thống! Chạy backup khẩn cấp..."
     do_backup
     exit 0
 }
@@ -177,17 +194,24 @@ init_or_rotate_warp
 warp_scheduler_loop &
 watch_and_throttle &
 
+if [ -n "$OMNIROUTE_MEMORY_MB" ]; then
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=${OMNIROUTE_MEMORY_MB}"
+  log "[SYSTEM] Thiết lập giới hạn Node RAM thành: ${OMNIROUTE_MEMORY_MB}MB"
+fi
+
 log "Starting OmniRoute Engine..."
 cd /app
-/tmp/check-permissions.sh node dev/run-standalone.mjs &
-OMNI_PID=$!
-
-wait $OMNI_PID
+exec node dev/run-standalone.mjs
 EOF
 
-RUN chmod +x /usr/local/bin/hf-entrypoint.sh && chmod -R 777 /home/node && chmod 755 /tmp/check-permissions.sh
+RUN chmod +x /usr/local/bin/hf-entrypoint.sh \
+    && chown node:node /usr/local/bin/hf-entrypoint.sh
 
-USER root
+USER node
 EXPOSE 7860
 WORKDIR /app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD nc -z 127.0.0.1 7860 || exit 1
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
