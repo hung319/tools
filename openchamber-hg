@@ -4,7 +4,7 @@ USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
-        make g++ python3 tar openssl findutils gnupg inotify-tools \
+        make g++ python3 tar openssl findutils gnupg inotify-tools lsof \
     && curl -fsSL $(echo "aHR0cHM6Ly9idW4uc2gvaW5zdGFsbA==" | base64 -d) | BUN_INSTALL=/usr bash \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -56,6 +56,16 @@ BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_PATH="/tmp/temp_chamber.enc"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# Hàm kiểm tra xem OpenChamber có thực sự đang chạy hay không
+is_app_alive() {
+    # Kiểm tra nếu có tiến trình openchamber đang chạy HOẶC port 7860 đang mở
+    if pgrep -f "openchamber" >/dev/null 2>&1 || lsof -i :"${OPENCHAMBER_PORT}" >/dev/null 2>&1; then
+        return 0 # Còn sống
+    else
+        return 1 # Đã chết/Chưa chạy
+    fi
+}
 
 start_warp_proxy() {
     log "--- [WARP] Đang khởi tạo và đăng ký IP Cloudflare mới... ---"
@@ -133,12 +143,10 @@ backup_data() {
 }
 
 cleanup() {
-    # CHỈ tiến hành sao lưu khẩn cấp nếu ứng dụng đang hoạt động bình thường tại thời điểm tắt máy
-    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+    if is_app_alive; then
         log "!!! [STOP] Đang thực hiện sao lưu khẩn cấp trước khi tắt máy... !!!"
         # Khi container tắt, ép chạy backup luôn không cần đợi inotify kích hoạt
         backup_data
-        kill -TERM "$APP_PID" 2>/dev/null
     else
         log "!!! [STOP] Ứng dụng đã bị sập (crash) hoặc chưa khởi tạo thành công. HỦY BỎ sao lưu để tránh ghi đè làm mất dữ liệu cũ hợp lệ !!!"
     fi
@@ -166,8 +174,8 @@ restore_data
         # Đợi 5 phút để gom toàn bộ dữ liệu ghi dồn dập (tránh spam nén liên tục)
         sleep 300
         
-        # Chỉ tiến hành nén khi ứng dụng gốc vẫn đang sống ổn định
-        if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+        # Tiến hành nén nếu app thật sự đang sống ổn định
+        if is_app_alive; then
             backup_data
         else
             log "--- [INOTIFY] Phát hiện ứng dụng đã crash, hủy bỏ chu kỳ sao lưu định kỳ này để bảo vệ dữ liệu gốc ---"
@@ -192,8 +200,13 @@ fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
     --foreground \
     ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"} &
 
-APP_PID=$!
-wait "$APP_PID"
+# Vòng lặp giữ Entrypoint không thoát cho đến khi ứng dụng chính dừng lại hẳn
+sleep 5
+while is_app_alive; do
+    sleep 5
+done
+
+log "--- [EXIT] Ứng dụng OpenChamber đã tắt chủ động ---"
 EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
