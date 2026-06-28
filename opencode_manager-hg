@@ -42,7 +42,7 @@ RUN ARCH=$(dpkg --print-architecture) \
          curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hbWQ2NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
        else \
          curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hcm02NA==" | base64 -d) -o /usr/local/bin/wgcf; \
-         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hcm02NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
+         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hcm02NA==" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
        fi \
     && chmod +x /usr/local/bin/wgcf /usr/local/bin/wireproxy
 
@@ -90,6 +90,16 @@ BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_PATH="/tmp/temp_backup.enc"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# Hàm kiểm tra trạng thái sống động thực tế của Opencode Manager
+is_app_alive() {
+    # Kiểm tra xem có tiến trình bun đang chạy file index không HOẶC port chính 7860 đang mở
+    if pgrep -f "bun.*backend/src/index.ts" >/dev/null 2>&1 || lsof -i :"$PORT" >/dev/null 2>&1; then
+        return 0 # Ứng dụng đang chạy tốt
+    else
+        return 1 # Ứng dụng đã sập hoặc dừng
+    fi
+}
 
 # --- HÀM KHỞI TẠO HOẶC XOAY IP WARP SẠCH ---
 start_warp_proxy() {
@@ -167,13 +177,12 @@ backup_data() {
 
 cleanup() {
     log "!!! [STOP] Container đang bị dừng! Kiểm tra trạng thái ứng dụng trước khi xử lý dữ liệu... !!!"
-    # CHỈ chạy cứu hộ dữ liệu khẩn cấp nếu ứng dụng chính đang hoạt động tại thời điểm shutdown
-    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+    # CHỈ chạy cứu hộ dữ liệu khẩn cấp nếu cụm ứng dụng thực sự đang hoạt động tốt tại thời điểm shutdown
+    if is_app_alive; then
         if [ -d "/root/data" ] || [ -d "/root/.config" ]; then
             tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='root/wgcf' --exclude='root/data/*.db-journal' --exclude='*.log' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$BACKUP_PATH"
             log "!!! [STOP] Đã cứu hộ backup thành công trước khi tắt máy !!!"
         fi
-        kill -TERM "$APP_PID" 2>/dev/null
     else
         log "!!! [STOP] Ứng dụng đã sập hoặc chưa từng khởi chạy thành công. HỦY BỎ tiến trình ghi đè dữ liệu cứu hộ để bảo vệ file backup gốc !!!"
     fi
@@ -203,11 +212,11 @@ restore_data
         # Ngủ 5 phút để gom cụm toàn bộ các thao tác ghi tiếp theo (tránh spam nén file liên tục)
         sleep 300
         
-        # Chỉ tiến hành backup định kỳ nếu ứng dụng chính vẫn đang chạy tốt
-        if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+        # Sử dụng hàm kiểm tra động thay vì biến APP_PID tĩnh
+        if is_app_alive; then
             backup_data
         else
-            log "--- [INOTIFY] Bỏ qua sao lưu tự động vì phát hiện ứng dụng chính đã bị dừng hoặc crash ---"
+            log "--- [INOTIFY] Bỏ qua sao lưu tự động vì phát hiện ứng dụng chính đã bị dừng hoặc thực sự crash ---"
         fi
 
         # Kiểm tra chu kỳ xoay IP WARP (Mỗi 6 tiếng = 21600 giây)
@@ -224,8 +233,13 @@ restore_data
 log "Đang khởi động Opencode Manager tại /app trên cổng $PORT..."
 bun backend/src/index.ts &
 
-APP_PID=$!
-wait "$APP_PID"
+# Vòng lặp giữ Entrypoint script luôn chạy tương đương thời gian sống của ứng dụng chính
+sleep 5
+while is_app_alive; do
+    sleep 5
+done
+
+log "--- [EXIT] Tiến trình chính của ứng dụng đã kết thúc ---"
 EOF
 
 EXPOSE 7860
