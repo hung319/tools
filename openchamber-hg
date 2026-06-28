@@ -42,7 +42,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 RUN echo "$(date +%Y-%m-%d_%H:%M:%S)" > /tmp/build_time
 
-RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" bun install -g opencode-ai@latest @openchamber/web@latest
+RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" npm install -g opencode-ai@latest @openchamber/web@latest
 
 WORKDIR /root
 
