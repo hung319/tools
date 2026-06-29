@@ -22,20 +22,20 @@ RUN set -e; \
     rm -f /tmp/wireproxy.tar.gz
 
 WORKDIR /app
-# Thêm gói "httpx[socks]" để tích hợp sẵn module giải mã SOCKS proxy
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    uv pip install "llm4free[api]" "httpx[socks]" fastapi uvicorn
+    uv pip install "llm4free[api]" fastapi uvicorn
 
 ENV PORT=7860 \
     PATH="/app/.venv/bin:$PATH" \
     LLM4FREE_HOST=127.0.0.1 \
     LLM4FREE_PORT=8000 \
     LLM4FREE_API_KEY="sk-my-super-secret-key-2026" \
-    WIREPROXY_SOCKS_PORT=4000 \
-    HTTP_PROXY="socks5://127.0.0.1:4000" \
-    HTTPS_PROXY="socks5://127.0.0.1:4000"
+    WIREPROXY_HTTP_PORT=4000 \
+    HTTP_PROXY="http://127.0.0.1:4000" \
+    HTTPS_PROXY="http://127.0.0.1:4000"
 
 RUN mkdir -p /etc/wireproxy /app \
     && chmod -R 777 /etc/wireproxy /app
@@ -65,7 +65,6 @@ async def proxy_gateway(path: str, request: Request, token: str = Depends(verify
     headers = dict(request.headers)
     headers.pop("host", None)
     
-    # Thiết lập khống chế proxy nội bộ trống (trust_env=False) để tránh xung đột định tuyến
     async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
         req_content = await request.body()
         resp = await client.request(
@@ -120,16 +119,16 @@ DNS = 1.1.1.1
 PublicKey = $PEER_PUB
 Endpoint = $ENDPOINT
 
-[Socks5]
-BindAddress = 127.0.0.1:$WIREPROXY_SOCKS_PORT
+[Http]
+BindAddress = 127.0.0.1:$WIREPROXY_HTTP_PORT
 EOT
 
         wireproxy -c wireproxy.conf > /dev/null 2>&1 &
         sleep 10
         
         URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
-        CURRENT_IP=$(curl -s --socks5 127.0.0.1:$WIREPROXY_SOCKS_PORT "$URL_CHECK" || echo "FAILED")
-        log "--- [WARP STATUS] SOCKS5 Port $WIREPROXY_SOCKS_PORT | Tunnel IP: $CURRENT_IP ---"
+        CURRENT_IP=$(curl -s -x http://127.0.0.1:$WIREPROXY_HTTP_PORT "$URL_CHECK" || echo "FAILED")
+        log "--- [WARP STATUS] HTTP Proxy Port $WIREPROXY_HTTP_PORT | Tunnel IP: $CURRENT_IP ---"
     else
         log "❌ [WGCF ERROR] Profile generation aborted!"
     fi
