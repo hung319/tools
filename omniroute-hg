@@ -22,6 +22,8 @@ RUN set -e; \
 ENV PORT=7860 \
     HOSTNAME=0.0.0.0 \
     REDIS_URL="redis://127.0.0.1:6379" \
+    QUOTA_STORE_DRIVER=redis \
+    QUOTA_STORE_REDIS_URL="redis://127.0.0.1:6379" \
     OMNIROUTE_DISABLE_REDIS_AUTH_CACHE=0 \
     AUTH_COOKIE_SECURE=true \
     REQUIRE_API_KEY=true \
@@ -48,6 +50,7 @@ RUN mkdir -p /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/l
 RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/daemonize no/daemonize yes/' /tmp/redis.conf \
     && sed -i 's/logfile .*/logfile ""/' /tmp/redis.conf \
+    && sed -i 's/^dir .*/dir \/tmp/' /tmp/redis.conf \
     && sed -i 's/pidfile .*/pidfile \/var\/run\/redis\/redis-server.pid/' /tmp/redis.conf \
     && chown node:node /tmp/redis.conf && chmod 777 /tmp/redis.conf
 
@@ -193,11 +196,6 @@ trap 'cleanup' TERM INT QUIT
 init_or_rotate_warp
 warp_scheduler_loop &
 watch_and_throttle &
-
-if [ -n "$OMNIROUTE_MEMORY_MB" ]; then
-  export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=${OMNIROUTE_MEMORY_MB}"
-  log "[SYSTEM] Thiết lập giới hạn Node RAM thành: ${OMNIROUTE_MEMORY_MB}MB"
-fi
 
 log "Starting OmniRoute Engine..."
 cd /app
