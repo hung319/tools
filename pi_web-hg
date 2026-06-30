@@ -1,0 +1,226 @@
+FROM node:22-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git tini procps unzip psmisc \
+        make g++ python3 openssl findutils inotify-tools lsof \
+        xdg-utils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/xdg-open && chmod +x /usr/local/bin/xdg-open
+
+RUN ARCH=$(dpkg --print-architecture) \
+    && WGCF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hbWQ2NA==" | base64 -d) \
+    && WGCF_ARM=$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hcm02NA==" | base64 -d) \
+    && WIRE_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hbWQ2NC50YXIuZ3o=" | base64 -d) \
+    && WIRE_ARM=$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hcm02NC50YXIuZ3o=" | base64 -d) \
+    && if [ "$ARCH" = "amd64" ]; then \
+         curl -fsSL "$WGCF_URL" -o /usr/local/bin/wgcf; \
+         curl -fsSL "$WIRE_URL" | tar -xz -C /usr/local/bin/ wireproxy; \
+       else \
+         curl -fsSL "$WGCF_ARM" -o /usr/local/bin/wgcf; \
+         curl -fsSL "$WIRE_ARM" | tar -xz -C /usr/local/bin/ wireproxy; \
+       fi \
+    && chmod +x /usr/local/bin/wgcf /usr/local/bin/wireproxy
+
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest
+RUN npm install -g @agegr/pi-web@latest
+
+ENV PORT=7860 \
+    INTERNAL_PORT=7861 \
+    HOSTNAME=0.0.0.0 \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="pi_web_backup.enc" \
+    BACKUP_PASS="pi_secure_123" \
+    NODE_ENV=production \
+    WGCF_FORCE_REGISTER=1 \
+    WARP_PROXY="http://127.0.0.1:4001" \
+    WARP_ENABLED=true \
+    APP_USERNAME="" \
+    APP_PASSWORD=""
+
+RUN mkdir -p /data /tmp/wgcf_temp && chmod -R 777 /root /data
+
+RUN cat <<'PROXY_SCRIPT' > /usr/local/bin/auth-proxy.js
+const http = require('http');
+const httpProxy = require('http-proxy');
+const PORT = parseInt(process.env.PORT || '7860', 10);
+const TARGET = 'http://127.0.0.1:' + (parseInt(process.env.INTERNAL_PORT || '7861', 10));
+const USER = process.env.APP_USERNAME || '';
+const PASS = process.env.APP_PASSWORD || '';
+
+const proxy = httpProxy.createProxyServer({ target: TARGET, changeOrigin: true });
+proxy.on('error', (err, req, res) => {
+  try { if (res && !res.headersSent) res.writeHead(502); } catch(_) {}
+  try { if (res && !res.writableEnded) res.end('Bad Gateway'); } catch(_) {}
+});
+
+http.createServer((req, res) => {
+  try {
+    if (req.url === '/_health') { res.writeHead(200); return res.end('ok'); }
+    if (USER) {
+      const b64 = Buffer.from(USER+':'+PASS).toString('base64');
+      if (req.headers['authorization'] !== 'Basic '+b64) {
+        res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="pi-web"' });
+        return res.end('Unauthorized');
+      }
+    }
+    proxy.web(req, res);
+  } catch(e) {
+    try { if (!res.headersSent) res.writeHead(502); } catch(_) {}
+    try { if (!res.writableEnded) res.end('Proxy Error'); } catch(_) {}
+  }
+}).listen(PORT, '0.0.0.0', () => { process.send && process.send({type:'ready'}); });
+PROXY_SCRIPT
+
+RUN mkdir -p /usr/local/share/auth-proxy \
+    && echo '{"name":"auth-proxy","private":true,"dependencies":{"http-proxy":"^1.18.1"}}' \
+       > /usr/local/share/auth-proxy/package.json \
+    && cd /usr/local/share/auth-proxy \
+    && npm install --no-audit --no-fund 2>&1 | tail -1
+
+RUN cat <<'ENTRY' > /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set +e
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_PATH="/tmp/temp_pi_backup.enc"
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+is_app_alive() {
+    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then return 0; fi
+    if lsof -i :"${INTERNAL_PORT:-7861}" >/dev/null 2>&1; then return 0; fi
+    return 1
+}
+start_warp_proxy() {
+    [ "$WARP_ENABLED" != "true" ] && { log "--- [WARP] Disabled ---"; return; }
+    log "--- [WARP] Initializing... ---"
+    killall wireproxy 2>/dev/null || true
+    rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1 || true
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1 || true
+    if [ -f "wgcf-profile.conf" ]; then
+        PRIVATE_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+        PUBLIC_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+        ADDRESS=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
+        cat <<WCONF > wireproxy.conf
+[Interface]
+PrivateKey = $PRIVATE_KEY
+Address = $ADDRESS
+DNS = 1.1.1.1
+[Peer]
+PublicKey = $PUBLIC_KEY
+Endpoint = $ENDPOINT
+[http]
+BindAddress = 127.0.0.1:4001
+WCONF
+        HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wireproxy -c wireproxy.conf >/dev/null 2>&1 &
+        sleep 3
+        log "--- [WARP] HTTP Proxy ready at 127.0.0.1:4001 ---"
+    else
+        log "--- [WARN] WARP registration failed, continuing w/o proxy ---"
+    fi
+    cd /root
+}
+restore_data() {
+    if [ -f "$BACKUP_PATH" ]; then
+        log "--- [RESTORE] Decrypting backup... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
+            rm -rf /root/.pi/agent/pids 2>/dev/null || true
+            fuser -k "${INTERNAL_PORT:-7861}/tcp" 2>/dev/null || true
+            log "--- [RESTORE] Successful ---"
+        else
+            log "--- [RESTORE] Decryption failed, starting fresh ---"
+        fi
+    else
+        log "--- [RESTORE] No backup at $BACKUP_PATH ---"
+    fi
+}
+backup_data() {
+    if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
+    log "--- [BACKUP] Encrypting... ---"
+    mkdir -p "$BACKUP_DIR"
+    if tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='*.log' --exclude='*.pid' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+        mv "$TEMP_PATH" "$BACKUP_PATH"
+        log "--- [BACKUP] Saved to $BACKUP_PATH ---"
+    else
+        rm -f "$TEMP_PATH"
+        log "--- [BACKUP] Failed ---"
+    fi
+}
+cleanup() {
+    trap - TERM INT QUIT
+    if is_app_alive; then log "--- [SHUTDOWN] Saving final backup... ---"; backup_data; fi
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    kill -TERM "$WATCHER_PID" 2>/dev/null || true
+    kill -TERM "$PROXY_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
+start_warp_proxy
+restore_data
+
+if [ "$WARP_ENABLED" = "true" ]; then
+    export HTTP_PROXY="http://127.0.0.1:4001"
+    export HTTPS_PROXY="http://127.0.0.1:4001"
+    export ALL_PROXY="http://127.0.0.1:4001"
+    export NO_PROXY="localhost,127.0.0.1"
+fi
+
+fuser -k "${INTERNAL_PORT:-7861}/tcp" 2>/dev/null || true
+fuser -k "${PORT}/tcp" 2>/dev/null || true
+
+log "--- Starting pi-web on internal port ${INTERNAL_PORT}... ---"
+PORT=$INTERNAL_PORT pi-web &
+APP_PID=$!
+log "--- pi-web PID: $APP_PID ---"
+
+log "--- Starting auth proxy on port ${PORT}... ---"
+if [ -n "$APP_USERNAME" ]; then
+    log "--- Auth enabled (Basic) ---"
+fi
+NODE_PATH=/usr/local/share/auth-proxy/node_modules node /usr/local/bin/auth-proxy.js &
+PROXY_PID=$!
+
+(
+    MY_APP_PID=$APP_PID
+    LAST_WARP_ROTATE=$(date +%s)
+    while true; do
+        inotifywait -r -e modify -e create -e delete -e move \
+            --exclude '(\\.cache|\\.npm|\\.pid|pids|.*\\.log|node_modules)' \
+            /root/.pi 2>/dev/null
+        log "--- [INOTIFY] Changes detected, debouncing 5m... ---"
+        sleep 300
+        if [ -n "$MY_APP_PID" ] && kill -0 "$MY_APP_PID" 2>/dev/null; then
+            backup_data
+        fi
+        NOW=$(date +%s)
+        if [ $((NOW - LAST_WARP_ROTATE)) -ge 21600 ]; then
+            log "--- [WARP] 6h cycle, rotating proxy... ---"
+            start_warp_proxy
+            LAST_WARP_ROTATE=$NOW
+        fi
+    done
+) &
+WATCHER_PID=$!
+
+while kill -0 "$APP_PID" 2>/dev/null || kill -0 "$PROXY_PID" 2>/dev/null; do
+    sleep 3
+done
+
+if lsof -i :"${PORT}" >/dev/null 2>&1; then
+    fuser -k "${PORT}/tcp" 2>/dev/null || true
+fi
+log "--- [EXIT] ---"
+ENTRY
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+VOLUME /data
+VOLUME /root/.pi
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=25s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:7860/_health', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
