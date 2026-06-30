@@ -194,7 +194,7 @@ restore_data
 
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
-/usr/bin/openchamber serve \
+openchamber serve \
     --port "${OPENCHAMBER_PORT}" \
     --host "${OPENCHAMBER_HOST}" \
     --foreground \
