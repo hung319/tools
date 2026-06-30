@@ -135,10 +135,11 @@ restore_data() {
     fi
 }
 backup_data() {
-    if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
-    log "--- [BACKUP] Encrypting... ---"
+    log "--- [BACKUP] Encrypting /root (excl cache/log/npm)... ---"
     mkdir -p "$BACKUP_DIR"
-    if tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='*.log' --exclude='*.pid' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+    if tar -cz -C / \
+        --exclude='root/.cache' --exclude='root/.npm' --exclude='*.log' --exclude='*.pid' \
+        root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         mv "$TEMP_PATH" "$BACKUP_PATH"
         log "--- [BACKUP] Saved to $BACKUP_PATH ---"
     else
