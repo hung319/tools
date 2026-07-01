@@ -2,7 +2,8 @@ FROM ghcr.io/openlistteam/openlist-git:latest-aio
 
 USER root
 
-RUN apk add --no-cache caddy jq bash curl tini openssl inotify-tools procps psmisc net-tools shadow
+RUN apk add --no-cache caddy jq bash curl tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon && \
+    apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community qbittorrent-nox
 
 RUN ARCH=$(uname -m) && \
     WGCF_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
@@ -34,25 +35,48 @@ EOF
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/bash
 
-mkdir -p /data /opt/openlist/data
+mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
 chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
 
+if [ "$RUN_ARIA2" = "true" ]; then
+    echo "[AIO] khoi hanh Aria2..."
+    mkdir -p /tmp/.config/aria2
+    [ ! -f /tmp/.config/aria2/aria2.session ] && touch /tmp/.config/aria2/aria2.session
+    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session >/dev/null 2>&1 &
+fi
+
+if [ "$RUN_QBITTORRENT" = "true" ]; then
+    echo "[AIO] khoi hanh qBittorrent..."
+    mkdir -p /tmp/.config/qBittorrent
+    qbittorrent-nox --webui-port=8080 --confirm-legal-notice >/dev/null 2>&1 &
+fi
+
+if [ "$RUN_TRANSMISSION" = "true" ]; then
+    echo "[AIO] khoi hanh Transmission..."
+    mkdir -p /tmp/.config/transmission-daemon
+    transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &
+fi
+
 fuser -k "7860/tcp" 2>/dev/null || true
-caddy run --config /opt/openlist/Caddyfile --adapter caddyfile &
+caddy run --config /opt/openlist/Caddyfile --adapter caddyfile >/dev/null 2>&1 &
 
 (
+    echo "[WIREPROXY] Bat dau khoi dong he thong mang..."
     rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp && export WGCF_CONFIG_DIR="/tmp/wgcf_temp"
-    wgcf register --accept-tos >/dev/null 2>&1 || true && wgcf generate >/dev/null 2>&1 || true
+    
+    wgcf register --accept-tos >/dev/null 2>&1
+    wgcf generate >/dev/null 2>&1
+    
     if [ -f "wgcf-profile.conf" ]; then
         PRIV_K=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
         PUB_K=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
         ENDP=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
         ADDR=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
         printf "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\n\n[http]\nBindAddress = 127.0.0.1:4001\n" "$PRIV_K" "$ADDR" "$PUB_K" "$ENDP" > wireproxy.conf
-        wireproxy -c wireproxy.conf >/dev/null 2>&1 &
+        wireproxy -c wireproxy.conf >/dev/null 2>&1
     fi
 ) &
 
@@ -95,7 +119,7 @@ caddy run --config /opt/openlist/Caddyfile --adapter caddyfile &
 ) &
 
 export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
-sleep 5
+sleep 15
 
 exec ./openlist server --no-prefix
 EOF
@@ -104,6 +128,8 @@ RUN chmod +x /entrypoint.sh
 
 ENV PORT=7860 \
     RUN_ARIA2=true \
+    RUN_QBITTORRENT=true \
+    RUN_TRANSMISSION=true \
     HOME=/tmp \
     XDG_CONFIG_HOME=/tmp/.config \
     XDG_DATA_HOME=/tmp/.local \
