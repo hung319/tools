@@ -26,23 +26,16 @@ document.addEventListener('DOMContentLoaded', () => {
         },
 
         'nekosapi': {
-            sfw: () => 'https://api.nekosapi.com/v6/images/random?nsfw=false&gif=false',
-            nsfw: () => 'https://api.nekosapi.com/v6/images/random?nsfw=true&gif=false',
-            parse: (d) => d.url || null,
-        },
-
-        'nekos.best': {
-            sfw: () => 'https://nekos.best/api/v2/neko',
-            // Nekos.best is SFW-only
-            nsfw: null,
-            parse: (d) => d.url || null,
+            sfw: () => 'https://api.nekosapi.com/v4/images/random?nsfw=false&gif=false',
+            nsfw: () => 'https://api.nekosapi.com/v4/images/random?nsfw=true&gif=false',
+            parse: (d) => d[0]?.url || null,
         },
 
         'nekosia': {
             sfw: () => 'https://api.nekosia.cat/api/v1/images/catgirl',
             // Nekosia is SFW-only
             nsfw: null,
-            parse: (d) => d.response?.file?.url || null,
+            parse: (d) => d.image?.original?.url || null,
         },
 
         // ── Booru APIs ──
@@ -90,7 +83,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const SOURCE_META = {
         'waifu.im':   { tagSupport: true,  nsfwSupport: true,  info: 'Anime illustrations. Tags supported.' },
         'nekosapi':   { tagSupport: false, nsfwSupport: true,  info: '40k+ anime images. SFW/NSFW toggle.' },
-        'nekos.best': { tagSupport: false, nsfwSupport: false, info: 'SFW-only neko/kitsune/wan images.' },
         'nekosia':    { tagSupport: false, nsfwSupport: false, info: 'SFW-only catgirl images.' },
         'konachan':   { tagSupport: false, nsfwSupport: true,  info: 'Booru. SFW/NSFW via rating tags.' },
         'yande.re':   { tagSupport: false, nsfwSupport: true,  info: 'Booru. SFW/NSFW via rating tags.' },
