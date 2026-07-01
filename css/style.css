@@ -1392,3 +1392,18 @@ body.page-nsfw-downloader .download-card h1 {
         transform: translateY(-2px);
     }
 }
+
+/* === Mobile Image Downloader Fix === */
+@media (max-width: 600px) {
+    .download-card,
+    .tool-container {
+        padding: 1.5rem;
+        margin: 15px auto;
+        max-width: 92%;
+        border-radius: 16px;
+    }
+    .download-card h1,
+    .tool-container h1 {
+        font-size: 1.6rem;
+    }
+}

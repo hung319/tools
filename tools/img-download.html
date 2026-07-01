@@ -17,83 +17,133 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
     <style>
-        .mode-toggle {
-            display: flex;
-            gap: 0;
-            margin-bottom: 10px;
-            border-radius: 50px;
-            overflow: hidden;
-            border: 1px solid var(--border-color);
-        }
-        .mode-toggle button {
-            flex: 1;
-            padding: 12px 20px;
-            border: none;
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-dim);
-            font-size: 0.9rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            border-radius: 0;
-            min-width: auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .mode-toggle button.active {
-            background: var(--primary-color);
-            color: #000;
-        }
-        .mode-toggle button:first-child {
-            border-radius: 50px 0 0 50px;
-        }
-        .mode-toggle button:last-child {
-            border-radius: 0 50px 50px 0;
-        }
-        .nsfw-warning {
-            background: rgba(255, 0, 110, 0.1);
-            border: 1px solid var(--error-color);
-            border-radius: 12px;
-            padding: 12px 16px;
-            margin-bottom: 20px;
-            font-size: 0.85rem;
-            color: var(--error-color);
-            display: none;
-        }
-        .nsfw-warning.visible { display: block; }
-        .tag-selector {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 10px;
-            justify-content: center;
-        }
-        .tag-btn {
-            padding: 6px 14px;
-            border-radius: 50px;
-            border: 1px solid rgba(0, 255, 255, 0.25);
-            background: rgba(0, 255, 255, 0.06);
-            color: var(--text-light);
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .tag-btn.active {
-            background: var(--primary-color);
-            color: #000;
-            border-color: var(--primary-color);
-        }
-        .tag-btn:hover {
-            border-color: var(--primary-color);
-        }
-        .source-info {
-            font-size: 0.75rem;
-            color: var(--text-dim);
-            margin-top: -10px;
-            margin-bottom: 15px;
-        }
-    </style>
+/* --- Toggle SFW/NSFW --- */
+.mode-toggle {
+    display: flex;
+    gap: 0;
+    margin-bottom: 10px;
+    border-radius: 50px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+.mode-toggle button {
+    flex: 1;
+    padding: 12px 20px;
+    border: none;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-radius: 0;
+    min-width: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.mode-toggle button.active {
+    background: var(--primary-color);
+    color: #000;
+}
+
+/* --- NSFW Warning --- */
+.nsfw-warning {
+    background: rgba(255, 0, 110, 0.1);
+    border: 1px solid var(--error-color);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    font-size: 0.85rem;
+    color: var(--error-color);
+    display: none;
+}
+.nsfw-warning.visible {
+    display: block;
+}
+
+/* --- Tags (flex-wrap, contrast fixed) --- */
+.tag-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+    justify-content: center;
+}
+.tag-btn {
+    padding: 6px 14px;
+    border-radius: 50px;
+    border: 1px solid rgba(0, 255, 255, 0.25);
+    background: rgba(0, 255, 255, 0.06);
+    color: var(--text-light);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.tag-btn.active {
+    background: var(--primary-color);
+    color: #000;
+    border-color: var(--primary-color);
+}
+.tag-btn:hover {
+    border-color: var(--primary-color);
+}
+
+/* --- Download Status Bar --- */
+.download-status-bar {
+    margin-top: 20px;
+    padding: 16px 20px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: all 0.4s ease;
+}
+.download-status-bar.active {
+    opacity: 1;
+    max-height: 200px;
+}
+.status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+.status-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.status-icon {
+    color: var(--primary-color);
+    font-weight: 700;
+}
+.status-value {
+    color: var(--success-color);
+    font-family: var(--font-mono);
+    font-weight: 600;
+}
+.progress-track {
+    margin-top: 8px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary-color), var(--success-color));
+    border-radius: 3px;
+    transition: width 0.3s ease;
+    width: 0;
+}
+</style>
 </head>
 
 <body>
