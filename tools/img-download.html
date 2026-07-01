@@ -11,7 +11,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Image Downloader | My Tech Site</title>
 
-    <link rel="stylesheet" href="../css/style.css?v=20260701">
+    <link rel="stylesheet" href="../css/style.css?v=6811d9d">
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
@@ -37,6 +37,9 @@
             transition: all 0.2s ease;
             border-radius: 0;
             min-width: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .mode-toggle button.active {
             background: var(--primary-color);
@@ -69,19 +72,25 @@
         .tag-btn {
             padding: 6px 14px;
             border-radius: 50px;
-            border: 1px solid var(--border-color);
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-dim);
+            border: 1px solid rgba(0, 255, 255, 0.25);
+            background: rgba(0, 255, 255, 0.06);
+            color: var(--text-light);
             font-size: 0.8rem;
             cursor: pointer;
             transition: all 0.2s ease;
+            text-shadow: 0 0 4px rgba(0, 255, 255, 0.15);
         }
         .tag-btn.active {
             background: var(--primary-color);
             color: #000;
             border-color: var(--primary-color);
+            text-shadow: none;
+            box-shadow: 0 0 12px rgba(0, 255, 255, 0.3);
         }
-        .tag-btn:hover { border-color: var(--primary-color); }
+        .tag-btn:hover {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 8px rgba(0, 255, 255, 0.2);
+        }
         .source-info {
             font-size: 0.75rem;
             color: var(--text-dim);
@@ -148,7 +157,9 @@
                     </div>
                 </div>
 
-                <button id="downloadBtn">DOWNLOAD & ZIP</button>
+                <div style="margin-top: 25px;">
+                    <button id="downloadBtn">DOWNLOAD & ZIP</button>
+                </div>
 
                 <div class="download-status-bar" id="downloadStatusBar">
                     <div class="status-text" id="statusText">Preparing...</div>
@@ -161,9 +172,9 @@
         </div>
     </main>
 
-    <script src="../js/components.js?v=20260701" defer></script>
-    <script src="../js/main.js?v=20260701" defer></script>
-    <script src="../js/img-downloader.js?v=20260701" defer></script>
+    <script src="../js/components.js?v=6811d9d" defer></script>
+    <script src="../js/main.js?v=6811d9d" defer></script>
+    <script src="../js/img-downloader.js?v=6811d9d" defer></script>
 
 </body>
 
