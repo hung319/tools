@@ -26,10 +26,9 @@ class SharedUI {
                      <li><a href="/tools/ua-parser.html"><span class="nav-icon">🕵️</span> UA Parser</a></li>
                      <li><a href="/tools/http-status.html"><span class="nav-icon">🚥</span> HTTP Status</a></li>
                      <li><a href="/tools/rdname.html"><span class="nav-icon">🏷️</span> Name Gen</a></li>
-                     <li><a href="/tools/regex-tool.html"><span class="nav-icon">🧩</span> Regex Tester</a></li>
-                     <li><a href="/tools/rdport.html"><span class="nav-icon">🔌</span> Port Gen</a></li>
-                     <li><a href="/tools/sfw-img-download.html"><span class="nav-icon">🖼️</span> SFW DL</a></li>
-                     <li class="menu-link-nsfw"><a href="/tools/nsfw-img-download.html"><span class="nav-icon">🔞</span> NSFW DL</a></li>
+                      <li><a href="/tools/regex-tool.html"><span class="nav-icon">🧩</span> Regex Tester</a></li>
+                      <li><a href="/tools/rdport.html"><span class="nav-icon">🔌</span> Port Gen</a></li>
+                      <li><a href="/tools/img-download.html"><span class="nav-icon">🖼️</span> Image DL</a></li>
                     </ul>
                 </nav>
             </header>
