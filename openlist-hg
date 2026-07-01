@@ -1,0 +1,120 @@
+FROM ghcr.io/openlistteam/openlist-git:latest-aio
+
+USER root
+
+RUN apk add --no-cache caddy jq bash curl tini openssl inotify-tools procps psmisc net-tools shadow
+
+RUN ARCH=$(uname -m) && \
+    WGCF_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
+    WIRE_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
+    if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
+        WGCF_URL=$(curl -s $WGCF_API | jq -r '.assets[] | select(.name | contains("linux_amd64")) | .browser_download_url') && \
+        WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
+    else \
+        WGCF_URL=$(curl -s $WGCF_API | jq -r '.assets[] | select(.name | contains("linux_arm64")) | .browser_download_url') && \
+        WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_arm64.tar.gz")) | .browser_download_url'); \
+    fi && \
+    curl -fsSL "$WGCF_URL" -o /usr/local/bin/wgcf && \
+    curl -fsSL "$WIRE_URL" | tar -xz -C /usr/local/bin/ wireproxy && \
+    chmod +x /usr/local/bin/wgcf /usr/local/bin/wireproxy
+
+WORKDIR /opt/openlist
+
+RUN cat <<EOF > /opt/openlist/Caddyfile
+:7860 {
+    @s3 {
+        path /s3*
+        header Authorization *AWS*
+    }
+    reverse_proxy @s3 127.0.0.1:5246
+    reverse_proxy 127.0.0.1:5244
+}
+EOF
+
+RUN cat << 'EOF' > /entrypoint.sh
+#!/bin/bash
+
+mkdir -p /data /opt/openlist/data
+usermod -u 1000 openlist 2>/dev/null || true
+groupmod -g 1000 openlist 2>/dev/null || true
+chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
+chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
+
+fuser -k "7860/tcp" 2>/dev/null || true
+caddy run --config /opt/openlist/Caddyfile --adapter caddyfile &
+
+(
+    rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp && export WGCF_CONFIG_DIR="/tmp/wgcf_temp"
+    wgcf register --accept-tos >/dev/null 2>&1 || true && wgcf generate >/dev/null 2>&1 || true
+    if [ -f "wgcf-profile.conf" ]; then
+        PRIV_K=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
+        PUB_K=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
+        ENDP=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+        ADDR=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
+        printf "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\n\n[http]\nBindAddress = 127.0.0.1:4001\n" "$PRIV_K" "$ADDR" "$PUB_K" "$ENDP" > wireproxy.conf
+        wireproxy -c wireproxy.conf >/dev/null 2>&1 &
+    fi
+) &
+
+(
+    sleep 3
+    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
+        echo "[RESTORE] Thuc hien giai nen phuc hoi..."
+        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_DIR/$BACKUP_FILENAME" | tar -xz -C / 2>/dev/null && echo "[RESTORE] Xong!"
+    fi
+) &&
+(
+    sleep 14
+    CONFIG_FILE="/opt/openlist/data/config.json"
+    if [ -f "$CONFIG_FILE" ]; then
+        sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
+    fi
+) &
+
+(
+    while true; do
+        inotifywait -r -e modify -e create -e delete -e move --exclude "(\.cache|.*\.log|.*\.pid)" /opt/openlist/data 2>/dev/null || true
+        echo "[INOTIFY] Co bien dong du lieu! Delay 5 phut..."
+        sleep 300
+        if netstat -an | grep -q "5244.*LISTEN"; then
+            echo "[BACKUP] Dang ma hoa sao luu..."
+            mkdir -p "$BACKUP_DIR"
+            if tar -cz -C / --exclude="opt/openlist/data/cache" --exclude="*.log" --exclude="*.pid" opt/openlist/data 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "/tmp/temp_openlist.enc"; then
+                if mv "/tmp/temp_openlist.enc" "$BACKUP_DIR/$BACKUP_FILENAME"; then
+                    echo "[BACKUP] Thanh cong!"
+                else
+                    echo "[BACKUP] That bai: Khong the di chuyen file vao /data!"
+                fi
+            else
+                echo "[BACKUP] That bai: Loi ma hoa!"
+            fi
+        else
+            echo "[BACKUP] Huy bo vi openlist chua bat hoac hoat dong khong on dinh."
+        fi
+    done
+) &
+
+export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
+sleep 5
+
+exec ./openlist server --no-prefix
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+ENV PORT=7860 \
+    RUN_ARIA2=true \
+    HOME=/tmp \
+    XDG_CONFIG_HOME=/tmp/.config \
+    XDG_DATA_HOME=/tmp/.local \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="openlist_backup.enc" \
+    BACKUP_PASS="123456" \
+    NO_PROXY="localhost,127.0.0.1" \
+    WGCF_FORCE_REGISTER=1 \
+    PYTHONUNBUFFERED=1
+
+USER root
+EXPOSE 7860
+
+ENTRYPOINT ["/sbin/tini", "--", "/bin/bash", "/entrypoint.sh"]
