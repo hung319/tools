@@ -51,7 +51,13 @@ fi
 if [ "$RUN_QBITTORRENT" = "true" ]; then
     echo "[AIO] khoi hanh qBittorrent..."
     mkdir -p /tmp/.config/qBittorrent
-    qbittorrent-nox --webui-port=8080 --confirm-legal-notice >/dev/null 2>&1 &
+    cat <<EON > /tmp/.config/qBittorrent/qBittorrent.conf
+[Preferences]
+WebUI\Port=8080
+WebUI\User=admin
+WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)"
+EON
+    qbittorrent-nox --confirm-legal-notice >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_TRANSMISSION" = "true" ]; then
