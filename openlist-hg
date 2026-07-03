@@ -49,7 +49,7 @@ if [ "$RUN_ARIA2" = "true" ]; then
     echo "[AIO] khoi hanh Aria2..."
     mkdir -p /tmp/.config/aria2
     [ ! -f /tmp/.config/aria2/aria2.session ] && touch /tmp/.config/aria2/aria2.session
-    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session >/dev/null 2>&1 &
+    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session --all-proxy="http://127.0.0.1:4001" >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_QBITTORRENT" = "true" ]; then
@@ -60,6 +60,11 @@ if [ "$RUN_QBITTORRENT" = "true" ]; then
 WebUI\Port=8080
 WebUI\User=admin
 WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)"
+Proxy\Type=1
+Proxy\IP=127.0.0.1
+Proxy\Port=4001
+Proxy\ProxyPeerConnections=true
+Proxy\ProxyHostNameLookup=true
 EON
     qbittorrent-nox --confirm-legal-notice >/dev/null 2>&1 &
 fi
@@ -67,6 +72,7 @@ fi
 if [ "$RUN_TRANSMISSION" = "true" ]; then
     echo "[AIO] khoi hanh Transmission..."
     mkdir -p /tmp/.config/transmission-daemon
+    export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
     transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &
 fi
 
