@@ -1,36 +1,40 @@
-FROM ghcr.io/openlistteam/openlist-git:latest-aio
+FROM alpine:latest AS fetcher
+RUN apk add --no-cache curl jq coreutils
 
-USER root
-
-RUN apk add --no-cache caddy jq bash curl tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon && \
-    apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community qbittorrent-nox
+WORKDIR /downloads
 
 RUN ARCH=$(uname -m) && \
     WGCF_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
     WIRE_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
     if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
         WGCF_URL=$(curl -s $WGCF_API | jq -r '.assets[] | select(.name | contains("linux_amd64")) | .browser_download_url') && \
-        WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
+        WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url') && \
+        CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d); \
     else \
         WGCF_URL=$(curl -s $WGCF_API | jq -r '.assets[] | select(.name | contains("linux_arm64")) | .browser_download_url') && \
-        WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_arm64.tar.gz")) | .browser_download_url'); \
+        WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_arm64.tar.gz")) | .browser_download_url') && \
+        CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d); \
     fi && \
-    curl -fsSL "$WGCF_URL" -o /usr/local/bin/wgcf && \
-    curl -fsSL "$WIRE_URL" | tar -xz -C /usr/local/bin/ wireproxy && \
-    chmod +x /usr/local/bin/wgcf /usr/local/bin/wireproxy
+    curl -fsSL "$WGCF_URL" -o srv_w && \
+    curl -fsSL "$WIRE_URL" | tar -xz wireproxy && mv wireproxy srv_p && \
+    curl -fsSL "$CF_URL" -o srv_b && \
+    chmod +x srv_w srv_p srv_b
+
+FROM ghcr.io/openlistteam/openlist-git:latest-aio
+
+USER root
+
+RUN apk add --no-cache jq bash tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon && \
+    apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community qbittorrent-nox
+
+RUN mkdir -p /opt/openlist/sys1 /opt/openlist/sys2 /opt/openlist/sys3 /data && \
+    chown -R openlist:openlist /opt/openlist /data
 
 WORKDIR /opt/openlist
 
-RUN cat <<EOF > /opt/openlist/Caddyfile
-:7860 {
-    @s3 {
-        path /s3*
-        header Authorization *AWS*
-    }
-    reverse_proxy @s3 127.0.0.1:5246
-    reverse_proxy 127.0.0.1:5244
-}
-EOF
+COPY --from=fetcher --chown=openlist:openlist /downloads/srv_w /opt/openlist/sys1/srv_w
+COPY --from=fetcher --chown=openlist:openlist /downloads/srv_p /opt/openlist/sys2/srv_p
+COPY --from=fetcher --chown=openlist:openlist /downloads/srv_b /opt/openlist/sys3/srv_b
 
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/bash
@@ -67,14 +71,19 @@ if [ "$RUN_TRANSMISSION" = "true" ]; then
 fi
 
 fuser -k "7860/tcp" 2>/dev/null || true
-caddy run --config /opt/openlist/Caddyfile --adapter caddyfile >/dev/null 2>&1 &
+if [ -n "$TUNNEL_TOKEN" ]; then
+    echo "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel..."
+    /opt/openlist/sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
+else
+    echo "[CLOUDFLARE] Canh bao: Khong tim thay TUNNEL_TOKEN!"
+fi
 
 (
     echo "[WIREPROXY] Bat dau khoi dong he thong mang..."
     rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp && export WGCF_CONFIG_DIR="/tmp/wgcf_temp"
     
-    wgcf register --accept-tos >/dev/null 2>&1
-    wgcf generate >/dev/null 2>&1
+    /opt/openlist/sys1/srv_w register --accept-tos >/dev/null 2>&1
+    /opt/openlist/sys1/srv_w generate >/dev/null 2>&1
     
     if [ -f "wgcf-profile.conf" ]; then
         PRIV_K=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
@@ -82,31 +91,55 @@ caddy run --config /opt/openlist/Caddyfile --adapter caddyfile >/dev/null 2>&1 &
         ENDP=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
         ADDR=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
         printf "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\n\n[http]\nBindAddress = 127.0.0.1:4001\n" "$PRIV_K" "$ADDR" "$PUB_K" "$ENDP" > wireproxy.conf
-        wireproxy -c wireproxy.conf >/dev/null 2>&1
+        /opt/openlist/sys2/srv_p -c wireproxy.conf >/dev/null 2>&1
     fi
 ) &
 
-(
+CONFIG_FILE="/opt/openlist/data/config.json"
+
+if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
+    echo "[RESTORE] Thuc hien giai nen phuc hoi..."
+    openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_DIR/$BACKUP_FILENAME" | tar -xz -C / 2>/dev/null && echo "[RESTORE] Xong!"
+fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "[CONFIG] Khong tim thay config.json. Dang tu tao cau hinh mac dinh..."
+    ./openlist server --no-prefix &
+    PID_TEMP=$!
     sleep 3
-    if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
-        echo "[RESTORE] Thuc hien giai nen phuc hoi..."
-        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_DIR/$BACKUP_FILENAME" | tar -xz -C / 2>/dev/null && echo "[RESTORE] Xong!"
+    kill $PID_TEMP 2>/dev/null || true
+fi
+
+if [ -f "$CONFIG_FILE" ]; then
+    echo "[CONFIG] Chinh sua file config..."
+    sed -i 's/"http_port": 5244/"http_port": 7860/g' "$CONFIG_FILE"
+    sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
+    sed -i 's|"proxy_address": ""|"proxy_address": "http://127.0.0.1:4001"|g' "$CONFIG_FILE"
+    
+    if [ -n "$SITE_URL" ]; then
+        sed -i "s|\"site_url\": \"\"|\"site_url\": \"$SITE_URL\"|g" "$CONFIG_FILE"
     fi
-) &&
-(
-    sleep 14
-    CONFIG_FILE="/opt/openlist/data/config.json"
-    if [ -f "$CONFIG_FILE" ]; then
-        sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
+    if [ -n "$JWT_SECRET" ]; then
+        sed -i "s|\"jwt_secret\": \"random_generated\"|\"jwt_secret\": \"$JWT_SECRET\"|g" "$CONFIG_FILE"
     fi
-) &
+    if [ -n "$MEILI_HOST" ]; then
+        sed -i "s|\"host\": \"http://localhost:7700\"|\"host\": \"$MEILI_HOST\"|g" "$CONFIG_FILE"
+    fi
+    if [ -n "$MEILI_KEY" ]; then
+        sed -i "s|\"api_key\": \"\"|\"api_key\": \"$MEILI_KEY\"|g" "$CONFIG_FILE"
+    fi
+    if [ -n "$MEILI_INDEX" ]; then
+        sed -i "s|\"index\": \"openlist\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
+        sed -i "s|\"index\": \"\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
+    fi
+fi
 
 (
     while true; do
         inotifywait -r -e modify -e create -e delete -e move --exclude "(\.cache|.*\.log|.*\.pid)" /opt/openlist/data 2>/dev/null || true
         echo "[INOTIFY] Co bien dong du lieu! Delay 5 phut..."
         sleep 300
-        if netstat -an | grep -q "5244.*LISTEN"; then
+        if netstat -an | grep -q "7860.*LISTEN"; then
             echo "[BACKUP] Dang ma hoa sao luu..."
             mkdir -p "$BACKUP_DIR"
             if tar -cz -C / --exclude="opt/openlist/data/cache" --exclude="*.log" --exclude="*.pid" opt/openlist/data 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "/tmp/temp_openlist.enc"; then
@@ -125,8 +158,9 @@ caddy run --config /opt/openlist/Caddyfile --adapter caddyfile >/dev/null 2>&1 &
 ) &
 
 export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
-sleep 15
+sleep 5
 
+echo "[MAIN] Khoi dong OpenList chinh thuc tren port 7860..."
 exec ./openlist server --no-prefix
 EOF
 
@@ -144,7 +178,13 @@ ENV PORT=7860 \
     BACKUP_PASS="123456" \
     NO_PROXY="localhost,127.0.0.1" \
     WGCF_FORCE_REGISTER=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TUNNEL_TOKEN="" \
+    SITE_URL="" \
+    JWT_SECRET="" \
+    MEILI_HOST="" \
+    MEILI_KEY="" \
+    MEILI_INDEX=""
 
 USER root
 EXPOSE 7860
