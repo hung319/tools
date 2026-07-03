@@ -1,0 +1,127 @@
+FROM getmeili/meilisearch:latest AS base
+
+FROM base AS builder
+
+USER root
+
+RUN apk add -q --no-cache \
+        bash \
+        openssl \
+        tar \
+        findutils \
+        inotify-tools \
+        lsof \
+        procps
+
+ENV MEILI_HTTP_ADDR="0.0.0.0:7860" \
+    MEILI_SERVER_PROVIDER="docker" \
+    MEILI_ENV="production" \
+    MEILI_MASTER_KEY="MY_SECURE_MASTER_KEY_CHANGE_ME" \
+    BACKUP_DIR="/data" \
+    BACKUP_FILENAME="meilisearch_backup.enc" \
+    BACKUP_PASS="123456"
+
+WORKDIR /meili_data
+
+RUN mkdir -p /meili_data /data && chmod -R 777 /meili_data /data
+
+RUN cat <<'EOF' > /bin/entrypoint.sh
+#!/bin/bash
+set +e
+
+BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
+TEMP_PATH="/tmp/temp_meili.enc"
+MEILI_PORT=$(echo "$MEILI_HTTP_ADDR" | cut -d':' -f2)
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+is_app_alive() {
+    if pgrep -f "meilisearch" >/dev/null 2>&1 || lsof -i :"${MEILI_PORT}" >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+restore_data() {
+    if [ -f "$BACKUP_PATH" ]; then
+        log "--- [RESTORE] Tìm thấy bản lưu. Đang giải mã dữ liệu... ---"
+        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
+            fuser -k "${MEILI_PORT}/tcp" 2>/dev/null || true
+            log "--- [RESTORE] Phục hồi dữ liệu thành công! ---"
+        else
+            log "--- [RESTORE] Giải mã thất bại ---"
+        fi
+    else
+        log "--- [RESTORE] Không có bản lưu cũ. Tạo mới. ---"
+    fi
+}
+
+backup_data() {
+    if [ ! -d "/meili_data/data.ms" ]; then return; fi
+
+    log "--- [BACKUP] Bắt đầu đóng gói mã hóa dữ liệu... ---"
+    mkdir -p "$BACKUP_DIR"
+    if tar -cz -C / \
+        --exclude='meili_data/dumps' \
+        --exclude='meili_data/snapshots' \
+        meili_data 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
+        
+        mv "$TEMP_PATH" "$BACKUP_PATH"
+        log "--- [BACKUP] Đã cập nhật bản lưu mã hóa thành công! ---"
+    else
+        rm -f "$TEMP_PATH"
+        log "--- [BACKUP] Thất bại khi đóng gói ---"
+    fi
+}
+
+cleanup() {
+    log "!!! [STOP] Nhận tín hiệu tắt máy từ Hugging Face (SIGTERM/SIGINT) !!!"
+    if is_app_alive; then
+        log "!!! [STOP] Tiến hành sao lưu khẩn cấp trước khi Space tắt... !!!"
+        backup_data
+    else
+        log "!!! [STOP] Ứng dụng đã sập hoặc dừng trước đó. Hủy bỏ sao lưu để tránh ghi đè dữ liệu rỗng !!!"
+    fi
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+restore_data
+
+(
+    while true; do
+        inotifywait -r -e modify -e create -e delete -e move \
+            --exclude '(dumps|snapshots)' \
+            /meili_data 2>/dev/null
+
+        log "--- [INOTIFY] Phát hiện thay đổi. Chờ debounce 5 phút... ---"
+        sleep 300
+        
+        if is_app_alive; then
+            backup_data
+        else
+            log "--- [INOTIFY] Ứng dụng đã sập, bỏ qua sao lưu ---"
+        fi
+    done
+) &
+
+fuser -k "${MEILI_PORT}/tcp" 2>/dev/null || true
+
+/bin/meilisearch --db-path /meili_data/data.ms &
+
+sleep 3
+while is_app_alive; do
+    sleep 5
+done
+
+log "--- [EXIT] Meilisearch kết thúc ---"
+cleanup
+EOF
+
+RUN chmod +x /bin/entrypoint.sh
+
+EXPOSE 7860
+
+ENTRYPOINT ["tini", "--", "/bin/entrypoint.sh"]
