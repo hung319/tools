@@ -4,46 +4,58 @@ RUN apk add --no-cache curl jq coreutils
 WORKDIR /downloads
 
 RUN ARCH=$(uname -m) && \
-    WGCF_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
     WIRE_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
+    CF_URL_AMD64=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+    CF_URL_ARM64=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d) && \
     if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
-        WGCF_URL=$(curl -s $WGCF_API | jq -r '.assets[] | select(.name | contains("linux_amd64")) | .browser_download_url') && \
         WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url') && \
-        CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d); \
+        CF_URL=$CF_URL_AMD64; \
     else \
-        WGCF_URL=$(curl -s $WGCF_API | jq -r '.assets[] | select(.name | contains("linux_arm64")) | .browser_download_url') && \
         WIRE_URL=$(curl -s $WIRE_API | jq -r '.assets[] | select(.name | contains("linux_arm64.tar.gz")) | .browser_download_url') && \
-        CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d); \
+        CF_URL=$CF_URL_ARM64; \
     fi && \
-    curl -fsSL "$WGCF_URL" -o srv_w && \
     curl -fsSL "$WIRE_URL" | tar -xz wireproxy && mv wireproxy srv_p && \
     curl -fsSL "$CF_URL" -o srv_b && \
-    chmod +x srv_w srv_p srv_b
+    chmod +x srv_p srv_b
 
 FROM ghcr.io/openlistteam/openlist-git:latest-aio
 
 USER root
 
-RUN apk add --no-cache jq bash tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon && \
+RUN apk add --no-cache jq bash tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon ca-certificates && \
     apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community qbittorrent-nox
 
-RUN mkdir -p /opt/openlist/sys1 /opt/openlist/sys2 /opt/openlist/sys3 /data && \
+RUN mkdir -p /opt/openlist/sys2 /opt/openlist/sys3 /data && \
     chown -R openlist:openlist /opt/openlist /data
 
 WORKDIR /opt/openlist
 
-COPY --from=fetcher --chown=openlist:openlist /downloads/srv_w /opt/openlist/sys1/srv_w
 COPY --from=fetcher --chown=openlist:openlist /downloads/srv_p /opt/openlist/sys2/srv_p
 COPY --from=fetcher --chown=openlist:openlist /downloads/srv_b /opt/openlist/sys3/srv_b
 
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/bash
+umask 022
 
-mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local
+mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
 chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
+
+REAL_WARP_URL=$(echo "$WARP_SCRIPT_URL" | base64 -d)
+REAL_BACKUP_URL=$(echo "$BACKUP_SCRIPT_URL" | base64 -d)
+
+curl -fsSL "$REAL_WARP_URL" -o /init-warp.sh && chmod +x /init-warp.sh
+curl -fsSL "$REAL_BACKUP_URL" -o /manage-backup.sh && chmod +x /manage-backup.sh
+
+function ext_exit() {
+    echo "[SHUTDOWN] Nhan tin hieu dung container. Dang luu du lieu lan cuoi..."
+    /manage-backup.sh backup
+    echo "[SHUTDOWN] Hoan tat! Tam biet."
+    exit 0
+}
+trap ext_exit SIGTERM SIGINT SIGQUIT
 
 if [ "$RUN_ARIA2" = "true" ]; then
     echo "[AIO] khoi hanh Aria2..."
@@ -54,7 +66,6 @@ fi
 
 if [ "$RUN_QBITTORRENT" = "true" ]; then
     echo "[AIO] khoi hanh qBittorrent..."
-    mkdir -p /tmp/.config/qBittorrent
     cat <<EON > /tmp/.config/qBittorrent/qBittorrent.conf
 [Preferences]
 WebUI\Port=8080
@@ -66,54 +77,39 @@ Proxy\Port=4001
 Proxy\ProxyPeerConnections=true
 Proxy\ProxyHostNameLookup=true
 EON
-    qbittorrent-nox --confirm-legal-notice >/dev/null 2>&1 &
+    qbittorrent-nox --confirm-legal-notice --webui-port=8080 >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_TRANSMISSION" = "true" ]; then
     echo "[AIO] khoi hanh Transmission..."
     mkdir -p /tmp/.config/transmission-daemon
-    export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
-    transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &
+    (export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"; transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &)
 fi
 
 fuser -k "7860/tcp" 2>/dev/null || true
 if [ -n "$TUNNEL_TOKEN" ]; then
     echo "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel..."
     /opt/openlist/sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
-else
-    echo "[CLOUDFLARE] Canh bao: Khong tim thay TUNNEL_TOKEN!"
 fi
 
-(
-    echo "[WIREPROXY] Bat dau khoi dong he thong mang..."
-    rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp && export WGCF_CONFIG_DIR="/tmp/wgcf_temp"
-    
-    /opt/openlist/sys1/srv_w register --accept-tos >/dev/null 2>&1
-    /opt/openlist/sys1/srv_w generate >/dev/null 2>&1
-    
-    if [ -f "wgcf-profile.conf" ]; then
-        PRIV_K=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
-        PUB_K=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
-        ENDP=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
-        ADDR=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
-        printf "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\n\n[http]\nBindAddress = 127.0.0.1:4001\n" "$PRIV_K" "$ADDR" "$PUB_K" "$ENDP" > wireproxy.conf
-        /opt/openlist/sys2/srv_p -c wireproxy.conf >/dev/null 2>&1
-    fi
-) &
+/manage-backup.sh restore
 
+mkdir -p /tmp/wireproxy_temp && cd /tmp/wireproxy_temp
+rm -f /opt/openlist/data/wireproxy.conf 2>/dev/null
+/init-warp.sh && /opt/openlist/sys2/srv_p -c wireproxy.conf >/dev/null 2>&1 &
+
+echo "[MAIN] Cho dong bo hoa Wireproxy tai port 4001..."
+for i in {1..30}; do
+    netstat -an | grep -q "4001.*LISTEN" && { echo "[MAIN] Wireproxy da ONLINE!"; break; }
+    sleep 1
+done
+
+cd /opt/openlist
 CONFIG_FILE="/opt/openlist/data/config.json"
-
-if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
-    echo "[RESTORE] Thuc hien giai nen phuc hoi..."
-    openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_DIR/$BACKUP_FILENAME" | tar -xz -C / 2>/dev/null && echo "[RESTORE] Xong!"
-fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "[CONFIG] Khong tim thay config.json. Dang tu tao cau hinh mac dinh..."
-    ./openlist server --no-prefix &
-    PID_TEMP=$!
-    sleep 3
-    kill $PID_TEMP 2>/dev/null || true
+    ./openlist server --no-prefix & PID_TEMP=$!; sleep 3; kill $PID_TEMP 2>/dev/null || true
 fi
 
 if [ -f "$CONFIG_FILE" ]; then
@@ -140,39 +136,20 @@ if [ -f "$CONFIG_FILE" ]; then
     fi
 fi
 
-(
-    while true; do
-        inotifywait -r -e modify -e create -e delete -e move --exclude "(\.cache|.*\.log|.*\.pid)" /opt/openlist/data 2>/dev/null || true
-        echo "[INOTIFY] Co bien dong du lieu! Delay 5 phut..."
-        sleep 300
-        if netstat -an | grep -q "7860.*LISTEN"; then
-            echo "[BACKUP] Dang ma hoa sao luu..."
-            mkdir -p "$BACKUP_DIR"
-            if tar -cz -C / --exclude="opt/openlist/data/cache" --exclude="*.log" --exclude="*.pid" opt/openlist/data 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "/tmp/temp_openlist.enc"; then
-                if mv "/tmp/temp_openlist.enc" "$BACKUP_DIR/$BACKUP_FILENAME"; then
-                    echo "[BACKUP] Thanh cong!"
-                else
-                    echo "[BACKUP] That bai: Khong the di chuyen file vao /data!"
-                fi
-            else
-                echo "[BACKUP] That bai: Loi ma hoa!"
-            fi
-        else
-            echo "[BACKUP] Huy bo vi openlist chua bat hoac hoat dong khong on dinh."
-        fi
-    done
-) &
+/manage-backup.sh watch &
+
+rm -f /init-warp.sh
 
 export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
-sleep 5
-
 echo "[MAIN] Khoi dong OpenList chinh thuc tren port 7860..."
 exec ./openlist server --no-prefix
 EOF
 
 RUN chmod +x /entrypoint.sh
 
-ENV PORT=7860 \
+ENV WARP_SCRIPT_URL="aHR0cHM6Ly9naXRodWIuY29tL2h1bmczMTkvdG9vbHMvcmF3L3JlZnMvaGVhZHMvc2hlbGwvaW5pdC13YXJwLnNo" \
+    BACKUP_SCRIPT_URL="aHR0cHM6Ly9naXRodWIuY29tL2h1bmczMTkvdG9vbHMvcmF3L3JlZnMvaGVhZHMvc2hlbGwvbWFuYWdlLWJhY2t1cC5zaA==" \
+    PORT=7860 \
     RUN_ARIA2=true \
     RUN_QBITTORRENT=true \
     RUN_TRANSMISSION=true \
@@ -183,7 +160,6 @@ ENV PORT=7860 \
     BACKUP_FILENAME="openlist_backup.enc" \
     BACKUP_PASS="123456" \
     NO_PROXY="localhost,127.0.0.1" \
-    WGCF_FORCE_REGISTER=1 \
     PYTHONUNBUFFERED=1 \
     TUNNEL_TOKEN="" \
     SITE_URL="" \
