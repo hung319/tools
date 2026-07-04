@@ -1,23 +1,21 @@
-FROM node:20-bullseye-slim
+FROM node:22-trixie-slim
 
 USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
-        make g++ python3 tar openssl findutils gnupg inotify-tools lsof \
+        make g++ python3 tar openssl findutils gnupg inotify-tools lsof xxd netcat-openbsd jq \
     && curl -fsSL $(echo "aHR0cHM6Ly9idW4uc2gvaW5zdGFsbA==" | base64 -d) | BUN_INSTALL=/usr bash \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ARCH=$(dpkg --print-architecture) \
     && if [ "$ARCH" = "amd64" ]; then \
-         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hbWQ2NA==" | base64 -d) -o /usr/local/bin/wgcf; \
          curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hbWQ2NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
        else \
-         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQvdjIuMi4zMS93Z2NmXzIuMi4zMV9saW51eF9hcm02NA==" | base64 -d) -o /usr/local/bin/wgcf; \
          curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hcm02NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
        fi \
-    && chmod +x /usr/local/bin/wgcf /usr/local/bin/wireproxy
+    && chmod +x /usr/local/bin/wireproxy
 
 ENV BUN_INSTALL="/usr" \
     BUN_INSTALL_BIN="/usr/bin" \
@@ -35,8 +33,7 @@ ENV BUN_INSTALL="/usr" \
     HTTP_PROXY="http://127.0.0.1:4001" \
     HTTPS_PROXY="http://127.0.0.1:4001" \
     ALL_PROXY="http://127.0.0.1:4001" \
-    NO_PROXY="localhost,127.0.0.1" \
-    WGCF_FORCE_REGISTER=1
+    NO_PROXY="localhost,127.0.0.1"
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
@@ -46,7 +43,7 @@ RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" npm install -g opencode-ai@latest 
 
 WORKDIR /root
 
-RUN mkdir -p /root/.config/openchamber /data /tmp/wgcf_temp && chmod -R 777 /root /data
+RUN mkdir -p /root/.config/openchamber /data /tmp/wireproxy_temp && chmod -R 777 /root /data
 
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
@@ -57,39 +54,92 @@ TEMP_PATH="/tmp/temp_chamber.enc"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# Hàm kiểm tra xem OpenChamber có thực sự đang chạy hay không
 is_app_alive() {
-    # Kiểm tra nếu có tiến trình openchamber đang chạy HOẶC port 7860 đang mở
     if pgrep -f "openchamber" >/dev/null 2>&1 || lsof -i :"${OPENCHAMBER_PORT}" >/dev/null 2>&1; then
-        return 0 # Còn sống
+        return 0
     else
-        return 1 # Đã chết/Chưa chạy
+        return 1
     fi
 }
 
 start_warp_proxy() {
-    log "--- [WARP] Đang khởi tạo và đăng ký IP Cloudflare mới... ---"
+    log "--- [WARP-SCAN] Đang quét nhanh Endpoint tối ưu bằng Bash (Fresh Mode)... ---"
     killall wireproxy 2>/dev/null || true
-    rm -rf /tmp/wgcf_temp && mkdir -p /tmp/wgcf_temp && cd /tmp/wgcf_temp
-    
-    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1 || true
-    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1 || true
+    rm -rf /tmp/wireproxy_temp && mkdir -p /tmp/wireproxy_temp && cd /tmp/wireproxy_temp
 
-    if [ -f "wgcf-profile.conf" ]; then
-        PRIVATE_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
-        PUBLIC_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
-        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
-        ADDRESS=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | head -n 1)
+    ips=("162.159.192" "162.159.193" "162.159.195" "162.159.204" "188.114.96" "188.114.97" "188.114.98" "188.114.99")
+    ports=(2408 500 864 880 894 934 1070 1180 3476 3581 4198 4500 5279 5956 7103 7152 7559 8319 8854 8886)
+    HEX_DATA="\x04\x1d\x69\xe6\x79\x22\x09\x9a\xa0\xb9\x3d\x1e\x7b\x30\x9e\xc5\x85\x1e\xe2\xa3\xd6\xbf\x82\xa8\xbb\x5b\xb0\x3e\xd4\x6f\xb2\x34\x65\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x77\xa4\xa8\xcd\x5d\x88\x3e\x66\x08\x8e\x5f\x70\xad\xb4\x2f\x8a"
+    DYNAMIC_ENDPOINT=""
+    best_latency=9999
 
+    for i in {1..12}; do
+        rand_sub=${ips[$RANDOM % ${#ips[@]}]}
+        rand_host=$((RANDOM % 254 + 1))
+        rand_port=${ports[$RANDOM % ${#ports[@]}]}
+        target_ip="${rand_sub}.${rand_host}"
+        
+        start_t=$(date +%s%3N)
+        res=$(echo -ne "$HEX_DATA" | nc -w 1 -u "$target_ip" "$rand_port" 2>/dev/null | head -c 5 | xxd -p 2>/dev/null)
+        end_t=$(date +%s%3N)
+        
+        if [[ "$res" == "cf00000000" ]]; then
+            latency=$((end_t - start_t))
+            if [ "$latency" -lt "$best_latency" ]; then
+                best_latency=$latency
+                DYNAMIC_ENDPOINT="${target_ip}:${rand_port}"
+            fi
+        fi
+    done
+
+    if [ -z "$DYNAMIC_ENDPOINT" ]; then
+        log "[WARP-SCAN] Không scan kịp endpoint hợp lệ. Chuyển về Endpoint mặc định..."
+        DYNAMIC_ENDPOINT="188.114.97.242:7559"
+    else
+        log "[WARP-SCAN] Đã tìm thấy Endpoint tốt nhất: $DYNAMIC_ENDPOINT (Ping: ${best_latency}ms)"
+    fi
+
+    log "--- [WARP-REG] Đăng ký tài khoản thực qua CORS Proxy (Đã xả kẹt ENV Proxy)... ---"
+    openssl genpkey -algorithm X25519 -outform DER -out x25519_priv.der 2>/dev/null
+    PRIV_KEY=$(tail -c 32 x25519_priv.der | base64 | tr -d '\n\r ')
+    openssl pkey -inform DER -in x25519_priv.der -pubout -outform DER -out x25519_pub.der 2>/dev/null
+    PUB_KEY=$(tail -c 32 x25519_pub.der | base64 | tr -d '\n\r ')
+    rm -f x25519_priv.der x25519_pub.der
+    NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+    # Ép trống proxy môi trường để tránh bị vòng lặp lôi vào cổng 4001 chưa chạy
+    REG_RESPONSE=$(HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" curl -s -X POST 'https://proxy.corsfix.com/?https://api.cloudflareclient.com/v0a737/reg' \
+      -H 'authority: proxy.corsfix.com' \
+      -H 'content-type: application/json' \
+      -H 'user-agent: Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36' \
+      --data-raw "{\"key\":\"$PUB_KEY\",\"install_id\":\"\",\"warp_enabled\":true,\"tos\":\"$NOW_ISO\",\"type\":\"Linux\",\"locale\":\"en_US\"}")
+
+    W_TOKEN=$(echo "$REG_RESPONSE" | jq -r '.token // empty' 2>/dev/null)
+    W_IPV4=$(echo "$REG_RESPONSE" | jq -r '.config.interface.addresses.v4 // empty' 2>/dev/null)
+
+    if [ -z "$W_TOKEN" ] || [ "$W_TOKEN" == "null" ]; then
+        log "[WARP-REG] -> Proxy 1 (corsfix.com) từ chối. Đang thử Proxy 2 (cors.sh)..."
+        REG_RESPONSE=$(HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" curl -s -X POST 'https://proxy.cors.sh/https://api.cloudflareclient.com/v0a737/reg' \
+          -H 'content-type: application/json' \
+          -H 'x-cors-gratis: true' \
+          --data-raw "{\"key\":\"$PUB_KEY\",\"install_id\":\"\",\"warp_enabled\":true,\"tos\":\"$NOW_ISO\",\"type\":\"Linux\",\"locale\":\"en_US\"}")
+        W_TOKEN=$(echo "$REG_RESPONSE" | jq -r '.token // empty' 2>/dev/null)
+        W_IPV4=$(echo "$REG_RESPONSE" | jq -r '.config.interface.addresses.v4 // empty' 2>/dev/null)
+    fi
+
+    if [ -n "$W_TOKEN" ] && [ "$W_TOKEN" != "null" ]; then
+        log "[WARP-REG] -> TẠO TÀI KHOẢN THÀNH CÔNG! Đang nạp cấu hình..."
+        [[ "$W_IPV4" != *"/"* ]] && W_IPV4="${W_IPV4}/32"
+        
         cat <<WCONF > wireproxy.conf
 [Interface]
-PrivateKey = $PRIVATE_KEY
-Address = $ADDRESS
+PrivateKey = $PRIV_KEY
+Address = $W_IPV4
 DNS = 1.1.1.1
 
 [Peer]
-PublicKey = $PUBLIC_KEY
-Endpoint = $ENDPOINT
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+Endpoint = $DYNAMIC_ENDPOINT
 
 [http]
 BindAddress = 127.0.0.1:4001
@@ -99,7 +149,8 @@ WCONF
         sleep 3
         log "--- [WARP] Kích hoạt thành công! HTTP Proxy đang chạy tại cổng 4001 ---"
     else
-        log "--- [CẢNH BÁO] Không thể thiết lập bộ định tuyến WARP ---"
+        log "--- [CẢNH BÁO] Tạo tài khoản thất bại ở cả hai proxy! ---"
+        log "[DEBUG LOG CHỮA CHÁY] -> $REG_RESPONSE"
     fi
     cd /root
 }
@@ -143,13 +194,8 @@ backup_data() {
 }
 
 cleanup() {
-    if is_app_alive; then
-        log "!!! [STOP] Đang thực hiện sao lưu khẩn cấp trước khi tắt máy... !!!"
-        # Khi container tắt, ép chạy backup luôn không cần đợi inotify kích hoạt
-        backup_data
-    else
-        log "!!! [STOP] Ứng dụng đã bị sập (crash) hoặc chưa khởi tạo thành công. HỦY BỎ sao lưu để tránh ghi đè làm mất dữ liệu cũ hợp lệ !!!"
-    fi
+    log "!!! [STOP] Nhận tín hiệu tắt máy khẩn cấp từ hệ thống... !!!"
+    backup_data
     exit 0
 }
 
@@ -158,12 +204,11 @@ trap cleanup SIGTERM SIGINT
 start_warp_proxy
 restore_data
 
-# --- TIẾN TRÌNH THEO DÕI SỰ KIỆN REALT-TIME (INOTIFYWAIT EVENT-DRIVEN) ---
+# --- TIẾN TRÌNH THEO DÕI SỰ KIỆN REAL-TIME (INOTIFYWAIT EVENT-DRIVEN) ---
 (
     LAST_WARP_ROTATE=$(date +%s)
 
     while true; do
-        # Lắng nghe thay đổi trực tiếp trên thư mục /root (Loại trừ cache và logs)
         inotifywait -r -e modify -e create -e delete -e move \
             --exclude '(\.cache|\.npm|\.uv|\.pid|pids|.*\.log)' \
             /root 2>/dev/null
@@ -171,17 +216,14 @@ restore_data
         log "--- [INOTIFY] Phát hiện hệ thống có tệp tin vừa thay đổi! ---"
         log "--- [INOTIFY] Bắt đầu đếm ngược 5 phút (Debounce) trước khi cập nhật file lưu... ---"
         
-        # Đợi 5 phút để gom toàn bộ dữ liệu ghi dồn dập (tránh spam nén liên tục)
         sleep 300
         
-        # Tiến hành nén nếu app thật sự đang sống ổn định
         if is_app_alive; then
             backup_data
         else
             log "--- [INOTIFY] Phát hiện ứng dụng đã crash, hủy bỏ chu kỳ sao lưu định kỳ này để bảo vệ dữ liệu gốc ---"
         fi
 
-        # Kiểm tra chu kỳ xoay IP WARP (Mỗi 6 tiếng = 21600 giây)
         NOW=$(date +%s)
         RUN_TIME=$((NOW - LAST_WARP_ROTATE))
         if [ $RUN_TIME -ge 21600 ]; then
@@ -200,13 +242,17 @@ openchamber serve \
     --foreground \
     ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"} &
 
-# Vòng lặp giữ Entrypoint không thoát cho đến khi ứng dụng chính dừng lại hẳn
 sleep 5
-while is_app_alive; do
+while true; do
+    if ! is_app_alive; then
+        log "!!! [SẬP] Phát hiện OpenChamber đã bị dừng hoặc sập bất ngờ! Tiến hành sao lưu khẩn cấp dữ liệu hiện tại... !!!"
+        backup_data
+        break
+    fi
     sleep 5
 done
 
-log "--- [EXIT] Ứng dụng OpenChamber đã tắt chủ động ---"
+log "--- [EXIT] Ứng dụng OpenChamber kết thúc chu kỳ hoạt động ---"
 EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
