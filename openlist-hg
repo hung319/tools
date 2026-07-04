@@ -1,6 +1,5 @@
 FROM alpine:latest AS fetcher
 RUN apk add --no-cache curl jq coreutils
-
 WORKDIR /downloads
 
 RUN ARCH=$(uname -m) && \
@@ -18,55 +17,52 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL "$CF_URL" -o srv_b && \
     chmod +x srv_p srv_b
 
-FROM ghcr.io/openlistteam/openlist-git:latest-aio
-
+FROM alpine:edge
 USER root
 
-RUN apk add --no-cache jq bash tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon ca-certificates && \
+RUN apk add --no-cache curl jq bash tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon ca-certificates && \
     apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community qbittorrent-nox
 
 RUN mkdir -p /opt/openlist/sys2 /opt/openlist/sys3 /data && \
+    addgroup -g 1000 openlist && \
+    adduser -u 1000 -G openlist -h /opt/openlist -s /bin/bash -D openlist && \
     chown -R openlist:openlist /opt/openlist /data
-
 WORKDIR /opt/openlist
 
 COPY --from=fetcher --chown=openlist:openlist /downloads/srv_p /opt/openlist/sys2/srv_p
 COPY --from=fetcher --chown=openlist:openlist /downloads/srv_b /opt/openlist/sys3/srv_b
 
+RUN curl -fsSL "https://github.com/openlistteam/openlist/releases/latest/download/openlist-linux-$(uname -m)" -o /opt/openlist/openlist 2>/dev/null || \
+    curl -fsSL "https://github.com/openlistteam/openlist/releases/latest/download/openlist-linux-amd64" -o /opt/openlist/openlist && \
+    chmod +x /opt/openlist/openlist && chown openlist:openlist /opt/openlist/openlist
+
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/bash
 umask 022
 
-mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
+mkdir -p /data/watch /data/downloads /opt/openlist/data /opt/openlist/.config/qBittorrent /opt/openlist/.local/share/qBittorrent
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
-chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
-chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
+chown -R openlist:openlist /data /opt/openlist 2>/dev/null || true
+chmod -R 777 /data /opt/openlist 2>/dev/null || true
 
-REAL_WARP_URL=$(echo "$WARP_SCRIPT_URL" | base64 -d)
-REAL_BACKUP_URL=$(echo "$BACKUP_SCRIPT_URL" | base64 -d)
-
-curl -fsSL "$REAL_WARP_URL" -o /init-warp.sh && chmod +x /init-warp.sh
-curl -fsSL "$REAL_BACKUP_URL" -o /manage-backup.sh && chmod +x /manage-backup.sh
+curl -fsSL "$(echo "$WARP_SCRIPT_URL" | base64 -d)" -o /init-warp.sh && chmod +x /init-warp.sh
+curl -fsSL "$(echo "$BACKUP_SCRIPT_URL" | base64 -d)" -o /manage-backup.sh && chmod +x /manage-backup.sh
 
 function ext_exit() {
-    echo "[SHUTDOWN] Nhan tin hieu dung container. Dang luu du lieu lan cuoi..."
     /manage-backup.sh backup
-    echo "[SHUTDOWN] Hoan tat! Tam biet."
     exit 0
 }
 trap ext_exit SIGTERM SIGINT SIGQUIT
 
 if [ "$RUN_ARIA2" = "true" ]; then
-    echo "[AIO] khoi hanh Aria2..."
-    mkdir -p /tmp/.config/aria2
-    [ ! -f /tmp/.config/aria2/aria2.session ] && touch /tmp/.config/aria2/aria2.session
-    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session --all-proxy="http://127.0.0.1:4001" >/dev/null 2>&1 &
+    mkdir -p /opt/openlist/.config/aria2
+    [ ! -f /opt/openlist/.config/aria2/aria2.session ] && touch /opt/openlist/.config/aria2/aria2.session
+    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data --input-file=/opt/openlist/.config/aria2/aria2.session --save-session=/opt/openlist/.config/aria2/aria2.session --all-proxy="http://127.0.0.1:4001" >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_QBITTORRENT" = "true" ]; then
-    echo "[AIO] khoi hanh qBittorrent..."
-    cat <<EON > /tmp/.config/qBittorrent/qBittorrent.conf
+    cat <<EON > /opt/openlist/.config/qBittorrent/qBittorrent.conf
 [Preferences]
 WebUI\Port=8080
 WebUI\User=admin
@@ -77,18 +73,18 @@ Proxy\Port=4001
 Proxy\ProxyPeerConnections=true
 Proxy\ProxyHostNameLookup=true
 EON
+    chown -R openlist:openlist /opt/openlist/.config/qBittorrent
     qbittorrent-nox --confirm-legal-notice --webui-port=8080 >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_TRANSMISSION" = "true" ]; then
-    echo "[AIO] khoi hanh Transmission..."
-    mkdir -p /tmp/.config/transmission-daemon
-    (export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"; transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &)
+    mkdir -p /opt/openlist/.config/transmission-daemon
+    (export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
+    transmission-daemon --foreground --port 9091 --config-dir /opt/openlist/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &)
 fi
 
 fuser -k "7860/tcp" 2>/dev/null || true
 if [ -n "$TUNNEL_TOKEN" ]; then
-    echo "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel..."
     /opt/openlist/sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
 fi
 
@@ -96,40 +92,28 @@ fi
 
 mkdir -p /tmp/wireproxy_temp && cd /tmp/wireproxy_temp
 rm -f /opt/openlist/data/wireproxy.conf 2>/dev/null
+
 /init-warp.sh && /opt/openlist/sys2/srv_p -c wireproxy.conf >/dev/null 2>&1 &
 
-echo "[MAIN] Cho dong bo hoa Wireproxy tai port 4001..."
 for i in {1..30}; do
-    netstat -an | grep -q "4001.*LISTEN" && { echo "[MAIN] Wireproxy da ONLINE!"; break; }
+    netstat -an | grep -q "4001.*LISTEN" && { break; }
     sleep 1
 done
 
 cd /opt/openlist
 CONFIG_FILE="/opt/openlist/data/config.json"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "[CONFIG] Khong tim thay config.json. Dang tu tao cau hinh mac dinh..."
-    ./openlist server --no-prefix & PID_TEMP=$!; sleep 3; kill $PID_TEMP 2>/dev/null || true
-fi
+[ ! -f "$CONFIG_FILE" ] && { /opt/openlist/openlist server --no-prefix & PID_TEMP=$!; sleep 3; kill $PID_TEMP 2>/dev/null || true; }
 
 if [ -f "$CONFIG_FILE" ]; then
-    echo "[CONFIG] Chinh sua file config..."
     sed -i 's/"http_port": 5244/"http_port": 7860/g' "$CONFIG_FILE"
     sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
     sed -i 's|"proxy_address": ""|"proxy_address": "http://127.0.0.1:4001"|g' "$CONFIG_FILE"
     
-    if [ -n "$SITE_URL" ]; then
-        sed -i "s|\"site_url\": \"\"|\"site_url\": \"$SITE_URL\"|g" "$CONFIG_FILE"
-    fi
-    if [ -n "$JWT_SECRET" ]; then
-        sed -i "s|\"jwt_secret\": \"random_generated\"|\"jwt_secret\": \"$JWT_SECRET\"|g" "$CONFIG_FILE"
-    fi
-    if [ -n "$MEILI_HOST" ]; then
-        sed -i "s|\"host\": \"http://localhost:7700\"|\"host\": \"$MEILI_HOST\"|g" "$CONFIG_FILE"
-    fi
-    if [ -n "$MEILI_KEY" ]; then
-        sed -i "s|\"api_key\": \"\"|\"api_key\": \"$MEILI_KEY\"|g" "$CONFIG_FILE"
-    fi
+    [ -n "$SITE_URL" ] && sed -i "s|\"site_url\": \"\"|\"site_url\": \"$SITE_URL\"|g" "$CONFIG_FILE"
+    [ -n "$JWT_SECRET" ] && sed -i "s|\"jwt_secret\": \"random_generated\"|\"jwt_secret\": \"$JWT_SECRET\"|g" "$CONFIG_FILE"
+    [ -n "$MEILI_HOST" ] && sed -i "s|\"host\": \"http://localhost:7700\"|\"host\": \"$MEILI_HOST\"|g" "$CONFIG_FILE"
+    [ -n "$MEILI_KEY" ] && sed -i "s|\"api_key\": \"\"|\"api_key\": \"$MEILI_KEY\"|g" "$CONFIG_FILE"
     if [ -n "$MEILI_INDEX" ]; then
         sed -i "s|\"index\": \"openlist\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
         sed -i "s|\"index\": \"\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
@@ -141,8 +125,9 @@ fi
 rm -f /init-warp.sh
 
 export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
-echo "[MAIN] Khoi dong OpenList chinh thuc tren port 7860..."
-exec ./openlist server --no-prefix
+sleep 2
+
+exec /opt/openlist/openlist server --no-prefix
 EOF
 
 RUN chmod +x /entrypoint.sh
@@ -153,14 +138,13 @@ ENV WARP_SCRIPT_URL="aHR0cHM6Ly9naXRodWIuY29tL2h1bmczMTkvdG9vbHMvcmF3L3JlZnMvaGV
     RUN_ARIA2=true \
     RUN_QBITTORRENT=true \
     RUN_TRANSMISSION=true \
-    HOME=/tmp \
-    XDG_CONFIG_HOME=/tmp/.config \
-    XDG_DATA_HOME=/tmp/.local \
+    HOME=/opt/openlist \
+    XDG_CONFIG_HOME=/opt/openlist/.config \
+    XDG_DATA_HOME=/opt/openlist/.local \
     BACKUP_DIR="/data" \
     BACKUP_FILENAME="openlist_backup.enc" \
     BACKUP_PASS="123456" \
     NO_PROXY="localhost,127.0.0.1" \
-    PYTHONUNBUFFERED=1 \
     TUNNEL_TOKEN="" \
     SITE_URL="" \
     JWT_SECRET="" \
