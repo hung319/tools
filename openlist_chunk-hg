@@ -1,8 +1,6 @@
 FROM alpine:latest AS fetcher
 RUN apk add --no-cache curl jq coreutils
-
 WORKDIR /downloads
-
 RUN ARCH=$(uname -m) && \
     WIRE_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
     CF_URL_AMD64=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
@@ -37,16 +35,11 @@ mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
 chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
 
-REAL_WARP_URL=$(echo "$WARP_SCRIPT_URL" | base64 -d)
-REAL_BACKUP_URL=$(echo "$BACKUP_SCRIPT_URL" | base64 -d)
-
-curl -fsSL "$REAL_WARP_URL" -o /init-warp.sh && chmod +x /init-warp.sh
-curl -fsSL "$REAL_BACKUP_URL" -o /manage-backup.sh && chmod +x /manage-backup.sh
+curl -fsSL "$(echo "$WARP_SCRIPT_URL" | base64 -d)" -o /init-warp.sh && chmod +x /init-warp.sh
+curl -fsSL "$(echo "$BACKUP_SCRIPT_URL" | base64 -d)" -o /manage-backup.sh && chmod +x /manage-backup.sh
 
 function ext_exit() {
-    echo "[SHUTDOWN] Nhan tin hieu dung container. Dang luu du lieu lan cuoi..."
     /manage-backup.sh backup
-    echo "[SHUTDOWN] Hoan tat! Tam biet."
     exit 0
 }
 trap ext_exit SIGTERM SIGINT SIGQUIT
@@ -75,9 +68,8 @@ mkdir -p /tmp/wireproxy_temp && cd /tmp/wireproxy_temp
 rm -f /opt/openlist/data/wireproxy.conf 2>/dev/null
 /init-warp.sh && /opt/openlist/sys2/srv_p -c wireproxy.conf >/dev/null 2>&1 &
 
-echo "[MAIN] Cho dong bo hoa Wireproxy tai port 4001..."
 for i in {1..30}; do
-    netstat -an | grep -q "4001.*LISTEN" && { echo "[MAIN] Wireproxy da ONLINE!"; break; }
+    netstat -an | grep -q "4001.*LISTEN" && { break; }
     sleep 1
 done
 
