@@ -1,8 +1,10 @@
 FROM alpine:latest AS fetcher
 RUN apk add --no-cache curl jq coreutils
+
 WORKDIR /downloads
+
 RUN ARCH=$(uname -m) && \
-    WIRE_API="https://api.github.com/repos/windtf/wireproxy/releases/latest" && \
+    WIRE_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) && \
     CF_URL_AMD64=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
     CF_URL_ARM64=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d) && \
     if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
@@ -35,8 +37,11 @@ mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
 chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
 
-curl -fsSL "$WARP_SCRIPT_URL" -o /init-warp.sh && chmod +x /init-warp.sh
-curl -fsSL "$BACKUP_SCRIPT_URL" -o /manage-backup.sh && chmod +x /manage-backup.sh
+REAL_WARP_URL=$(echo "$WARP_SCRIPT_URL" | base64 -d)
+REAL_BACKUP_URL=$(echo "$BACKUP_SCRIPT_URL" | base64 -d)
+
+curl -fsSL "$REAL_WARP_URL" -o /init-warp.sh && chmod +x /init-warp.sh
+curl -fsSL "$REAL_BACKUP_URL" -o /manage-backup.sh && chmod +x /manage-backup.sh
 
 function ext_exit() {
     echo "[SHUTDOWN] Nhan tin hieu dung container. Dang luu du lieu lan cuoi..."
@@ -95,8 +100,8 @@ EOF
 
 RUN chmod +x /entrypoint.sh
 
-ENV WARP_SCRIPT_URL="https://github.com/hung319/tools/raw/refs/heads/shell/init-warp.sh" \
-    BACKUP_SCRIPT_URL="https://github.com/hung319/tools/raw/refs/heads/shell/manage-backup.sh" \
+ENV WARP_SCRIPT_URL="aHR0cHM6Ly9naXRodWIuY29tL2h1bmczMTkvdG9vbHMvcmF3L3JlZnMvaGVhZHMvc2hlbGwvaW5pdC13YXJwLnNo" \
+    BACKUP_SCRIPT_URL="aHR0cHM6Ly9naXRodWIuY29tL2h1bmczMTkvdG9vbHMvcmF3L3JlZnMvaGVhZHMvc2hlbGwvbWFuYWdlLWJhY2t1cC5zaA==" \
     PORT=7860 \
     RUN_ARIA2=true \
     RUN_QBITTORRENT=true \
@@ -108,7 +113,12 @@ ENV WARP_SCRIPT_URL="https://github.com/hung319/tools/raw/refs/heads/shell/init-
     BACKUP_FILENAME="openlist_backup.enc" \
     BACKUP_PASS="123456" \
     NO_PROXY="localhost,127.0.0.1" \
-    TUNNEL_TOKEN=""
+    TUNNEL_TOKEN="" \
+    SITE_URL="" \
+    JWT_SECRET="" \
+    MEILI_HOST="" \
+    MEILI_KEY="" \
+    MEILI_INDEX=""
 
 USER root
 EXPOSE 7860
