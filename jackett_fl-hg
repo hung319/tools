@@ -1,7 +1,7 @@
 FROM alpine:latest AS fetcher
 
 # Cài đặt thêm xz để hỗ trợ nếu cần, xử lý tải file thuần bằng curl
-RUN apk add --no-cache curl jq tar ca-certificates
+RUN apk add --no-cache curl jq tar ca-certificates unzip
 
 WORKDIR /downloads
 
@@ -17,18 +17,13 @@ RUN api_url=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZl
     curl -sSL -o /downloads/flaresolverr-rs-bin "$dl_url" && \
     chmod +x /downloads/flaresolverr-rs-bin
 
-# 3. Tải kworker_net (wgcf)
-RUN v_net=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name | sed 's/^v//') && \
-    curl -sSL -o /downloads/kworker_net "$(echo "aHR0cHM6Ly9naXRodWIuY29tL1ZpUmIzL3dnY2YvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)v${v_net}/wgcf_${v_net}_linux_amd64" && \
-    chmod +x /downloads/kworker_net
-
-# 4. SỬA LỖI TẠI ĐÂY: Dùng curl -sSL để tải wireproxy chuẩn xác thông qua GitHub Redirect
-RUN v_daemon=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | jq -r .tag_name) && \
-    mkdir -p /tmp/wire && \
-    curl -sSL "$(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQv" | base64 -d)${v_daemon}/wireproxy_linux_amd64.tar.gz" | tar xz -C /tmp/wire && \
-    mv /tmp/wire/wireproxy /downloads/syslog_daemon && \
-    chmod +x /downloads/syslog_daemon && \
-    rm -rf /tmp/wire
+# 3. THAY THẾ WGCF & WIREPROXY: Tải công cụ cloudflare-warp mới
+RUN WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
+    curl -sSL -o /downloads/warp.zip "$WARP_ZIP_URL" && \
+    unzip /downloads/warp.zip -d /downloads/ && \
+    mv /downloads/warp-linux-amd64 /downloads/warp && \
+    chmod +x /downloads/warp && \
+    rm -f /downloads/warp.zip
 
 
 FROM debian:stable-slim
@@ -38,7 +33,7 @@ USER root
 # Tối ưu hóa tầng chạy chính với Chromium nhẹ của Debian
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates libssl3 curl jq tar findutils procps tini gosu \
-    chromium xvfb inotify-tools bash libicu-dev \
+    chromium xvfb inotify-tools bash libicu-dev psmisc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -54,8 +49,7 @@ RUN echo 'host            = "127.0.0.1"' > config.toml && \
     echo 'context_limit   = 20' >> config.toml
 
 COPY --from=fetcher /downloads/sys_net /opt/sys_net
-COPY --from=fetcher /downloads/kworker_net /usr/local/bin/kworker_net
-COPY --from=fetcher /downloads/syslog_daemon /usr/local/bin/syslog_daemon
+COPY --from=fetcher /downloads/warp /usr/local/bin/warp
 
 ENV PORT=7860
 ENV BACKUP_DIR="/data"
@@ -71,7 +65,7 @@ ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
 RUN getent group sys_runner || groupadd -r sys_runner && \
     getent passwd sys_runner || useradd -r -g sys_runner -d /opt/sys_net -s /sbin/nologin sys_runner
 
-RUN mkdir -p /opt/sys_net/.config/Jackett /data /opt/app_runtime /app \
+RUN mkdir -p /opt/sys_net/.config/Jackett /data /opt/app_runtime /app /tmp/warp_data \
     && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app
 
 WORKDIR /opt/app_runtime
@@ -83,8 +77,21 @@ BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_FILE="/tmp/temp_sys.enc"
 HASH_FILE="/tmp/config_hash.md5"
 CONFIG_DIR="/opt/sys_net/.config"
+WARP_DIR="/tmp/warp_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+
+# --- HÀM KIỂM TRA HEALTHCHECK CHỈ CHECK PORT CHÍNH 7860 ---
+healthcheck_app() {
+    # Sử dụng curl kiểm tra nhanh phản hồi HTTP status từ cổng chính 7860 của Jackett
+    local jackett_status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:7860/UI/Dashboard 2>/dev/null || echo "000")
+
+    if [[ "$jackett_status" =~ ^(200|302)$ ]]; then
+        return 0 # Cổng chính hoạt động bình thường ổn định
+    else
+        return 1 # Không phản hồi hoặc lỗi kết nối
+    fi
+}
 
 get_current_hash() {
     find "$CONFIG_DIR" -type f -not -name "*.log" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
@@ -133,7 +140,14 @@ cleanup() {
     trap - TERM INT QUIT
     log "!!! [SHUTDOWN] Stopping core engine safely... !!!"
     kill $WATCHER_PID 2>/dev/null || true
-    backup_data
+    
+    # Kiểm tra healthcheck cổng chính trước khi lưu trữ dữ liệu khẩn cấp lúc shutdown
+    if healthcheck_app; then
+        backup_data
+    else
+        log "!!! [SHUTDOWN] Port 7860 status failed. Skipping backup to prevent empty/corrupt files override !!!"
+    fi
+
     kill -TERM "$JACKETT_PID" 2>/dev/null || true
     kill -TERM "$RS_SOLVER_PID" 2>/dev/null || true
     wait "$JACKETT_PID" 2>/dev/null || true
@@ -142,26 +156,18 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-log "--- Preparing kworker_net configs ---"
-if [ ! -f "net-account.json" ]; then kworker_net register --accept-tos >/dev/null 2>&1; sleep 1; mv wgcf-account.json net-account.json 2>/dev/null || true; fi
-if [ ! -f "net-profile.conf" ]; then kworker_net generate >/dev/null 2>&1; sleep 1; mv wgcf-profile.conf net-profile.conf 2>/dev/null || true; fi
+# --- KHỞI CHẠY HTTP PROXY CLOUDFLARE WARP MỚI ---
+log "--- [WARP] Preparing Cloudflare Warp configuration... ---"
+killall warp 2>/dev/null || true
+mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
-cat <<WEOF > net_dns.cfg
-[Interface]
-PrivateKey = $(grep PrivateKey net-profile.conf | awk '{print $3}')
-Address = $(grep Address net-profile.conf | awk '{print $3}' | paste -sd, -)
-DNS = 1.1.1.1
+if [ ! -f "$WARP_DIR/reg.json" ]; then
+    log "--- [WARP] Registering new identity profile... ---"
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
+fi
 
-[Peer]
-PublicKey = $(grep PublicKey net-profile.conf | awk '{print $3}')
-Endpoint = $(grep Endpoint net-profile.conf | awk '{print $3}')
-
-[Http]
-BindAddress = 127.0.0.1:4000
-WEOF
-
-log "--- Launching syslog_daemon ---"
-syslog_daemon -c net_dns.cfg >/dev/null 2>&1 &
+log "--- [WARP] Starting HTTP Proxy Router at port 4000... ---"
+HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4000 >/dev/null 2>&1 &
 sleep 5
 
 restore_data
@@ -196,13 +202,20 @@ fi
 
 chown -R sys_runner:sys_runner /opt/sys_net/.config
 
+# --- TIẾN TRÌNH THEO DÕI THAY ĐỔI ĐÃ TÍCH HỢP HEALTHCHECK PORT 7860 ---
 (
     while true; do
         inotifywait -r -e modify,create,delete,move --exclude '.*\.log' "$CONFIG_DIR" >/dev/null 2>&1
         log "--- [WATCHER] Configuration changes detected! Cooldown timer initiated. Waiting 5 minutes to bundle updates... ---"
         sleep 300
-        log "--- [WATCHER] Cooldown finished. Evaluating and executing backup... ---"
-        backup_data
+        log "--- [WATCHER] Cooldown finished. Evaluating health status on port 7860 before executing backup... ---"
+        
+        # Chỉ sao lưu tự động khi vượt qua bài test healthcheck cổng 7860
+        if healthcheck_app; then
+            backup_data
+        else
+            log "--- [WATCHER] Backup aborted because main service on port 7860 is unhealthy. ---"
+        fi
     done
 ) &
 WATCHER_PID=$!
@@ -211,8 +224,15 @@ log "=== Starting Engine 2 (Jackett Core Engine) ==="
 gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /opt/sys_net/.config/Jackett &
 JACKETT_PID=$!
 
-wait "$JACKETT_PID" || true
-backup_data
+# Vòng lặp giữ Entrypoint script luôn chạy theo tiến trình chính
+sleep 5
+while kill -0 "$JACKETT_PID" 2>/dev/null; do
+    sleep 5
+done
+
+if healthcheck_app; then
+    backup_data
+fi
 EOF
 
 RUN chmod +x /opt/app_runtime/entrypoint.sh
