@@ -26,23 +26,27 @@ RUN pnpm install --frozen-lockfile && \
 
 FROM node:24.13.0-slim AS runner
 
-# Cài đặt công cụ nền và tải duy nhất Wireproxy phiên bản cố định ổn định (Loại bỏ wgcf)
+# Cài đặt công cụ nền hệ thống
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl lsof ripgrep ca-certificates grep gawk sed findutils openssh-client \
     coreutils procps jq less tree file python3 python3-pip python3-venv \
-    tar openssl unzip inotify-tools tini chromium bash psmisc xxd netcat-openbsd \
+    tar openssl unzip inotify-tools tini chromium bash psmisc \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update && apt-get install -y gh \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Tải, giải nén và cấu hình công cụ cloudflare-warp mới (Thay thế cho wgcf + wireproxy)
 RUN ARCH=$(dpkg --print-architecture) \
-    && if [ "$ARCH" = "amd64" ]; then \
-         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hbWQ2NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
-       else \
-         curl -fsSL $(echo "aHR0cHM6Ly9naXRodWIuY29tL3dpbmR0Zi93aXJlcHJveHkvcmVsZWFzZXMvZG93bmxvYWQvdjEuMS4yL3dpcmVwcm94eV9saW51eF9hcm02NC50YXIuZ3o=" | base64 -d) | tar -xz -C /usr/local/bin/ wireproxy; \
+    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) \
+    && if [ "$ARCH" != "amd64" ]; then \
+         echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
        fi \
-    && chmod +x /usr/local/bin/wireproxy
+    && curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip \
+    && unzip /tmp/warp.zip -d /usr/local/bin/ \
+    && mv /usr/local/bin/warp-linux-amd64 /usr/local/bin/warp \
+    && rm -f /tmp/warp.zip \
+    && chmod +x /usr/local/bin/warp
 
 WORKDIR /root
 
@@ -59,7 +63,7 @@ COPY --from=builder /app/backend ./backend
 COPY --from=builder /app/frontend/dist ./frontend/dist
 COPY --from=source-fetcher /src/package.json /src/pnpm-workspace.yaml ./
 
-# Cấu hình biến môi trường hệ thống (Đã loại bỏ biến WGCF_FORCE_REGISTER)
+# Cấu hình biến môi trường hệ thống
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=7860 \
@@ -77,7 +81,7 @@ ENV NODE_ENV=production \
     ALL_PROXY="http://127.0.0.1:4001" \
     NO_PROXY="localhost,127.0.0.1"
 
-RUN mkdir -p /root/data /root/.cache /data /tmp/wireproxy_temp && chmod -R 777 /root /data /app
+RUN mkdir -p /root/data /root/.cache /data /tmp/warp_data && chmod -R 777 /root /data /app
 
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
 #!/bin/bash
@@ -85,9 +89,11 @@ set +e
 
 BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
 TEMP_PATH="/tmp/temp_backup.enc"
+WARP_DIR="/tmp/warp_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
+# Hàm kiểm tra trạng thái sống động thực tế của Opencode Manager
 is_app_alive() {
     if pgrep -f "bun.*backend/src/index.ts" >/dev/null 2>&1 || lsof -i :"$PORT" >/dev/null 2>&1; then
         return 0
@@ -96,199 +102,110 @@ is_app_alive() {
     fi
 }
 
-# --- HÀM ĐĂNG KÝ WARP DÙNG SCRIPT NATIVE (THAY THẾ WGCF) ---
+# --- HÀM KHỞI TẠO HTTP PROXY WARP MỚI ---
 start_warp_proxy() {
-    log "--- [WARP] Đang khởi tạo và đăng ký IP Cloudflare mới... ---"
-    killall wireproxy 2>/dev/null || true
-    rm -rf /tmp/wireproxy_temp && mkdir -p /tmp/wireproxy_temp && cd /tmp/wireproxy_temp
+    log "--- [WARP] Dang khoi tao va dinh tuyen mang qua Cloudflare Warp... ---"
+    killall warp 2>/dev/null || true
+    mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
     
-    log "[WARP-SCAN] Dang quet nhanh Endpoint toi uu bang Bash (Fresh Mode)..."
-    ips=("162.159.192" "162.159.193" "162.159.195" "162.159.204" "188.114.96" "188.114.97" "188.114.98" "188.114.99")
-    ports=(2408 500 864 880 894 934 1070 1180 3476 3581 4198 4500 5279 5956 7103 7152 7559 8319 8854 8886)
-    HEX_DATA="\x04\x1d\x69\xe6\x79\x22\x09\x9a\xa0\xb9\x3d\x1e\x7b\x30\x9e\xc5\x85\x1e\xe2\xa3\xd6\xbf\x82\xa8\xbb\x5b\xb0\x3e\xd4\x6f\xb2\x34\x65\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x77\xa4\xa8\xcd\x5d\x88\x3e\x66\x08\x8e\x5f\x70\xad\xb4\x2f\x8a"
-    DYNAMIC_ENDPOINT=""
-    best_latency=9999
-
-    for i in {1..12}; do
-        rand_sub=${ips[$RANDOM % ${#ips[@]}]}
-        rand_host=$((RANDOM % 254 + 1))
-        rand_port=${ports[$RANDOM % ${#ports[@]}]}
-        target_ip="${rand_sub}.${rand_host}"
-        
-        start_t=$(date +%s%3N)
-        res=$(echo -ne "$HEX_DATA" | nc -w 1 -u "$target_ip" "$rand_port" 2>/dev/null | head -c 5 | xxd -p 2>/dev/null)
-        end_t=$(date +%s%3N)
-        
-        if [[ "$res" == "cf00000000" ]]; then
-            latency=$((end_t - start_t))
-            if [ "$latency" -lt "$best_latency" ]; then
-                best_latency=$latency
-                DYNAMIC_ENDPOINT="${target_ip}:${rand_port}"
-            fi
-        fi
-    done
-
-    if [ -z "$DYNAMIC_ENDPOINT" ]; then
-        log "[WARP-SCAN] Khong scan kip endpoint hop le. Chuyen ve Endpoint mac dinh..."
-        DYNAMIC_ENDPOINT="188.114.97.242:7559"
-    else
-        log "[WARP-SCAN] Da tim thay Endpoint ngon nhat: $DYNAMIC_ENDPOINT (Ping: ${best_latency}ms)"
+    if [ ! -f "$WARP_DIR/reg.json" ]; then
+        log "--- [WARP] Sinh thong tin tai khoan dinh danh moi... ---"
+        HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
     fi
 
-    log "[WARP-REG] Dang ky tai khoan thuc qua corsfix.com..."
-
-    openssl genpkey -algorithm X25519 -outform DER -out x25519_priv.der 2>/dev/null
-    PRIV_KEY=$(tail -c 32 x25519_priv.der | base64 | tr -d '\n\r ')
-
-    openssl pkey -inform DER -in x25519_priv.der -pubout -outform DER -out x25519_pub.der 2>/dev/null
-    PUB_KEY=$(tail -c 32 x25519_pub.der | base64 | tr -d '\n\r ')
-
-    rm -f x25519_priv.der x25519_pub.der
-    NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-
-    REG_RESPONSE=$(HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" curl -s 'https://proxy.corsfix.com/?https://api.cloudflareclient.com/v0a737/reg' \
-      -H 'authority: proxy.corsfix.com' \
-      -H 'accept: */*' \
-      -H 'accept-language: vi-VN,vi;q=0.9' \
-      -H 'content-type: application/json' \
-      -H 'origin: https://lanrat.github.io' \
-      -H 'referer: https://lanrat.github.io/' \
-      -H 'user-agent: Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36' \
-      --data-raw "{\"key\":\"$PUB_KEY\",\"install_id\":\"\",\"warp_enabled\":true,\"tos\":\"$NOW_ISO\",\"type\":\"Linux\",\"locale\":\"en_US\"}")
-
-    W_TOKEN=$(echo "$REG_RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('token', ''))" 2>/dev/null)
-    W_IPV4=$(echo "$REG_RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('config', {}).get('interface', {}).get('addresses', {}).get('v4', ''))" 2>/dev/null)
-
-    HAS_ACCOUNT=false
-    if [ -n "$W_TOKEN" ] && [ "$W_TOKEN" != "None" ] && [ "$W_TOKEN" != "" ]; then
-        log "[WARP-REG] -> TAO TAI KHOAN SUCCESS! Dang nap..."
-        [[ "$W_IPV4" != *"/"* ]] && W_IPV4="${W_IPV4}/32"
-        HAS_ACCOUNT=true
-    else
-        log "[WARP-REG] -> Tao tai khoan tai corsfix errors, dang thu lai voi proxy.cors.sh..."
-        
-        REG_RESPONSE=$(HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" curl -s 'https://proxy.cors.sh/https://api.cloudflareclient.com/v0a737/reg' \
-          -H 'accept: */*' \
-          -H 'content-type: application/json' \
-          -H 'x-cors-gratis: true' \
-          --data-raw "{\"key\":\"$PUB_KEY\",\"install_id\":\"\",\"warp_enabled\":true,\"tos\":\"$NOW_ISO\",\"type\":\"Linux\",\"locale\":\"en_US\"}")
-
-        W_TOKEN=$(echo "$REG_RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('token', ''))" 2>/dev/null)
-        W_IPV4=$(echo "$REG_RESPONSE" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('config', {}).get('interface', {}).get('addresses', {}).get('v4', ''))" 2>/dev/null)
-        
-        if [ -n "$W_TOKEN" ] && [ "$W_TOKEN" != "None" ] && [ "$W_TOKEN" != "" ]; then
-            log "[WARP-REG] -> TAO TAI KHOAN SUCCESS (via cors.sh)! Dang nap..."
-            [[ "$W_IPV4" != *"/"* ]] && W_IPV4="${W_IPV4}/32"
-            HAS_ACCOUNT=true
-        fi
-    fi
-
-    if [ "$HAS_ACCOUNT" = true ]; then
-        printf "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\nEndpoint = %s\n\n[http]\nBindAddress = 127.0.0.1:4001\n" \
-        "$PRIV_KEY" "$W_IPV4" "$DYNAMIC_ENDPOINT" > wireproxy.conf
-
-        HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wireproxy -c wireproxy.conf >/dev/null 2>&1 &
-        sleep 3
-        log "--- [WARP] Kích hoạt thành công! HTTP Proxy đang chạy tại cổng 4001 ---"
-    else
-        log "--- [CẢNH BÁO] Tạo tài khoản thất bại ở cả hai proxy. Không thể thiết lập bộ định tuyến WARP ---"
-    fi
+    # Chỉ kích hoạt HTTP Proxy (Bỏ SOCKS5)
+    log "--- [WARP] Dang khoi chay HTTP Proxy tai cong 4001... ---"
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
+    sleep 3
     cd /app
 }
 
 restore_data() {
     if [ -f "$BACKUP_PATH" ]; then
-        log "--- [RESTORE] Tìm thấy bản lưu. Đang giải mã và phục hồi dữ liệu hệ thống... ---"
+        log "--- [RESTORE] Tim thay ban luu. Dang giai ma va phuc hoi du lieu he thong... ---"
         if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C / 2>/dev/null; then
-            log "--- [RESTORE] Phục hồi dữ liệu thành công! Bảo đảm cấp lại toàn quyền ghi... ---"
+            log "--- [RESTORE] Phuc hoi du lieu thanh cong! Bao dam cap lai toan quyen ghi... ---"
             chmod -R 777 /root /data /app 2>/dev/null || true
         else
-            log "--- [RESTORE] Thất bại (Sai mật khẩu hoặc file lỗi) ---"
+            log "--- [RESTORE] That bai (Sai mat khau hoac file loi) ---"
         fi
     else
-        log "--- [RESTORE] Không tìm thấy bản lưu cũ. Khởi tạo môi trường mới. ---"
+        log "--- [RESTORE] Khong tim thay ban luu cu. Khoi tao moi truong moi. ---"
     fi
 }
 
 backup_data() {
     if [ ! -d "/root/data" ] && [ ! -d "/root/.config" ]; then return; fi
 
-    log "--- [BACKUP] Kích hoạt tiến trình nén và mã hóa dữ liệu... ---"
+    log "--- [BACKUP] Kich hoat tien trinh nen va ma hoa du lieu... ---"
     mkdir -p "$BACKUP_DIR"
     
     if tar -cz -C / \
         --exclude='root/.cache' \
         --exclude='root/.npm' \
-        --exclude='tmp/wireproxy_temp' \
+        --exclude='/tmp/warp_data' \
         --exclude='root/data/*.db-journal' \
         --exclude='*.log' \
         root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
         
         mv "$TEMP_PATH" "$BACKUP_PATH"
-        log "--- [BACKUP] Đã cập nhật bản lưu mã hóa thành công lúc $(date) ---"
+        log "--- [BACKUP] Da cap nhat ban luu ma hoa thanh cong luc $(date) ---"
     else
-        log "--- [BACKUP] Lỗi trong quá trình nén hoặc mã hóa dữ liệu! ---"
+        log "--- [BACKUP] Loi trong qua trinh nen hoac ma hoa du lieu! ---"
         rm -f "$TEMP_PATH"
     fi
 }
 
 cleanup() {
-    log "!!! [STOP] Container đang bị dừng! Kiểm tra trạng thái ứng dụng trước khi xử lý dữ liệu... !!!"
+    log "!!! [STOP] Container dang bi dung! Kiem tra trang thai ung dung truoc khi xu ly du lieu... !!!"
     if is_app_alive; then
         if [ -d "/root/data" ] || [ -d "/root/.config" ]; then
-            tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='tmp/wireproxy_temp' --exclude='root/data/*.db-journal' --exclude='*.log' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$BACKUP_PATH"
-            log "!!! [STOP] Đã cứu hộ backup thành công trước khi tắt máy !!!"
+            tar -cz -C / --exclude='root/.cache' --exclude='root/.npm' --exclude='/tmp/warp_data' --exclude='root/data/*.db-journal' --exclude='*.log' root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$BACKUP_PATH"
+            log "!!! [STOP] Da cuu ho backup thanh cong truoc khi tat may !!!"
         fi
     else
-        log "!!! [STOP] Ứng dụng đã sập hoặc chưa từng khởi chạy thành công. HỦY BỎ tiến trình ghi đè dữ liệu cứu hộ để bảo vệ file backup gốc !!!"
+        log "!!! [STOP] Ung dung da sap hoac chua tung khoi chay thanh cong. HUY BO ghi de de bao ve ban sao luu goc !!!"
     fi
     exit 0
 }
 
+# Dang ky tin hieu shutdown
 trap cleanup SIGTERM SIGINT
 
-# Khởi chạy dịch vụ bảo đảm cô lập ENV proxy
-HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" start_warp_proxy
+# Khoi chay dich vu
+start_warp_proxy
 restore_data
 
+# --- TIẾN TRÌNH INOTIFYWAIT (ĐÃ LOẠI BỎ XOAY IP XOAY VÒNG) ---
 (
-    LAST_WARP_ROTATE=$(date +%s)
-
     while true; do
         inotifywait -r -e modify -e create -e delete -e move \
-            --exclude '(\.cache|\.npm|wireproxy_temp|\.db-journal|\.log)' \
+            --exclude '(\.cache|\.npm|warp_data|\.db-journal|\.log)' \
             /root /app 2>/dev/null
 
-        log "--- [INOTIFY] Phát hiện hệ thống có tệp tin vừa thay đổi! ---"
-        log "--- [INOTIFY] Bắt đầu đếm ngược 5 phút (Debounce) trước khi cập nhật file lưu... ---"
+        log "--- [INOTIFY] Phat hien he thong co teps tin vua thay doi! ---"
+        log "--- [INOTIFY] Bat dau dem nguoc 5 phut (Debounce) truoc khi cap nhat file luu... ---"
         
         sleep 300
         
         if is_app_alive; then
             backup_data
         else
-            log "--- [INOTIFY] Bỏ qua sao lưu tự động vì phát hiện ứng dụng chính đã bị dừng hoặc thực sự crash ---"
-        fi
-
-        NOW=$(date +%s)
-        RUN_TIME=$((NOW - LAST_WARP_ROTATE))
-        if [ $RUN_TIME -ge 21600 ]; then
-            log "--- [WARP-ROTATE] Đã đạt chu kỳ 6 giờ. Tiến hành làm mới định tuyến mạng... ---"
-            HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" start_warp_proxy
-            LAST_WARP_ROTATE=$NOW
+            log "--- [INOTIFY] Bo qua sao luu tu dong vi phat hien ung dung chinh da bi dung hoac thuc su crash ---"
         fi
     done
 ) &
 
-log "Đang khởi động Opencode Manager tại /app trên cổng $PORT..."
+log "Dang khoi dong Opencode Manager tai /app tren cong $PORT..."
 bun backend/src/index.ts &
 
+# Vong lap giu Entrypoint song theo ung dung chinh
 sleep 5
 while is_app_alive; do
     sleep 5
 done
 
-log "--- [EXIT] Tiến trình chính của ứng dụng đã kết thúc ---"
+log "--- [EXIT] Tien trinh chinh cua ung dung da ket thuc ---"
 EOF
 
 EXPOSE 7860
