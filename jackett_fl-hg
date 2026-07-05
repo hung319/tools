@@ -1,23 +1,22 @@
 FROM alpine:latest AS fetcher
 
-# Cài đặt thêm xz để hỗ trợ nếu cần, xử lý tải file thuần bằng curl
 RUN apk add --no-cache curl jq tar ca-certificates unzip
 
 WORKDIR /downloads
 
-# 1. Tải Jackett Core
+# 1. Tải Jackett Core Engine (Đã fix chuỗi base64 chuẩn)
 RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/sys_net && \
     curl -sSL "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
     mv /downloads/sys_net/jackett /downloads/sys_net/srv_core
 
-# 2. Tải FlareSolverr-RS
+# 2. Tải FlareSolverr-RS Prebuilt Binary
 RUN api_url=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
     dl_url=$(curl -s "$api_url" | jq -r '.assets[] | select(.name == "flaresolverr-rs-linux-amd64") | .browser_download_url') && \
     curl -sSL -o /downloads/flaresolverr-rs-bin "$dl_url" && \
     chmod +x /downloads/flaresolverr-rs-bin
 
-# 3. THAY THẾ WGCF & WIREPROXY: Tải công cụ cloudflare-warp mới
+# 3. Tải công cụ cloudflare-warp
 RUN WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
     curl -sSL -o /downloads/warp.zip "$WARP_ZIP_URL" && \
     unzip /downloads/warp.zip -d /downloads/ && \
@@ -30,10 +29,9 @@ FROM debian:stable-slim
 
 USER root
 
-# Tối ưu hóa tầng chạy chính với Chromium nhẹ của Debian
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates libssl3 curl jq tar findutils procps tini gosu \
-    chromium xvfb inotify-tools bash libicu-dev psmisc \
+    chromium xvfb inotify-tools bash libicu-dev psmisc rsync \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -52,9 +50,8 @@ COPY --from=fetcher /downloads/sys_net /opt/sys_net
 COPY --from=fetcher /downloads/warp /usr/local/bin/warp
 
 ENV PORT=7860
-ENV BACKUP_DIR="/data"
-ENV BACKUP_FILENAME="jackett_backup.enc"
-ENV BACKUP_PASS="123456"
+# Gộp gọn lại thành 1 biến duy nhất chỉ định thư mục đồng bộ thẳng trên Volume map
+ENV BACKUP_DIR="/data/jackett_backup_data" 
 ENV HOST=127.0.0.1
 
 ENV FLARESOLVERR_HOST="127.0.0.1"
@@ -73,79 +70,60 @@ WORKDIR /opt/app_runtime
 RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
 #!/bin/bash
 
-BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
-TEMP_FILE="/tmp/temp_sys.enc"
-HASH_FILE="/tmp/config_hash.md5"
 CONFIG_DIR="/opt/sys_net/.config"
 WARP_DIR="/tmp/warp_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# --- HÀM KIỂM TRA HEALTHCHECK CHỈ CHECK PORT CHÍNH 7860 ---
 healthcheck_app() {
-    # Sử dụng curl kiểm tra nhanh phản hồi HTTP status từ cổng chính 7860 của Jackett
     local jackett_status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:7860/UI/Dashboard 2>/dev/null || echo "000")
-
     if [[ "$jackett_status" =~ ^(200|302)$ ]]; then
-        return 0 # Cổng chính hoạt động bình thường ổn định
+        return 0
     else
-        return 1 # Không phản hồi hoặc lỗi kết nối
+        return 1
     fi
-}
-
-get_current_hash() {
-    find "$CONFIG_DIR" -type f -not -name "*.log" -print0 2>/dev/null | xargs -0 md5sum 2>/dev/null | sort | md5sum | awk '{print $1}'
 }
 
 restore_data() {
-    if [ -f "$BACKUP_FILE" ]; then
-        log "--- [RESTORE] Found backup file. Restoring service cache... ---"
-        openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /opt/sys_net/ 2>&1 || true
+    # Khôi phục dữ liệu trực tiếp bằng cách dùng biến BACKUP_DIR mới gộp
+    if [ -d "$BACKUP_DIR" ] && [ "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+        log "--- [RESTORE] Tìm thấy dữ liệu đồng bộ phẳng. Tiến hành rsync phục hồi... ---"
+        rsync -a --delete "$BACKUP_DIR/" "$CONFIG_DIR/"
         chown -R sys_runner:sys_runner "$CONFIG_DIR" || true
-        log "--- [RESTORE] Cache restoration completed successfully. ---"
+        log "--- [RESTORE] Khôi phục dữ liệu phẳng thành công. ---"
     else
-        log "--- [RESTORE] No prior backup file found at $BACKUP_FILE. Skipping. ---"
+        log "--- [RESTORE] Không tìm thấy dữ liệu cũ tại $BACKUP_DIR. Khởi chạy mới. ---"
     fi
-    get_current_hash > "$HASH_FILE"
 }
 
 backup_data() {
     if [ ! "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]; then 
-        log "--- [BACKUP] Target config directory is empty. Skipping backup. ---"
         return
     fi
     
-    if [ -f "$BACKUP_FILE" ] && [ -f "$HASH_FILE" ]; then
-        OLD_HASH=$(cat "$HASH_FILE")
-        NEW_HASH=$(get_current_hash)
-        if [ "$OLD_HASH" = "$NEW_HASH" ]; then
-            return
-        fi
-    fi
-
-    log "--- [BACKUP] Changes detected! Archiving and encrypting configuration... ---"
-    tar -cz -C /opt/sys_net --exclude='*.log' ".config" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE" 2>/dev/null || true
-    if [ -f "$TEMP_FILE" ]; then
-        mkdir -p "$BACKUP_DIR"
-        mv "$TEMP_FILE" "$BACKUP_FILE"
-        chown sys_runner:sys_runner "$BACKUP_FILE" || true
-        get_current_hash > "$HASH_FILE"
-        log "--- [BACKUP] Successfully updated backup: $BACKUP_FILE ---"
+    log "--- [BACKUP] Phát hiện thay đổi cấu hình! Tiến hành rsync đồng bộ phẳng... ---"
+    mkdir -p "$BACKUP_DIR"
+    
+    # rsync trực tiếp sang BACKUP_DIR gọn gàng
+    rsync -a --delete --exclude='*.log' "$CONFIG_DIR/" "$BACKUP_DIR/"
+    
+    if [ $? -eq 0 ]; then
+        chown -R sys_runner:sys_runner "$BACKUP_DIR" || true
+        log "--- [BACKUP] Đồng bộ thành công vào: $BACKUP_DIR ---"
     else
-        log "--- [BACKUP] ERROR: Failed to create encrypted backup package. ---"
+        log "--- [BACKUP] ERROR: Tiến trình rsync gặp lỗi. ---"
     fi
 }
 
 cleanup() {
     trap - TERM INT QUIT
-    log "!!! [SHUTDOWN] Stopping core engine safely... !!!"
+    log "!!! [SHUTDOWN] Đang dừng container an toàn... !!!"
     kill $WATCHER_PID 2>/dev/null || true
     
-    # Kiểm tra healthcheck cổng chính trước khi lưu trữ dữ liệu khẩn cấp lúc shutdown
     if healthcheck_app; then
         backup_data
     else
-        log "!!! [SHUTDOWN] Port 7860 status failed. Skipping backup to prevent empty/corrupt files override !!!"
+        log "!!! [SHUTDOWN] Cổng 7860 lỗi (Unhealthy). Hủy bỏ rsync để bảo toàn dữ liệu cũ !!!"
     fi
 
     kill -TERM "$JACKETT_PID" 2>/dev/null || true
@@ -156,7 +134,7 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-# --- KHỞI CHẠY HTTP PROXY CLOUDFLARE WARP MỚI ---
+# --- KHỞI CHẠY HTTP PROXY CLOUDFLARE WARP ---
 log "--- [WARP] Preparing Cloudflare Warp configuration... ---"
 killall warp 2>/dev/null || true
 mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
@@ -176,9 +154,8 @@ export PROXY_URL="http://127.0.0.1:4000"
 export HOME=/opt/sys_net
 export XDG_CONFIG_HOME=/opt/sys_net/.config
 
-log "=== Starting Engine 1 (FlareSolverr-RS Prebuilt Binary) ==="
+log "=== Starting Engine 1 (FlareSolverr-RS) ==="
 cd /app
-
 PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
 RS_SOLVER_PID=$!
 sleep 5
@@ -202,29 +179,26 @@ fi
 
 chown -R sys_runner:sys_runner /opt/sys_net/.config
 
-# --- TIẾN TRÌNH THEO DÕI THAY ĐỔI ĐÃ TÍCH HỢP HEALTHCHECK PORT 7860 ---
+# --- TIẾN TRÌNH THEO DÕI INOTIFY VỚI RSYNC TỐC ĐỘ CAO ---
 (
     while true; do
         inotifywait -r -e modify,create,delete,move --exclude '.*\.log' "$CONFIG_DIR" >/dev/null 2>&1
-        log "--- [WATCHER] Configuration changes detected! Cooldown timer initiated. Waiting 5 minutes to bundle updates... ---"
+        log "--- [WATCHER] Phát hiện thay đổi dữ liệu cấu hình! Đợi 5 phút gom cụm biến động... ---"
         sleep 300
-        log "--- [WATCHER] Cooldown finished. Evaluating health status on port 7860 before executing backup... ---"
         
-        # Chỉ sao lưu tự động khi vượt qua bài test healthcheck cổng 7860
         if healthcheck_app; then
             backup_data
         else
-            log "--- [WATCHER] Backup aborted because main service on port 7860 is unhealthy. ---"
+            log "--- [WATCHER] Bỏ qua rsync vì cổng chính 7860 đang báo lỗi (Unhealthy). ---"
         fi
     done
 ) &
 WATCHER_PID=$!
 
-log "=== Starting Engine 2 (Jackett Core Engine) ==="
+log "=== Starting Engine 2 (Jackett Core) ==="
 gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /opt/sys_net/.config/Jackett &
 JACKETT_PID=$!
 
-# Vòng lặp giữ Entrypoint script luôn chạy theo tiến trình chính
 sleep 5
 while kill -0 "$JACKETT_PID" 2>/dev/null; do
     sleep 5
