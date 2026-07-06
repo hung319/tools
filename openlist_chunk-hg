@@ -8,7 +8,6 @@ RUN ARCH=$(uname -m) && \
         WARP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
         CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d); \
     else \
-        # Trường hợp ARM64 (Nếu repo của bạn không có bản arm64, bạn có thể đổi link phù hợp sau)
         WARP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
         CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d); \
     fi && \
@@ -20,7 +19,8 @@ FROM ghcr.io/zmabin/openlist-chunk:latest
 
 USER root
 
-RUN apk add --no-cache jq bash tini openssl inotify-tools procps psmisc net-tools shadow transmission-daemon aria2 qbittorrent-nox
+# Đã lược bỏ inotify-tools và openssl vì không dùng sync nữa
+RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow transmission-daemon aria2 qbittorrent-nox
 
 RUN mkdir -p /opt/openlist/sys1 /opt/openlist/sys3 /data && \
     chown -R openlist:openlist /opt/openlist /data
@@ -35,7 +35,13 @@ RUN cat << 'EOF' > /entrypoint.sh
 
 umask 022
 
-mkdir -p /data/watch /data/downloads /opt/openlist/data /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
+# Khởi tạo các cấu trúc thư mục tải về và cấu hình cần thiết
+mkdir -p /data/watch /data/downloads /data/openlist_data /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
+
+# Đồng bộ dữ liệu gốc chưa mã hóa thẳng vào /data bằng symlink
+rm -rf /opt/openlist/data
+ln -s /data/openlist_data /opt/openlist/data
+
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
@@ -45,7 +51,7 @@ if [ "$RUN_ARIA2" = "true" ]; then
     echo "[AIO] khoi hanh Aria2..."
     mkdir -p /tmp/.config/aria2
     [ ! -f /tmp/.config/aria2/aria2.session ] && touch /tmp/.config/aria2/aria2.session
-    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session --all-proxy="http://127.0.0.1:4001" >/dev/null 2>&1 &
+    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data/downloads --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session --all-proxy="http://127.0.0.1:4001" >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_QBITTORRENT" = "true" ]; then
@@ -82,7 +88,6 @@ fi
 echo "[CLOUDFLARE WARP] Bat dau setup mang..."
 mkdir -p /tmp/warp_temp && cd /tmp/warp_temp
 
-# Khởi tạo cấu hình và chạy Cloudflare Warp Proxy trực tiếp tại port 4001 thay thế wireproxy
 HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" http_proxy="" https_proxy="" all_proxy="" /opt/openlist/sys1/srv_w generate >/dev/null 2>&1
 /opt/openlist/sys1/srv_w run --http-addr 127.0.0.1:4001 --data-dir /tmp/warp_temp >/dev/null 2>&1 &
 
@@ -98,10 +103,7 @@ done
 cd /opt/openlist
 CONFIG_FILE="/opt/openlist/data/config.json"
 
-if [ -f "$BACKUP_DIR/$BACKUP_FILENAME" ]; then
-    echo "[RESTORE] Thuc hien giai nen phuc hoi..."
-    openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_DIR/$BACKUP_FILENAME" | tar -xz -C / 2>/dev/null && echo "[RESTORE] Xong!"
-fi
+# Đã loại bỏ hoàn toàn đoạn [RESTORE] giải nén openssl cũ ở đây
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "[CONFIG] Khong tim thay config.json. Dang tu tao cau hinh mac dinh..."
@@ -135,28 +137,7 @@ if [ -f "$CONFIG_FILE" ]; then
     fi
 fi
 
-(
-    while true; do
-        inotifywait -r -e modify -e create -e delete -e move --exclude "(\.cache|.*\.log|.*\.pid)" /opt/openlist/data 2>/dev/null || true
-        echo "[INOTIFY] Co bien dong du lieu! Delay 5 phut..."
-        sleep 300
-        if netstat -an | grep -q "7860.*LISTEN"; then
-            echo "[BACKUP] Dang ma hoa sao luu..."
-            mkdir -p "$BACKUP_DIR"
-            if tar -cz -C / --exclude="opt/openlist/data/cache" --exclude="*.log" --exclude="*.pid" opt/openlist/data 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "/tmp/temp_openlist.enc"; then
-                if mv "/tmp/temp_openlist.enc" "$BACKUP_DIR/$BACKUP_FILENAME"; then
-                    echo "[BACKUP] Thanh cong!"
-                else
-                    echo "[BACKUP] That bai: Khong the di chuyen file vao /data!"
-                fi
-            else
-                echo "[BACKUP] That bai: Loi ma hoa!"
-            fi
-        else
-            echo "[BACKUP] Huy bo vi openlist chua bat hoac hoat dong khong on dinh."
-        fi
-    done
-) &
+# Đã loại bỏ hoàn toàn tiến trình chạy ngầm inotifywait / BACKUP ở đây
 
 export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
 
@@ -177,6 +158,7 @@ EOF
 
 RUN chmod +x /entrypoint.sh
 
+# Lược bỏ các biến môi trường không dùng đến (BACKUP_PASS, BACKUP_FILENAME, v.v.)
 ENV PORT=7860 \
     RUN_ARIA2=true \
     RUN_QBITTORRENT=true \
@@ -184,9 +166,6 @@ ENV PORT=7860 \
     HOME=/tmp \
     XDG_CONFIG_HOME=/tmp/.config \
     XDG_DATA_HOME=/tmp/.local \
-    BACKUP_DIR="/data" \
-    BACKUP_FILENAME="openlist_backup.enc" \
-    BACKUP_PASS="123456" \
     NO_PROXY="localhost,127.0.0.1" \
     PYTHONUNBUFFERED=1 \
     TUNNEL_TOKEN="" \
