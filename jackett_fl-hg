@@ -1,35 +1,36 @@
+# ── STAGE 1: Tải Jackett và Warp (Sử dụng Alpine siêu nhẹ) ───────────────────
 FROM alpine:latest AS fetcher
-
 RUN apk add --no-cache curl jq tar ca-certificates unzip
-
 WORKDIR /downloads
 
-# 1. Tải Jackett Core Engine
-RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
+# 1. Tải Jackett Core Engine (Mã hóa API + Link tải)
+RUN api_jackett=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
+    v_core=$(curl -s "$api_jackett" | jq -r .tag_name) && \
     mkdir -p /downloads/sys_net && \
-    curl -sSL "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
+    dl_jackett=$(echo "aHR0cHM6Ly9naXRodWIuY29tL0phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d) && \
+    curl -sSL "${dl_jackett}${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
     mv /downloads/sys_net/jackett /downloads/sys_net/srv_core
 
-# 2. Tải FlareSolverr-RS Prebuilt Binary
-RUN api_url=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
-    dl_url=$(curl -s "$api_url" | jq -r '.assets[] | select(.name == "flaresolverr-rs-linux-amd64") | .browser_download_url') && \
+# 2. Tải FlareSolverr-RS Prebuilt Binary (Mã hóa API)
+RUN api_solver=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9lYmVuMC9mbGFyZXNvbHZlcnItcnMvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
+    dl_url=$(curl -s "$api_solver" | jq -r '.assets[] | select(.name == "flaresolverr-rs-linux-amd64") | .browser_download_url') && \
     curl -sSL -o /downloads/flaresolverr-rs-bin "$dl_url" && \
     chmod +x /downloads/flaresolverr-rs-bin
 
-# 3. Tải công cụ cloudflare-warp
-RUN WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
-    curl -sSL -o /downloads/warp.zip "$WARP_ZIP_URL" && \
+# 3. Tải công cụ cloudflare-warp (Mã hóa link zip trực tiếp)
+RUN dl_warp=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
+    curl -sSL -o /downloads/warp.zip "$dl_warp" && \
     unzip /downloads/warp.zip -d /downloads/ && \
     mv /downloads/warp-linux-amd64 /downloads/warp && \
     chmod +x /downloads/warp && \
     rm -f /downloads/warp.zip
 
 
+# ── STAGE 2: Runtime hoàn chỉnh sử dụng Debian Bookworm Slim ────────────────
 FROM debian:bookworm-slim
-
 USER root
 
-# BÊ NGUYÊN XI PHẦN CÀI ĐẶT CỦA TÁC GIẢ: Đầy đủ Chrome shared-library deps + Google Chrome Stable chính chủ
+# Cài đặt Google Chrome Stable chính chủ
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         wget gnupg ca-certificates libssl3 gosu tini procps psmisc bash libicu-dev \
         fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
@@ -43,83 +44,73 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# 🛠️ WRAPPER CHỐT HẠ: Ép Google Chrome luôn chạy với các flag sinh tồn trên Hugging Face (--no-sandbox, --single-process)
-RUN binpath="/usr/bin/google-chrome-stable"; \
-    mv "$binpath" "$binpath.real" && \
-    echo '#!/bin/sh' > "$binpath" && \
-    echo 'exec "'"$binpath"'.real" --no-sandbox --disable-setuid-sandbox --disable-gpu --disable-dev-shm-usage --single-process "$@"' >> "$binpath" && \
-    chmod +x "$binpath"
+# Shortcut điều hướng Chrome chạy không Sandbox trên Hugging Face Space
+RUN echo '#!/bin/sh' > /usr/local/bin/chrome-hf && \
+    echo 'exec /usr/bin/google-chrome-stable --no-sandbox --disable-setuid-sandbox --disable-gpu --disable-dev-shm-usage "$@"' >> /usr/local/bin/chrome-hf && \
+    chmod +x /usr/local/bin/chrome-hf
 
 WORKDIR /app
-
 COPY --from=fetcher /downloads/flaresolverr-rs-bin ./flaresolverr-rs
-
-# Tạo cấu hình config.toml chuẩn như file gốc yêu cầu
-RUN echo 'host            = "127.0.0.1"\nport            = 8191\nlog_level       = "info"\nheadless        = false\nvirtual_display = true\nmax_timeout_ms  = 120000\ncontext_limit   = 20' > config.toml
-
 COPY --from=fetcher /downloads/sys_net /opt/sys_net
 COPY --from=fetcher /downloads/warp /usr/local/bin/warp
 
+# Cấu hình biến môi trường cố định cho hệ thống
 ENV PORT=7860
 ENV HOST=127.0.0.1
+ENV CHROME_BIN="/usr/local/bin/chrome-hf"
 
+# Cấu hình FlareSolverr-RS gốc
 ENV FLARESOLVERR_HOST="127.0.0.1"
 ENV FLARESOLVERR_PORT=8191
 ENV FLARESOLVERR_LOG_LEVEL="info"
 ENV FLARESOLVERR_HEADLESS=false
 ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
 
-RUN getent group sys_runner || groupadd -r sys_runner && \
-    getent passwd sys_runner || useradd -r -g sys_runner -d /opt/sys_net -s /sbin/nologin sys_runner
+# Định tuyến Proxy chuẩn xác và miễn trừ cổng nội bộ (Né lỗi Timeout)
+ENV PROXY_SERVER="http://127.0.0.1:4000"
+ENV all_proxy="http://127.0.0.1:4000"
+ENV no_proxy="localhost,127.0.0.1,::1"
+ENV NO_PROXY="localhost,127.0.0.1,::1"
 
-RUN mkdir -p /data/Jackett /opt/app_runtime /app /tmp/warp_data \
-    && chown -R sys_runner:sys_runner /opt/sys_net /data
+RUN groupadd -r sys_runner && useradd -r -g sys_runner -d /opt/sys_net -s /sbin/nologin sys_runner
+RUN mkdir -p /data/Jackett /opt/app_runtime /tmp/warp_data && chown -R sys_runner:sys_runner /opt/sys_net /data
 
 WORKDIR /opt/app_runtime
 
+# ── SCRIPT ENTRYPOINT KHỞI CHẠY ───────────────────────────────────────────
 RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
 #!/bin/bash
-
 WARP_DIR="/tmp/warp_data"
-
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
 cleanup() {
     trap - TERM INT QUIT
-    log "!!! [SHUTDOWN] Dang dung container an toan... !!!"
     kill -TERM "$JACKETT_PID" 2>/dev/null || true
     kill -TERM "$RS_SOLVER_PID" 2>/dev/null || true
-    wait "$JACKETT_PID" 2>/dev/null || true
     exit 0
 }
-
 trap 'cleanup' TERM INT QUIT
 
-# --- KHỞI CHẠY HTTP PROXY CLOUDFLARE WARP ---
+# 1. Khởi chạy Cloudflare Warp Proxy
 log "--- [WARP] Preparing Cloudflare Warp configuration... ---"
 killall warp 2>/dev/null || true
 mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
-
 if [ ! -f "$WARP_DIR/reg.json" ]; then
-    log "--- [WARP] Registering new identity profile... ---"
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
 fi
-
 log "--- [WARP] Starting HTTP Proxy Router at port 4000... ---"
 HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4000 >/dev/null 2>&1 &
 sleep 5
 
-export PROXY_URL="http://127.0.0.1:4000"
-
+# 2. Khởi chạy FlareSolverr-RS
 log "=== Starting Engine 1 (FlareSolverr-RS) ==="
 cd /app
-# Chạy FlareSolverr với tư cách root để nó tự kích hoạt Xvfb (virtual_display = true) mượt mà
-PROXY_SERVER="http://127.0.0.1:4000" ./flaresolverr-rs &
+./flaresolverr-rs &
 RS_SOLVER_PID=$!
 sleep 5
 
+# 3. Đồng bộ hóa cấu hình kết nối Jackett và FlareSolverr
 if [ ! -f "/data/Jackett/ServerConfig.json" ]; then
-    log "--- [CONFIG] ServerConfig.json not found. Generating default... ---"
     mkdir -p /data/Jackett
     cat <<JEOF > /data/Jackett/ServerConfig.json
 {
@@ -134,15 +125,13 @@ if [ ! -f "/data/Jackett/ServerConfig.json" ]; then
 }
 JEOF
 fi
-
 chown -R sys_runner:sys_runner /data 2>/dev/null || true
 
+# 4. Khởi chạy Jackett Engine
 log "=== Starting Engine 2 (Jackett Core) ==="
 exec gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /data/Jackett
 EOF
 
 RUN chmod +x /opt/app_runtime/entrypoint.sh
-
 EXPOSE 7860
-
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/app_runtime/entrypoint.sh"]
