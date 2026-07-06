@@ -19,7 +19,6 @@ FROM ghcr.io/zmabin/openlist-chunk:latest
 
 USER root
 
-# Đã lược bỏ inotify-tools và openssl vì không dùng sync nữa
 RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow transmission-daemon aria2 qbittorrent-nox
 
 RUN mkdir -p /opt/openlist/sys1 /opt/openlist/sys3 /data && \
@@ -32,21 +31,19 @@ COPY --from=fetcher --chown=openlist:openlist /downloads/srv_b /opt/openlist/sys
 
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/bash
+set -e
 
 umask 022
 
-# Khởi tạo các cấu trúc thư mục tải về và cấu hình cần thiết
-mkdir -p /data/watch /data/downloads /data/openlist_data /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
-
-# Đồng bộ dữ liệu gốc chưa mã hóa thẳng vào /data bằng symlink
-rm -rf /opt/openlist/data
-ln -s /data/openlist_data /opt/openlist/data
+# 1. Khởi tạo cấu trúc các thư mục lưu trữ trực tiếp trên gốc /data
+mkdir -p /data/watch /data/downloads /data/log /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
 
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
 chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
 
+# 2. Khởi chạy các dịch vụ tải xuống phụ trợ
 if [ "$RUN_ARIA2" = "true" ]; then
     echo "[AIO] khoi hanh Aria2..."
     mkdir -p /tmp/.config/aria2
@@ -100,14 +97,15 @@ for i in {1..30}; do
     sleep 1
 done
 
-cd /opt/openlist
-CONFIG_FILE="/opt/openlist/data/config.json"
+# === ĐOẠN XỬ LÝ NATIVE THEO ĐÚNG CƠ CHẾ OPENLIST ===
+# Di chuyển không gian làm việc chính vào hẳn thư mục /data
+cd /data
 
-# Đã loại bỏ hoàn toàn đoạn [RESTORE] giải nén openssl cũ ở đây
+CONFIG_FILE="/data/config.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "[CONFIG] Khong tim thay config.json. Dang tu tao cau hinh mac dinh..."
-    /opt/openlist/openlist server --no-prefix &
+    echo "[CONFIG] Khong tim thay config.json tren /data. Dang tu tao cau hinh mac dinh..."
+    /opt/openlist/openlist server --no-prefix --config /data/config.json --data /data &
     PID_TEMP=$!
     sleep 3
     kill $PID_TEMP 2>/dev/null || true
@@ -119,25 +117,19 @@ if [ -f "$CONFIG_FILE" ]; then
     sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
     sed -i 's|"proxy_address": ""|"proxy_address": "http://127.0.0.1:4001"|g' "$CONFIG_FILE"
     
-    if [ -n "$SITE_URL" ]; then
-        sed -i "s|\"site_url\": \"\"|\"site_url\": \"$SITE_URL\"|g" "$CONFIG_FILE"
-    fi
-    if [ -n "$JWT_SECRET" ]; then
-        sed -i "s|\"jwt_secret\": \"random_generated\"|\"jwt_secret\": \"$JWT_SECRET\"|g" "$CONFIG_FILE"
-    fi
-    if [ -n "$MEILI_HOST" ]; then
-        sed -i "s|\"host\": \"http://localhost:7700\"|\"host\": \"$MEILI_HOST\"|g" "$CONFIG_FILE"
-    fi
-    if [ -n "$MEILI_KEY" ]; then
-        sed -i "s|\"api_key\": \"\"|\"api_key\": \"$MEILI_KEY\"|g" "$CONFIG_FILE"
-    fi
+    # Ép đường dẫn Database và Log tương đối thành Tuyệt Đối trỏ thẳng vào /data
+    sed -i 's|"database": "data/data.db"|"database": "/data/data.db"|g' "$CONFIG_FILE"
+    sed -i 's|"log_dir": "data/log"|"log_dir": "/data/log"|g' "$CONFIG_FILE"
+    
+    if [ -n "$SITE_URL" ]; then sed -i "s|\"site_url\": \"\"|\"site_url\": \"$SITE_URL\"|g" "$CONFIG_FILE"; fi
+    if [ -n "$JWT_SECRET" ]; then sed -i "s|\"jwt_secret\": \"random_generated\"|\"jwt_secret\": \"$JWT_SECRET\"|g" "$CONFIG_FILE"; fi
+    if [ -n "$MEILI_HOST" ]; then sed -i "s|\"host\": \"http://localhost:7700\"|\"host\": \"$MEILI_HOST\"|g" "$CONFIG_FILE"; fi
+    if [ -n "$MEILI_KEY" ]; then sed -i "s|\"api_key\": \"\"|\"api_key\": \"$MEILI_KEY\"|g" "$CONFIG_FILE"; fi
     if [ -n "$MEILI_INDEX" ]; then
         sed -i "s|\"index\": \"openlist\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
         sed -i "s|\"index\": \"\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
     fi
 fi
-
-# Đã loại bỏ hoàn toàn tiến trình chạy ngầm inotifywait / BACKUP ở đây
 
 export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
 
@@ -152,20 +144,19 @@ if [ "$RUN_QBITTORRENT" = "true" ]; then
     done
 fi
 
-echo "[MAIN] Khoi dong OpenList Chunk chinh thuc tren port 7860..."
-exec /opt/openlist/openlist server --no-prefix
+echo "[MAIN] Khoi dong OpenList Chunk chinh thuc tu WORKDIR=/data..."
+exec /opt/openlist/openlist server --no-prefix --config /data/config.json --data /data
 EOF
 
 RUN chmod +x /entrypoint.sh
 
-# Lược bỏ các biến môi trường không dùng đến (BACKUP_PASS, BACKUP_FILENAME, v.v.)
 ENV PORT=7860 \
     RUN_ARIA2=true \
     RUN_QBITTORRENT=true \
     RUN_TRANSMISSION=true \
-    HOME=/tmp \
-    XDG_CONFIG_HOME=/tmp/.config \
-    XDG_DATA_HOME=/tmp/.local \
+    HOME=/data \
+    XDG_CONFIG_HOME=/data/.config \
+    XDG_DATA_HOME=/data/.local \
     NO_PROXY="localhost,127.0.0.1" \
     PYTHONUNBUFFERED=1 \
     TUNNEL_TOKEN="" \
