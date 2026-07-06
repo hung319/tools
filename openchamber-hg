@@ -5,7 +5,7 @@ USER root
 # Cài đặt các gói phụ trợ hệ thống trên nền Debian 13
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
-        make g++ python3 tar openssl findutils gnupg inotify-tools lsof \
+        make g++ python3 tar openssl findutils gnupg lsof \
     && curl -fsSL $(echo "aHR0cHM6Ly9idW4uc2gvaW5zdGFsbA==" | base64 -d) | BUN_INSTALL=/usr bash \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -27,9 +27,6 @@ ENV BUN_INSTALL="/usr" \
     PATH="/usr/bin:/usr/local/bin:${PATH}" \
     OPENCHAMBER_PORT=7860 \
     OPENCHAMBER_HOST=0.0.0.0 \
-    BACKUP_DIR="/data" \
-    BACKUP_FILENAME="openchamber_backup.enc" \
-    BACKUP_PASS="123456" \
     NODE_ENV=production \
     PYTHONUNBUFFERED=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
@@ -48,128 +45,41 @@ RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" npm install -g opencode-ai@latest 
 
 WORKDIR /root
 
-RUN mkdir -p /root/.config/openchamber /data /tmp/warp_data && chmod -R 777 /root /data
+# Tạo trước cả 2 thư mục cấu hình cho openchamber và opencode, sau đó xả quyền 777
+RUN mkdir -p /root/.config/openchamber /root/.config/opencode /tmp/warp_data && chmod -R 777 /root
 
-RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
+# ── SCRIPT ENTRYPOINT TINH GỌN ───────────────────────────────────────────
+RUN cat << 'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
-set +e
-
-BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
-TEMP_PATH="/tmp/temp_chamber.enc"
 WARP_DIR="/tmp/warp_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-is_app_alive() {
-    if pgrep -f "openchamber" >/dev/null 2>&1 || lsof -i :"${OPENCHAMBER_PORT}" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
+# 1. Khởi chạy Cloudflare Warp Proxy
+log "--- [WARP] Dang khoi tao va cau hinh dinh tuyen Cloudflare Warp... ---"
+killall warp 2>/dev/null || true
+mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
-start_warp_proxy() {
-    log "--- [WARP] Dang khoi tao va cau hinh dinh tuyen Cloudflare Warp... ---"
-    killall warp 2>/dev/null || true
-    mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
-    
-    if [ ! -f "$WARP_DIR/reg.json" ]; then
-        log "--- [WARP] Sinh thong tin dinh danh tai khoan moi... ---"
-        HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
-    fi
+if [ ! -f "$WARP_DIR/reg.json" ]; then
+    log "--- [WARP] Sinh thong tin dinh danh tai khoan moi... ---"
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
+fi
 
-    log "--- [WARP] Dang kich hoat HTTP Proxy tai cong 4001... ---"
-    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
-    sleep 3
-    cd /root
-}
+log "--- [WARP] Dang kich hoat HTTP Proxy tai cong 4001... ---"
+HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
+sleep 5
+cd /root
 
-restore_data() {
-    if [ -f "$BACKUP_PATH" ]; then
-        log "--- [RESTORE] Tim thay ban luu. Dang giai ma va phuc hoi du lieu OpenChamber... ---"
-        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" | tar -xz -C /; then
-            rm -rf /root/.config/openchamber/pids/* 2>/dev/null || true
-            rm -rf /root/.local/share/openchamber/*.pid 2>/dev/null || true
-            fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
-            log "--- [RESTORE] Phuc hoi toan bo cau hinh thanh cong! ---"
-        else
-            log "--- [RESTORE] Giai ma that bai ---"
-        fi
-    else
-        log "--- [RESTORE] Khong tim thay ban luu cu tai $BACKUP_PATH. Chay moi truong moi. ---"
-    fi
-}
-
-backup_data() {
-    if [ ! "$(ls -A /root 2>/dev/null)" ]; then return; fi
-
-    log "--- [BACKUP] Kich hoat tien trinh nen va ma hoa du lieu... ---"
-    mkdir -p "$BACKUP_DIR"
-    if tar -cz -C / \
-        --exclude='root/.cache' \
-        --exclude='root/.npm' \
-        --exclude='root/.uv' \
-        --exclude='*.log' \
-        --exclude='*.pid' \
-        --exclude='root/.config/openchamber/pids' \
-        root 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH"; then
-        
-        mv "$TEMP_PATH" "$BACKUP_PATH"
-        log "--- [BACKUP] Da ghi de cap nhat ban luu ma hoa thanh cong! ---"
-    else
-        rm -f "$TEMP_PATH"
-        log "--- [BACKUP] That bai trong qua trinh dong goi ---"
-    fi
-}
-
-cleanup() {
-    if is_app_alive; then
-        log "!!! [STOP] Dang thuc hien sao luu khan cap truoc khi tat may... !!!"
-        backup_data
-    else
-        log "!!! [STOP] Ung dung da bi sap (crash) hoang chua khoi tao. HUY BO sao luu de bao ve du lieu !!!"
-    fi
-    exit 0
-}
-
-trap cleanup SIGTERM SIGINT
-
-start_warp_proxy
-restore_data
-
-(
-    while true; do
-        inotifywait -r -e modify -e create -e delete -e move \
-            --exclude '(\.cache|\.npm|\.uv|\.pid|pids|.*\.log)' \
-            /root 2>/dev/null
-
-        log "--- [INOTIFY] Phat hien he thong co tep tin vua thay doi! ---"
-        log "--- [INOTIFY] Bat dau dem nguoc 5 phut (Debounce) truoc khi cap nhat file luu... ---"
-        
-        sleep 300
-        
-        if is_app_alive; then
-            backup_data
-        else
-            log "--- [INOTIFY] Phat hien ung dung da crash, huy bo chu ky sao luu nay ---"
-        fi
-    done
-) &
-
+# Giải phóng cổng (nếu có tiến trình rác chiếm dụng trước đó)
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
-openchamber serve \
+# 2. Khởi chạy ứng dụng chính (Chạy bằng lệnh exec để đưa OpenChamber làm PID 1 thay thế shell)
+log "=== Dang khoi dong OpenChamber vung foreground... ==="
+exec openchamber serve \
     --port "${OPENCHAMBER_PORT}" \
     --host "${OPENCHAMBER_HOST}" \
     --foreground \
-    ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"} &
-
-sleep 5
-while is_app_alive; do
-    sleep 5
-done
-
-log "--- [EXIT] Ung dung OpenChamber da tat chu dong ---"
+    ${OPENCHAMBER_UI_PASSWORD:+--ui-password "$OPENCHAMBER_UI_PASSWORD"}
 EOF
 
 RUN chmod +x /usr/local/bin/entrypoint.sh
