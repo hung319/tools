@@ -9,21 +9,19 @@ RUN ZORAXY_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy90b2J5Y2h1aS96b3Jhe
     curl -L "$ZORAXY_URL" -o z_bin && \
     chmod +x z_bin
 
-RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZGY0" | base64 -d) && \
     curl -L "$CF_URL" -o c_bin && \
     chmod +x c_bin
 
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates tini openssl findutils tar procps && rm -rf /var/lib/apt/lists/*
+# Loại bỏ các gói phục vụ backup cũ như openssl, findutils, tar để giảm dung lượng image
+RUN apt-get update && apt-get install -y ca-certificates tini && rm -rf /var/lib/apt/lists/*
 
-ENV PORT=7860 \
-    BACKUP_DIR="/data" \
-    BACKUP_FILENAME="zoraxy_backup.enc" \
-    BACKUP_PASS="123456"
+ENV PORT=7860
 
-RUN mkdir -p /app/sys1 /app/sys2 /app/data /data && chown -R 1000:1000 /app /data
-WORKDIR /app
+# Tạo cấu trúc thư mục rõ ràng: /app chứa binaries, /data chứa dữ liệu chạy
+RUN mkdir -p /app/sys1 /app/sys2 /data && chown -R 1000:1000 /app /data
 
 COPY --from=fetcher --chown=1000:1000 /downloads/z_bin /app/sys1/srv_a
 COPY --from=fetcher --chown=1000:1000 /downloads/c_bin /app/sys2/srv_b
@@ -32,50 +30,11 @@ RUN cat <<'EOF' > /app/entrypoint.sh
 #!/bin/bash
 set -e
 
-BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
-TEMP_FILE="/tmp/temp_backup.enc"
-
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
-
-restore_data() {
-    log "--- [RESTORE] Kiểm tra bản lưu tại $BACKUP_FILE ---"
-    if [ -f "$BACKUP_FILE" ]; then
-        log "--- [RESTORE] Đang giải mã và phục hồi cấu hình Zoraxy... ---"
-        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -C /; then
-            log "--- [RESTORE] THÀNH CÔNG! ---"
-        else
-            log "--- [RESTORE] LỖI: Không thể giải mã hoặc giải nén dữ liệu cũ. ---"
-        fi
-    else
-        log "--- [RESTORE] Không tìm thấy dữ liệu cũ. Khởi tạo phiên làm việc mới. ---"
-    fi
-}
-
-backup_data() {
-    if [ ! -f "/app/sys.db" ] && [ ! -d "/app/data" ] && [ ! -f "/app/zoraxy.db" ]; then return; fi
-
-    if [ -f "$BACKUP_FILE" ]; then
-        CHANGED_FILES=$(find /app -type f -not -path "/app/sys1/*" -not -path "/app/sys2/*" -not -name "entrypoint.sh" -not -name "*.log" -newer "$BACKUP_FILE" -print -quit 2>/dev/null || true)
-        if [ -z "$CHANGED_FILES" ]; then return; fi
-    fi
-
-    log "--- [BACKUP] Phát hiện thay đổi cấu hình! Đang tiến hành đóng gói... ---"
-    
-    if tar -cz -C / --exclude='app/sys1' --exclude='app/sys2' --exclude='app/entrypoint.sh' --exclude='*.log' app | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
-        mkdir -p "$BACKUP_DIR"
-        mv "$TEMP_FILE" "$BACKUP_FILE"
-        log "--- [BACKUP] HOÀN TẤT SAO LƯU: $BACKUP_FILENAME ---"
-    else
-        log "--- [BACKUP] LỖI: Mã hóa hoặc đóng gói thất bại! ---"
-        rm -f "$TEMP_FILE"
-    fi
-}
 
 cleanup() {
     trap - TERM INT QUIT
-    log "!!! [SHUTDOWN] Đang tiến hành sao lưu cấu hình an toàn lần cuối... !!!"
-    kill $WATCHER_PID 2>/dev/null || true
-    backup_data
+    log "!!! [SHUTDOWN] Đang dừng các dịch vụ an toàn... !!!"
     kill -TERM "$APP_PID" "$TUNNEL_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
     exit 0
@@ -83,34 +42,26 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-mkdir -p /app/data "$BACKUP_DIR"
-
-restore_data
-backup_data
-
-(
-    while true; do
-        sleep 60
-        backup_data
-    done
-) &
-WATCHER_PID=$!
-
+# Khởi động Cloudflared Tunnel nếu có Token
 if [ ! -z "$TUNNEL_TOKEN" ]; then
     log "Khởi động Cloudflared Tunnel..."
     /app/sys2/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
     TUNNEL_PID=$!
 fi
 
-log "Khởi động Zoraxy trên Port: ${PORT}..."
+log "Khởi động Zoraxy trực tiếp tại thư mục /data (Port: ${PORT})..."
+# Di chuyển vào /data để mọi file cấu hình, db của Zoraxy tự sinh ra tại đây
+cd /data
 /app/sys1/srv_a -port=:"${PORT}" -docker &
 APP_PID=$!
 
 wait "$APP_PID" || true
 EOF
 
-RUN chmod +x /app/entrypoint.sh && chown -R 1000:1000 /app /data
+RUN chmod +x /app/entrypoint.sh && chown 1000:1000 /app/entrypoint.sh
 
+# Đặt hẳn WORKDIR tại /data để nhất quán
+WORKDIR /data
 USER 1000
 
 EXPOSE 7860
