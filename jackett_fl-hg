@@ -4,7 +4,7 @@ RUN apk add --no-cache curl jq tar ca-certificates unzip
 
 WORKDIR /downloads
 
-# 1. Tải Jackett Core Engine (Đã fix chuỗi base64 chuẩn)
+# 1. Tải Jackett Core Engine
 RUN v_core=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) | jq -r .tag_name) && \
     mkdir -p /downloads/sys_net && \
     curl -sSL "$(echo "aHR0cHM6Ly9naXRodWIuY29tL2phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d)${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
@@ -25,107 +25,68 @@ RUN WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2F
     rm -f /downloads/warp.zip
 
 
-FROM debian:stable-slim
+FROM debian:bookworm-slim
 
 USER root
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget ca-certificates libssl3 curl jq tar findutils procps tini gosu \
-    chromium xvfb inotify-tools bash libicu-dev psmisc rsync \
+# BÊ NGUYÊN XI PHẦN CÀI ĐẶT CỦA TÁC GIẢ: Đầy đủ Chrome shared-library deps + Google Chrome Stable chính chủ
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+        wget gnupg ca-certificates libssl3 gosu tini procps psmisc bash libicu-dev \
+        fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+        libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+        libxrandr2 libgbm1 libasound2 xvfb \
+    && wget -qO- https://dl.google.com/linux/linux_signing_key.pub \
+       | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
+       http://dl.google.com/linux/chrome/deb/ stable main" \
+       > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
+
+# 🛠️ WRAPPER CHỐT HẠ: Ép Google Chrome luôn chạy với các flag sinh tồn trên Hugging Face (--no-sandbox, --single-process)
+RUN binpath="/usr/bin/google-chrome-stable"; \
+    mv "$binpath" "$binpath.real" && \
+    echo '#!/bin/sh' > "$binpath" && \
+    echo 'exec "'"$binpath"'.real" --no-sandbox --disable-setuid-sandbox --disable-gpu --disable-dev-shm-usage --single-process "$@"' >> "$binpath" && \
+    chmod +x "$binpath"
 
 WORKDIR /app
 
 COPY --from=fetcher /downloads/flaresolverr-rs-bin ./flaresolverr-rs
 
-RUN echo 'host            = "127.0.0.1"' > config.toml && \
-    echo 'port            = 8191' >> config.toml && \
-    echo 'log_level       = "info"' >> config.toml && \
-    echo 'headless        = false' >> config.toml && \
-    echo 'virtual_display = true' >> config.toml && \
-    echo 'max_timeout_ms  = 120000' >> config.toml && \
-    echo 'context_limit   = 20' >> config.toml
+# Tạo cấu hình config.toml chuẩn như file gốc yêu cầu
+RUN echo 'host            = "127.0.0.1"\nport            = 8191\nlog_level       = "info"\nheadless        = false\nvirtual_display = true\nmax_timeout_ms  = 120000\ncontext_limit   = 20' > config.toml
 
 COPY --from=fetcher /downloads/sys_net /opt/sys_net
 COPY --from=fetcher /downloads/warp /usr/local/bin/warp
 
 ENV PORT=7860
-# Gộp gọn lại thành 1 biến duy nhất chỉ định thư mục đồng bộ thẳng trên Volume map
-ENV BACKUP_DIR="/data/jackett_backup_data" 
 ENV HOST=127.0.0.1
 
 ENV FLARESOLVERR_HOST="127.0.0.1"
 ENV FLARESOLVERR_PORT=8191
+ENV FLARESOLVERR_LOG_LEVEL="info"
 ENV FLARESOLVERR_HEADLESS=false
 ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
 
 RUN getent group sys_runner || groupadd -r sys_runner && \
     getent passwd sys_runner || useradd -r -g sys_runner -d /opt/sys_net -s /sbin/nologin sys_runner
 
-RUN mkdir -p /opt/sys_net/.config/Jackett /data /opt/app_runtime /app /tmp/warp_data \
-    && chown -R sys_runner:sys_runner /opt/sys_net /data /opt/app_runtime /app
+RUN mkdir -p /data/Jackett /opt/app_runtime /app /tmp/warp_data \
+    && chown -R sys_runner:sys_runner /opt/sys_net /data
 
 WORKDIR /opt/app_runtime
 
 RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
 #!/bin/bash
 
-CONFIG_DIR="/opt/sys_net/.config"
 WARP_DIR="/tmp/warp_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-healthcheck_app() {
-    local jackett_status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:7860/UI/Dashboard 2>/dev/null || echo "000")
-    if [[ "$jackett_status" =~ ^(200|302)$ ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-restore_data() {
-    # Khôi phục dữ liệu trực tiếp bằng cách dùng biến BACKUP_DIR mới gộp
-    if [ -d "$BACKUP_DIR" ] && [ "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
-        log "--- [RESTORE] Tìm thấy dữ liệu đồng bộ phẳng. Tiến hành rsync phục hồi... ---"
-        rsync -a --delete "$BACKUP_DIR/" "$CONFIG_DIR/"
-        chown -R sys_runner:sys_runner "$CONFIG_DIR" || true
-        log "--- [RESTORE] Khôi phục dữ liệu phẳng thành công. ---"
-    else
-        log "--- [RESTORE] Không tìm thấy dữ liệu cũ tại $BACKUP_DIR. Khởi chạy mới. ---"
-    fi
-}
-
-backup_data() {
-    if [ ! "$(ls -A "$CONFIG_DIR" 2>/dev/null)" ]; then 
-        return
-    fi
-    
-    log "--- [BACKUP] Phát hiện thay đổi cấu hình! Tiến hành rsync đồng bộ phẳng... ---"
-    mkdir -p "$BACKUP_DIR"
-    
-    # rsync trực tiếp sang BACKUP_DIR gọn gàng
-    rsync -a --delete --exclude='*.log' "$CONFIG_DIR/" "$BACKUP_DIR/"
-    
-    if [ $? -eq 0 ]; then
-        chown -R sys_runner:sys_runner "$BACKUP_DIR" || true
-        log "--- [BACKUP] Đồng bộ thành công vào: $BACKUP_DIR ---"
-    else
-        log "--- [BACKUP] ERROR: Tiến trình rsync gặp lỗi. ---"
-    fi
-}
-
 cleanup() {
     trap - TERM INT QUIT
-    log "!!! [SHUTDOWN] Đang dừng container an toàn... !!!"
-    kill $WATCHER_PID 2>/dev/null || true
-    
-    if healthcheck_app; then
-        backup_data
-    else
-        log "!!! [SHUTDOWN] Cổng 7860 lỗi (Unhealthy). Hủy bỏ rsync để bảo toàn dữ liệu cũ !!!"
-    fi
-
+    log "!!! [SHUTDOWN] Dang dung container an toan... !!!"
     kill -TERM "$JACKETT_PID" 2>/dev/null || true
     kill -TERM "$RS_SOLVER_PID" 2>/dev/null || true
     wait "$JACKETT_PID" 2>/dev/null || true
@@ -148,22 +109,19 @@ log "--- [WARP] Starting HTTP Proxy Router at port 4000... ---"
 HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4000 >/dev/null 2>&1 &
 sleep 5
 
-restore_data
-
 export PROXY_URL="http://127.0.0.1:4000"
-export HOME=/opt/sys_net
-export XDG_CONFIG_HOME=/opt/sys_net/.config
 
 log "=== Starting Engine 1 (FlareSolverr-RS) ==="
 cd /app
-PROXY_SERVER="http://127.0.0.1:4000" HOME=/opt/sys_net XDG_CONFIG_HOME=/opt/sys_net/.config gosu sys_runner ./flaresolverr-rs &
+# Chạy FlareSolverr với tư cách root để nó tự kích hoạt Xvfb (virtual_display = true) mượt mà
+PROXY_SERVER="http://127.0.0.1:4000" ./flaresolverr-rs &
 RS_SOLVER_PID=$!
 sleep 5
 
-if [ ! -f "/opt/sys_net/.config/Jackett/ServerConfig.json" ]; then
+if [ ! -f "/data/Jackett/ServerConfig.json" ]; then
     log "--- [CONFIG] ServerConfig.json not found. Generating default... ---"
-    mkdir -p /opt/sys_net/.config/Jackett
-    cat <<JEOF > /opt/sys_net/.config/Jackett/ServerConfig.json
+    mkdir -p /data/Jackett
+    cat <<JEOF > /data/Jackett/ServerConfig.json
 {
   "Port": 7860,
   "AllowExternal": true,
@@ -177,36 +135,10 @@ if [ ! -f "/opt/sys_net/.config/Jackett/ServerConfig.json" ]; then
 JEOF
 fi
 
-chown -R sys_runner:sys_runner /opt/sys_net/.config
-
-# --- TIẾN TRÌNH THEO DÕI INOTIFY VỚI RSYNC TỐC ĐỘ CAO ---
-(
-    while true; do
-        inotifywait -r -e modify,create,delete,move --exclude '.*\.log' "$CONFIG_DIR" >/dev/null 2>&1
-        log "--- [WATCHER] Phát hiện thay đổi dữ liệu cấu hình! Đợi 5 phút gom cụm biến động... ---"
-        sleep 300
-        
-        if healthcheck_app; then
-            backup_data
-        else
-            log "--- [WATCHER] Bỏ qua rsync vì cổng chính 7860 đang báo lỗi (Unhealthy). ---"
-        fi
-    done
-) &
-WATCHER_PID=$!
+chown -R sys_runner:sys_runner /data 2>/dev/null || true
 
 log "=== Starting Engine 2 (Jackett Core) ==="
-gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /opt/sys_net/.config/Jackett &
-JACKETT_PID=$!
-
-sleep 5
-while kill -0 "$JACKETT_PID" 2>/dev/null; do
-    sleep 5
-done
-
-if healthcheck_app; then
-    backup_data
-fi
+exec gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /data/Jackett
 EOF
 
 RUN chmod +x /opt/app_runtime/entrypoint.sh
