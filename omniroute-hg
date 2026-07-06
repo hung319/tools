@@ -2,23 +2,28 @@ FROM ghcr.io/diegosouzapw/omniroute:latest-web
 
 USER root
 
+# 1. Cài đặt các công cụ hệ thống cần thiết cho Redis và Warp
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        tini tar openssl findutils procps inotify-tools redis-server curl jq ca-certificates netcat-openbsd \
+        tini tar openssl findutils procps redis-server curl jq ca-certificates netcat-openbsd unzip psmisc \
     && rm -rf /var/lib/apt/lists/*
 
-RUN set -e; \
-    API_WGCF=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d); \
-    API_WIREPROXY=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d); \
-    VAL_WGCF=$(curl -s "$API_WGCF" | jq -r '.assets[] | select(.name | contains("linux_amd64")) | select(.name | contains("tar.gz") | not) | .browser_download_url'); \
-    VAL_WIREPROXY=$(curl -s "$API_WIREPROXY" | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
-    curl -L -o /usr/local/bin/wgcf "$VAL_WGCF" && chmod +x /usr/local/bin/wgcf; \
-    curl -L -o /tmp/wireproxy.tar.gz "$VAL_WIREPROXY"; \
-    tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin/ wireproxy && chmod +x /usr/local/bin/wireproxy; \
-    rm -f /tmp/wireproxy.tar.gz
+# 2. Tải và cấu hình Cloudflare Warp Go Proxy (amd64)
+RUN ARCH=$(dpkg --print-architecture) \
+    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -di) \
+    && if [ "$ARCH" = "amd64" ]; then \
+         curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip \
+         && unzip /tmp/warp.zip -d /usr/local/bin/ \
+         && mv /usr/local/bin/warp-linux-amd64 /usr/local/bin/warp \
+         && rm -f /tmp/warp.zip \
+         && chmod +x /usr/local/bin/warp ; \
+       else \
+         echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
+       fi
 
+# 3. Cấu hình biến môi trường hệ thống (Tắt hẳn Live WS bằng biến môi trường của tác giả)
 ENV PORT=7860 \
     HOSTNAME=0.0.0.0 \
     REDIS_URL="redis://127.0.0.1:6379" \
@@ -28,7 +33,6 @@ ENV PORT=7860 \
     AUTH_COOKIE_SECURE=true \
     REQUIRE_API_KEY=true \
     INITIAL_PASSWORD=CHANGEME_PROD \
-    DATA_DIR=/app/data \
     OMNIROUTE_MIGRATIONS_DIR=/app/migrations \
     JWT_SECRET="huggingface_space_omniroute_secret_jwt_key_placeholder" \
     API_KEY_SECRET="huggingface_space_omniroute_secret_api_key_placeholder" \
@@ -37,15 +41,22 @@ ENV PORT=7860 \
     NEXT_PUBLIC_BASE_URL="http://localhost:7860" \
     ENABLE_HTTP_PROXY=true \
     NEXT_PUBLIC_ENABLE_HTTP_PROXY=true \
-    BACKUP_DIR=/data \
-    BACKUP_FILENAME="omniroute_backup.enc" \
-    BACKUP_PASS="MatKhauMaHoaDuLieuAnToan" \
-    WIREPROXY_HTTP_PORT=4000 \
-    OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS="true"
+    OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS="true" \
+    # Định tuyến mạng qua Warp
+    HTTP_PROXY="http://127.0.0.1:4001" \
+    HTTPS_PROXY="http://127.0.0.1:4001" \
+    ALL_PROXY="http://127.0.0.1:4001" \
+    NO_PROXY="localhost,127.0.0.1" \
+    DATA_DIR=/data \
+    # 🛑 KHÓA CHẾ ĐỘ LIVE DASHBOARD WEBSOCKET
+    OMNIROUTE_DISABLE_LIVE_WS=true \
+    LIVE_WS_PORT=20129 \
+    LIVE_WS_HOST=127.0.0.1
 
-RUN mkdir -p /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis /home/node \
-    && chown -R node:node /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis /home/node \
-    && chmod -R 777 /app/data /data /etc/wireproxy /var/run/redis /var/log/redis /var/lib/redis /home/node
+# 4. Tạo cấu trúc thư mục phân quyền sạch sẽ
+RUN mkdir -p /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node \
+    && chown -R node:node /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app \
+    && chmod -R 777 /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app
 
 RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/daemonize no/daemonize yes/' /tmp/redis.conf \
@@ -54,149 +65,73 @@ RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/pidfile .*/pidfile \/var\/run\/redis\/redis-server.pid/' /tmp/redis.conf \
     && chown node:node /tmp/redis.conf && chmod 777 /tmp/redis.conf
 
+# 5. Tạo Script Entrypoint mới tinh - ĐÃ LOẠI BỎ LIVE SOCKET
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
 set -e
 
-BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
-TEMP_FILE="/tmp/temp_omni_backup.enc"
-MOCK_DIR="/tmp/omni_snap"
-
+WARP_DIR="/tmp/warp_data"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
+# Khởi chạy Redis nội bộ
 redis-server /tmp/redis.conf
 
-if [ -f "$BACKUP_FILE" ]; then
-    if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_FILE" | tar -xz -m --no-same-owner -C /; then
-        log "--- [RESTORE] SUCCESSFUL! ---"
-    else
-        log "--- [RESTORE] ERROR: Decryption/Extraction failed. Starting fresh. ---"
-    fi
-else
-    log "--- [RESTORE] No backup file found. Starting fresh. ---"
-fi
-
-check_port() {
-    if nc -z 127.0.0.1 7860 2>/dev/null; then
-        return 0
-    else
-        return 1
-    fi
-}
-
+# Hàm cấu hình và xoay Proxy Warp
 init_or_rotate_warp() {
-    cd /etc/wireproxy
-    pkill wireproxy || true
-    rm -f wgcf-account.json wgcf-profile.conf wireproxy.conf 2>/dev/null || true
+    mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
-    export WGCF_CONFIG_DIR="/etc/wireproxy"
-    if ! wgcf register --accept-tos >/dev/null 2>&1; then
-        sleep 3
-        wgcf register --accept-tos >/dev/null 2>&1 || true
+    if [ ! -f "$WARP_DIR/reg.json" ]; then
+        log "--- [WARP] Sinh thông tin định danh tài khoản mới (Chỉ thực hiện lần đầu)... ---"
+        OLD_HTTP_PROXY="$HTTP_PROXY"
+        OLD_HTTPS_PROXY="$HTTPS_PROXY"
+        OLD_ALL_PROXY="$ALL_PROXY"
+        unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
+
+        warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
+
+        export HTTP_PROXY="$OLD_HTTP_PROXY"
+        export HTTPS_PROXY="$OLD_HTTPS_PROXY"
+        export ALL_PROXY="$OLD_ALL_PROXY"
     fi
-    wgcf generate >/dev/null 2>&1 || true
 
-    if [ -f "wgcf-profile.conf" ]; then
-        PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
-        PUB_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
-        ADDRESS_V4=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f1)
-        ADDRESS_V6=$(grep "Address" wgcf-profile.conf | cut -d' ' -f3 | cut -d',' -f2)
-        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
-
-        cat <<EOT > wireproxy.conf
-[Interface]
-PrivateKey = $PRIV_KEY
-Address = $ADDRESS_V4, $ADDRESS_V6
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $PUB_KEY
-Endpoint = $ENDPOINT
-
-[Http]
-BindAddress = 127.0.0.1:$WIREPROXY_HTTP_PORT
-EOT
-        wireproxy -c wireproxy.conf > /tmp/wireproxy.log 2>&1 &
+    if pgrep -x "warp" > /dev/null; then
+        log "--- [WARP] Đang ngắt kết nối cũ để tiến hành đổi IP Public... ---"
+        killall warp 2>/dev/null || true
         sleep 3
-        
-        CURRENT_IP=$(curl -s -x http://127.0.0.1:$WIREPROXY_HTTP_PORT $(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d) || echo "FAILED")
-        log "--- [WARP SUCCESS] HTTP Proxy Tunnel ready on port $WIREPROXY_HTTP_PORT | Public IP: $CURRENT_IP ---"
-    else
-        log "❌ [WARP ERROR] Profile generation failed. Tunnel offline!"
     fi
+
+    log "--- [WARP] Đang chạy lại dịch vụ proxy tại cổng 4001... ---"
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
+    
+    # ⏳ TĂNG THỜI GIAN CHỜ: Để Warp ổn định đường truyền trước khi nhường quyền cho OmniRoute Engine
+    sleep 10
+    
+    URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
+    CURRENT_IP=$(curl -s --max-time 10 -x http://127.0.0.1:4001 "$URL_CHECK" || echo "FAILED")
+    log "--- [WARP STATUS] Hoàn tất kết nối | IP Public hiện tại: $CURRENT_IP ---"
 }
 
 warp_scheduler_loop() {
     while true; do
-        sleep 21600
+        sleep 3600
+        log "--- [ROTATION] Đã hẹn giờ 1 tiếng, tiến hành Reconnect đổi IP... ---"
         init_or_rotate_warp
-    done
-}
-
-do_backup() {
-    log "[BACKUP-ENGINE] --- [CHECK] Đang kiểm tra cổng mạng 7860... ---"
-    if ! check_port; then
-        log "❌ [BACKUP-ENGINE] [ABORTED] Huỷ backup vì cổng 7860 chưa mở."
-        return 1
-    fi
-
-    log "[BACKUP-ENGINE] --- [START] Tiến hành nén thư mục dữ liệu... ---"
-    rm -rf "$MOCK_DIR"
-    mkdir -p "$MOCK_DIR/app"
-    cp -r /app/data "$MOCK_DIR/app/data" 2>/dev/null || true
-
-    if tar -cz --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' -C "$MOCK_DIR" app | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_FILE"; then
-        mv "$TEMP_FILE" "$BACKUP_FILE"
-        log "✅ [BACKUP-ENGINE] [SUCCESS] Đã cập nhật file backup mã hoá thành công tại $BACKUP_FILE"
-    else
-        log "❌ [BACKUP-ENGINE] [ERROR] Mã hoá openssl thất bại!"
-        rm -f "$TEMP_FILE"
-    fi
-    rm -rf "$MOCK_DIR"
-}
-
-watch_and_throttle() {
-    local DIRTY_FLAG="/tmp/.omni_dirty"
-    rm -f "$DIRTY_FLAG"
-    
-    log "[WATCHER] Khởi động inotifywait theo dõi thư mục /app/data..."
-    sleep 20
-
-    inotifywait -m -r -e modify -e move -e create -e delete \
-        --exclude "(\.sqlite-wal|\.sqlite-shm)" \
-        --format "%w%f|%e" \
-        -- \
-        /app/data 2>/dev/null | while IFS='|' read -r filepath action; do
-            if [ ! -f "$DIRTY_FLAG" ]; then
-                log "🔔 [WATCHER] Phát hiện biến động file: $filepath ($action). Thiết lập bộ đếm chờ 5 phút để tránh quá tải..."
-                touch "$DIRTY_FLAG"
-            fi
-    done &
-
-    while true; do
-        if [ -f "$DIRTY_FLAG" ]; then
-            sleep 300
-            log "[WATCHER] Hết thời gian chờ 5 phút. Tiến hành kích hoạt sao lưu dữ liệu..."
-            do_backup
-            rm -f "$DIRTY_FLAG"
-        else
-            sleep 5
-        fi
     done
 }
 
 cleanup() {
     trap - TERM INT QUIT
-    log "[SHUTDOWN] Đang tắt hệ thống! Chạy backup khẩn cấp..."
-    do_backup
+    log "[SHUTDOWN] Đang dừng hệ thống an toàn..."
+    killall warp 2>/dev/null || true
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
 
+# Thực thi proxy
 init_or_rotate_warp
 warp_scheduler_loop &
-watch_and_throttle &
 
+# Chạy ứng dụng chính ở chế độ Foreground (ĐÃ BỎ ĐOẠN START-WS-SERVER)
 log "Starting OmniRoute Engine..."
 cd /app
 exec node dev/run-standalone.mjs
@@ -208,8 +143,5 @@ RUN chmod +x /usr/local/bin/hf-entrypoint.sh \
 USER node
 EXPOSE 7860
 WORKDIR /app
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD nc -z 127.0.0.1 7860 || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
