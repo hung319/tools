@@ -6,11 +6,13 @@ WORKDIR /tmp
 
 RUN set -eux; \
     curl -fsSL $(echo "aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL3VzL2Nydy9tYWluL2luc3RhbGwuc2g=" | base64 -d) | CRW_BINARY=crw-server sh; \
-    WGCF_LATEST=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | grep "browser_download_url" | grep "linux_amd64" | head -n 1 | cut -d '"' -f 4); \
-    curl -fsSL -o /usr/local/bin/wgcf "$WGCF_LATEST"; \
-    chmod +x /usr/local/bin/wgcf; \
-    WIRE_LATEST=$(curl -s $(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d) | grep "browser_download_url" | grep "linux_amd64.tar.gz" | head -n 1 | cut -d '"' -f 4); \
-    curl -fsSL "$WIRE_LATEST" | tar -xz -C /usr/local/bin/ wireproxy
+    # Tải Cloudflare Warp Go tương tự mẫu cung cấp
+    WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d); \
+    curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip; \
+    unzip /tmp/warp.zip -d /usr/local/bin/; \
+    mv /usr/local/bin/warp-linux-amd64 /usr/local/bin/warp; \
+    rm -f /tmp/warp.zip; \
+    chmod +x /usr/local/bin/warp
 
 FROM debian:stable-slim
 
@@ -37,7 +39,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini curl ca-certificates procps python3 python3-pip python3-venv python3-yaml netcat-openbsd \
+    tini curl ca-certificates procps python3 python3-pip python3-venv python3-yaml netcat-openbsd psmisc \
     libgbm1 libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 git openssl \
     fonts-noto-color-emoji xfonts-utils fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
@@ -45,8 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=fetcher /usr/local/bin/crw-server /usr/local/bin/crw-server
-COPY --from=fetcher /usr/local/bin/wgcf /usr/local/bin/wgcf
-COPY --from=fetcher /usr/local/bin/wireproxy /usr/local/bin/wireproxy
+COPY --from=fetcher /usr/local/bin/warp /usr/local/bin/warp
 
 RUN python3 -m venv /app/venv
 ENV PATH="/app/venv/bin:${PATH}"
@@ -59,7 +60,8 @@ RUN git clone --depth 1 $(echo "aHR0cHM6Ly9naXRodWIuY29tL3NlYXJ4bmcvc2VhcnhuZy5n
     cd /usr/local/src/searxng && \
     pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p /root/.cloakbrowser/geoip /app/wg /etc/searxng
+# Tạo thư mục lưu cấu hình warp
+RUN mkdir -p /root/.cloakbrowser/geoip /etc/searxng /tmp/warp_data && chmod -R 777 /tmp/warp_data
 
 RUN cat << 'EOF' > /etc/searxng/settings.yml
 use_default_settings: true
@@ -92,7 +94,7 @@ engines:
 outgoing:
   proxies:
     all://:
-      - socks5h://127.0.0.1:4000
+      - http://127.0.0.1:4001
 EOF
 
 RUN cat << 'EOF' > /app/config.docker.toml
@@ -131,6 +133,8 @@ RUN cat << 'EOF' > /app/start.sh
 #!/bin/bash
 set -e
 
+WARP_DIR="/tmp/warp_data"
+
 echo "=== Checking Security Configuration ==="
 if [ -z "$CRW_SECRET_KEY" ]; then
     echo "NOTICE: CRW_SECRET_KEY is empty. Running in OPEN PUBLIC mode."
@@ -140,36 +144,22 @@ else
     echo -e "[auth]\napi_keys = [\"$CRW_SECRET_KEY\"]" > /app/config.local.toml
 fi
 
-cd /app/wg
-if [ ! -f wgcf-account.toml ]; then
-    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf register --accept-tos >/dev/null 2>&1
+# 1. Khởi chạy Cloudflare Warp Proxy (Bỏ hoàn toàn wgcf và wireproxy)
+echo "=== [WARP] Dang khoi tao va cau hinh dinh tuyen Cloudflare Warp... ==="
+killall warp 2>/dev/null || true
+mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
+
+if [ ! -f "$WARP_DIR/reg.json" ]; then
+    echo "=== [WARP] Sinh thong tin dinh danh tai khoan moi... ==="
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
 fi
-HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" wgcf generate >/dev/null 2>&1
 
-PRIVATE_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
-PUBLIC_KEY=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
-ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
+echo "=== [WARP] Dang kich hoat HTTP Proxy tai cong 4001... ==="
+HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
 
-cat << WPEOF > /app/wg/wireproxy.conf
-[Interface]
-PrivateKey = $PRIVATE_KEY
-Address = 10.0.0.2/32
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $PUBLIC_KEY
-Endpoint = $ENDPOINT
-
-[socks5]
-BindAddress = 127.0.0.1:4000
-WPEOF
-
-echo "=== Starting Wireproxy ==="
-wireproxy -c /app/wg/wireproxy.conf >/dev/null 2>&1 &
-
-echo "=== Waiting for Wireproxy SOCKS5 Proxy to be ready ==="
-while ! nc -z 127.0.0.1 4000; do sleep 1; done
-echo "=== Wireproxy Connection Success ==="
+echo "=== Waiting for Cloudflare Warp Proxy to be ready ==="
+while ! nc -z 127.0.0.1 4001; do sleep 1; done
+echo "=== Cloudflare Warp Connection Success ==="
 
 echo "=== Starting Local SearXNG Engine ==="
 cd /usr/local/src/searxng
@@ -204,7 +194,7 @@ echo "=== Launching CloakBrowser Binary on Port 9222 ==="
     --remote-debugging-port=9222 \
     --remote-debugging-address=127.0.0.1 \
     --remote-allow-origins=* \
-    --proxy-server="socks5://127.0.0.1:4000" \
+    --proxy-server="http://127.0.0.1:4001" \
     --fingerprint-noise=true \
     --fingerprint-platform=windows >/dev/null 2>&1 &
 
