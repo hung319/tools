@@ -4,42 +4,49 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 USER root
 
+# Cài đặt các gói hệ thống cần thiết (bao gồm unzip để giải nén warp và psmisc để dùng lệnh killall)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        tini tar openssl findutils procps inotify-tools curl jq ca-certificates \
+        tini tar openssl findutils procps inotify-tools curl jq ca-certificates unzip psmisc \
     && rm -rf /var/lib/apt/lists/*
 
-RUN set -e; \
-    API_WGCF=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9WaVJiMy93Z2NmL3JlbGVhc2VzL2xhdGVzdA==" | base64 -d); \
-    VAL_WGCF=$(curl -s "$API_WGCF" | jq -r '.assets[] | select(.name | contains("linux_amd64")) | select(.name | contains("sha256") | not) | .browser_download_url'); \
-    curl -L -o /usr/local/bin/wgcf "$VAL_WGCF" && chmod +x /usr/local/bin/wgcf; \
-    API_WIREPROXY=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy93aW5kdGYvd2lyZXByb3h5L3JlbGVhc2VzL2xhdGVzdA==" | base64 -d); \
-    VAL_WIREPROXY=$(curl -s "$API_WIREPROXY" | jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url'); \
-    curl -L -o /tmp/wireproxy.tar.gz "$VAL_WIREPROXY"; \
-    tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin/ wireproxy && chmod +x /usr/local/bin/wireproxy; \
-    rm -f /tmp/wireproxy.tar.gz
+# Tải và cấu hình Cloudflare Warp Go Proxy (Thay thế cho wgcf và wireproxy)
+RUN ARCH=$(dpkg --print-architecture) \
+    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) \
+    && if [ "$ARCH" != "amd64" ]; then \
+         echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
+       fi \
+    && curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip \
+    && unzip /tmp/warp.zip -d /usr/local/bin/ \
+    && mv /usr/local/bin/warp-linux-amd64 /usr/local/bin/warp \
+    && rm -f /tmp/warp.zip \
+    && chmod +x /usr/local/bin/warp
 
 WORKDIR /app
 
+# Khởi tạo môi trường ảo Python và cài đặt các thư viện backend
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    uv pip install "llm4free[api]" fastapi uvicorn
+    uv pip install "llm4free[api]" fastapi uvicorn httpx
 
+# Thiết lập các biến môi trường hệ thống và định tuyến Proxy qua cổng 4001 của Warp
 ENV PORT=7860 \
     PATH="/app/.venv/bin:$PATH" \
     LLM4FREE_HOST=127.0.0.1 \
     LLM4FREE_PORT=8000 \
     LLM4FREE_API_KEY="sk-my-super-secret-key-2026" \
-    WIREPROXY_HTTP_PORT=4000 \
-    HTTP_PROXY="http://127.0.0.1:4000" \
-    HTTPS_PROXY="http://127.0.0.1:4000"
+    HTTP_PROXY="http://127.0.0.1:4001" \
+    HTTPS_PROXY="http://127.0.0.1:4001" \
+    ALL_PROXY="http://127.0.0.1:4001" \
+    NO_PROXY="localhost,127.0.0.1"
 
-RUN mkdir -p /etc/wireproxy /app \
-    && chmod -R 777 /etc/wireproxy /app
+# Tạo sẵn thư mục lưu dữ liệu cấu hình cố định cho Warp để giữ lại reg.json
+RUN mkdir -p /tmp/warp_data /app && chmod -R 777 /tmp/warp_data /app
 
+# Tạo file Auth Wrapper bảo mật kết nối nội bộ
 RUN cat <<'EOF' > /app/auth_wrapper.py
 import os
 import httpx
@@ -77,71 +84,62 @@ async def proxy_gateway(path: str, request: Request, token: str = Depends(verify
         return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
 EOF
 
+# Tạo script Entrypoint điều phối: Quản lý Warp (chỉ generate 1 lần), tự xoay IP sau mỗi 1 giờ
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
 
+WARP_DIR="/tmp/warp_data"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
 init_or_rotate_warp() {
-    cd /etc/wireproxy
-    
-    pkill wireproxy || true
-    rm -f wgcf-account.toml wgcf-profile.conf wireproxy.conf 2>/dev/null || true
+    mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
-    API_ENDPOINT=$(echo "aHR0cHM6Ly9hcGkuY2xvdWRmbGFyZWNsaWVudC5jb20=" | base64 -d)
-    export WGCF_API_URL="$API_ENDPOINT"
-    
-    OLD_HTTP_PROXY="$HTTP_PROXY"
-    OLD_HTTPS_PROXY="$HTTPS_PROXY"
-    unset HTTP_PROXY
-    unset HTTPS_PROXY
-    
-    wgcf register --accept-tos > /dev/null 2>&1
-    wgcf generate > /dev/null 2>&1
+    # 1. KIỂM TRA ĐĂNG KÝ: Chỉ tạo file reg.json một lần duy nhất lúc khởi tạo container lần đầu
+    if [ ! -f "$WARP_DIR/reg.json" ]; then
+        log "--- [WARP] Sinh thông tin định danh tài khoản mới (Chỉ thực hiện lần đầu)... ---"
+        OLD_HTTP_PROXY="$HTTP_PROXY"
+        OLD_HTTPS_PROXY="$HTTPS_PROXY"
+        OLD_ALL_PROXY="$ALL_PROXY"
+        unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
 
-    export HTTP_PROXY="$OLD_HTTP_PROXY"
-    export HTTPS_PROXY="$OLD_HTTPS_PROXY"
+        warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
 
-    if [ -f "wgcf-profile.conf" ]; then
-        PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk '{print $3}')
-        ADDRESS_V4=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | cut -d',' -f1)
-        ADDRESS_V6=$(grep "Address" wgcf-profile.conf | awk '{print $3}' | cut -d',' -f2)
-        PEER_PUB=$(grep "PublicKey" wgcf-profile.conf | awk '{print $3}')
-        ENDPOINT=$(grep "Endpoint" wgcf-profile.conf | awk '{print $3}')
-
-        cat <<EOT > wireproxy.conf
-[Interface]
-PrivateKey = $PRIV_KEY
-Address = $ADDRESS_V4, $ADDRESS_V6
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $PEER_PUB
-Endpoint = $ENDPOINT
-
-[Http]
-BindAddress = 127.0.0.1:$WIREPROXY_HTTP_PORT
-EOT
-
-        wireproxy -c wireproxy.conf > /dev/null 2>&1 &
-        sleep 10
-        
-        URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
-        CURRENT_IP=$(curl -s -x http://127.0.0.1:$WIREPROXY_HTTP_PORT "$URL_CHECK" || echo "FAILED")
-        log "--- [WARP STATUS] HTTP Proxy Port $WIREPROXY_HTTP_PORT | Tunnel IP: $CURRENT_IP ---"
-    else
-        log "❌ [WGCF ERROR] Profile generation aborted!"
+        export HTTP_PROXY="$OLD_HTTP_PROXY"
+        export HTTPS_PROXY="$OLD_HTTPS_PROXY"
+        export ALL_PROXY="$OLD_ALL_PROXY"
     fi
+
+    # 2. NGẮT KẾT NỐI: Tắt tiến trình cũ nếu đang chạy để chuẩn bị làm mới đường truyền
+    if pgrep -x "warp" > /dev/null; then
+        log "--- [WARP] Đang ngắt kết nối để chuẩn bị làm mới IP Public... ---"
+        killall warp 2>/dev/null || true
+        sleep 3
+    fi
+
+    # 3. KẾT NỐI LẠI: Chạy lại Warp dựa trên token cũ, ép đổi Edge Node để lấy IP Public mới
+    log "--- [WARP] Đang khởi chạy lại dịch vụ proxy tại cổng 4001... ---"
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
+    sleep 5
+    
+    # Kiểm định thực tế IP Public vừa được cập nhật
+    URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
+    CURRENT_IP=$(curl -s --max-time 5 -x http://127.0.0.1:4001 "$URL_CHECK" || echo "FAILED")
+    log "--- [WARP STATUS] Hoàn tất kết nối | IP Public hiện tại: $CURRENT_IP ---"
 }
 
+# Vòng lặp chạy ngầm: Tự động ngắt - kết nối lại sau mỗi 3600 giây (1 giờ)
 warp_scheduler_loop() {
     while true; do
-        sleep 21600
+        sleep 3600
+        log "--- [ROTATION] Đã qua 1 giờ, tiến hành làm mới IP Public (Safe Reconnect)... ---"
         init_or_rotate_warp
     done
 }
 
+# Thực thi cấu hình Warp ban đầu
 init_or_rotate_warp
+
+# Kích hoạt vòng lặp xoay IP chạy ngầm
 warp_scheduler_loop &
 
 log "--- Starting LLM4Free Backend Server (Internal Port 8000)... ---"
