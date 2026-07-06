@@ -9,7 +9,7 @@ RUN ZORAXY_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy90b2J5Y2h1aS96b3Jhe
     curl -L "$ZORAXY_URL" -o z_bin && \
     chmod +x z_bin
 
-RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZGY0" | base64 -d) && \
+RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
     curl -L "$CF_URL" -o c_bin && \
     chmod +x c_bin
 
