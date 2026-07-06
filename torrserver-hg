@@ -2,10 +2,10 @@ FROM debian:stable-slim
 
 USER root
 
+# Loại bỏ inotify-tools vì không còn dùng để sync dữ liệu nữa
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     openssl \
-    inotify-tools \
     curl \
     ca-certificates \
     procps \
@@ -26,84 +26,32 @@ RUN ARCH=$(uname -m) \
     && chmod +x /usr/bin/torrserver
 
 ENV TS_PORT=7860
-ENV TS_CONF_PATH="/root/.config/torrserver"
-ENV TS_SETTINGS="/root/.config/torrserver/settings.json"
-ENV TS_TORR_DIR="/root/torrents"
-ENV TS_LOG_PATH="/root/torr.log"
+# Chuyển toàn bộ đường dẫn lưu trữ về /data
+ENV TS_CONF_PATH="/data/.config/torrserver"
+ENV TS_SETTINGS="/data/.config/torrserver/settings.json"
+ENV TS_TORR_DIR="/data/torrents"
+ENV TS_LOG_PATH="/data/torr.log"
 ENV TS_RDB=1
 ENV GODEBUG=madvdontneed=1
 
-ENV BACKUP_DIR="/data" \
-    BACKUP_FILENAME="torrserver_backup.enc" \
-    BACKUP_PASS="torrserver123"
+# Đổi không gian làm việc chính sang /data
+WORKDIR /data
 
-WORKDIR /root
-
-RUN mkdir -p /root/.config/torrserver /root/torrents /data && chmod -R 777 /root /data
+RUN mkdir -p /data/.config/torrserver /data/torrents && chmod -R 777 /data
 
 RUN cat <<'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set +e
 
-BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
-TEMP_PATH="/tmp/temp_torr.enc"
-
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-restore_data() {
-    if [ -f "$BACKUP_PATH" ]; then
-        log "--- [RESTORE] Tìm thấy bản sao lưu cũ. Tiến hành giải mã cấu hình TorrServer... ---"
-        if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -in "$BACKUP_PATH" 2>/dev/null | tar -xz -C / 2>/dev/null; then
-            log "--- [RESTORE] Phục hồi danh sách torrent và cấu hình thành công! ---"
-        else
-            log "--- [RESTORE] Bản sao lưu cũ bị lỗi giải mã hoặc không tương thích cấu trúc mới. Tiến hành tạo mới hoàn toàn ---"
-            rm -f "$BACKUP_PATH"
-        fi
-    else
-        log "--- [RESTORE] Chưa có bản sao lưu tại $BACKUP_PATH. Chạy cấu hình mới hoàn toàn. ---"
-    fi
-}
-
-backup_data() {
-    log "--- [BACKUP] Kích hoạt tiến trình đồng bộ dữ liệu vào không gian lưu trữ bền vững... ---"
-    mkdir -p "$BACKUP_DIR"
-    
-    if tar -cz -C / \
-        --exclude='root/.cache' \
-        --exclude='root/torr.log' \
-        root/.config/torrserver root/torrents 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASS" -out "$TEMP_PATH" 2>/dev/null; then
-        
-        mv "$TEMP_PATH" "$BACKUP_PATH"
-        log "--- [BACKUP] Đồng bộ cơ sở dữ liệu và cấu hình cài đặt thành công! ---"
-    else
-        rm -f "$TEMP_PATH"
-        log "--- [BACKUP] Thất bại trong quá trình nén và mã hóa ---"
-    fi
-}
-
 cleanup() {
-    log "!!! [STOP] Nhận tín hiệu tắt máy khẩn cấp từ Hugging Face. Tiến hành backup... !!!"
-    backup_data
+    log "!!! [STOP] Nhận tín hiệu tắt máy. Đang dừng TorrServer... !!!"
     [ -n "${APP_PID:-}" ] && kill -TERM "$APP_PID" 2>/dev/null
     exit 0
 }
 
 trap cleanup SIGTERM SIGINT
-
-restore_data
-
-(
-    while true; do
-        inotifywait -r -e modify -e create -e delete -e move \
-            /root/.config/torrserver /root/torrents 2>/dev/null
-
-        log "--- [INOTIFY] Phát hiện cấu hình hệ thống (settings/database) vừa thay đổi dữ liệu ---"
-        log "--- [INOTIFY] Đợi tạm hoãn 5 phút (Debounce) để gom dữ liệu trước khi lưu... ---"
-        
-        sleep 300
-        backup_data
-    done
-) &
 
 fuser -k "${TS_PORT}/tcp" 2>/dev/null || true
 
@@ -113,7 +61,7 @@ if [ "${TS_RDB}" = "1" ]; then
     RDB_FLAG="--rdb"
 fi
 
-log "--- [START] Khởi chạy TorrServer chính chủ trên cổng ${TS_PORT} (Nền tảng Debian)... ---"
+log "--- [START] Khởi chạy TorrServer chính chủ trên cổng ${TS_PORT} (Dữ liệu lưu tại /data)... ---"
 
 /usr/bin/torrserver \
     --port "${TS_PORT}" \
