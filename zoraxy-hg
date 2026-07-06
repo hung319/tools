@@ -3,66 +3,102 @@ RUN apk add --no-cache curl jq coreutils
 
 WORKDIR /downloads
 
+# Tải binary Zoraxy mới nhất từ GitHub
 RUN ZORAXY_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy90b2J5Y2h1aS96b3JheHkvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
     ZORAXY_KEY=$(echo "bGludXhfYW1kNjQ=" | base64 -d) && \
     ZORAXY_URL=$(curl -s "$ZORAXY_API" | jq -r --arg key "$ZORAXY_KEY" '.assets[] | select(.name | contains($key)) | .browser_download_url') && \
     curl -L "$ZORAXY_URL" -o z_bin && \
     chmod +x z_bin
 
+# Tải binary Cloudflared Tunnel mới nhất từ Cloudflare
 RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
     curl -L "$CF_URL" -o c_bin && \
     chmod +x c_bin
 
 
 FROM debian:bookworm-slim
-# Loại bỏ các gói phục vụ backup cũ như openssl, findutils, tar để giảm dung lượng image
-RUN apt-get update && apt-get install -y ca-certificates tini && rm -rf /var/lib/apt/lists/*
 
-ENV PORT=7860
+# Cài đặt các gói hệ thống tối thiểu của Debian (Đầy đủ bash và công cụ quản lý tiến trình)
+RUN apt-get update && apt-get install -y ca-certificates tini procps bash netcat-openbsd && rm -rf /var/lib/apt/lists/*
 
-# Tạo cấu trúc thư mục rõ ràng: /app chứa binaries, /data chứa dữ liệu chạy
-RUN mkdir -p /app/sys1 /app/sys2 /data && chown -R 1000:1000 /app /data
+# Cấu hình PORT=7860 và các biến môi trường chuẩn theo Zoraxy
+ENV PORT=7860 \
+    AUTORENEW="86400" \
+    CFGUPGRADE="true" \
+    DB="auto" \
+    DOCKER="true" \
+    EARLYRENEW="30" \
+    ENABLELOG="true" \
+    FASTGEOIP="true" \
+    MDNS="true" \
+    NOAUTH="false" \
+    PLUGIN="/data/plugin/" \
+    SSHLB="false" \
+    VERSION="false" \
+    WEBROOT="./www" \
+    TZ="Etc/UTC"
 
-COPY --from=fetcher --chown=1000:1000 /downloads/z_bin /app/sys1/srv_a
-COPY --from=fetcher --chown=1000:1000 /downloads/c_bin /app/sys2/srv_b
+# Tạo cấu trúc thư mục hệ thống và data
+RUN mkdir -p /app/sys1 /app/sys2 /data/plugin
 
+# Copy các file thực thi đã tải từ công đoạn fetcher
+COPY --from=fetcher /downloads/z_bin /app/sys1/srv_a
+COPY --from=fetcher /downloads/c_bin /app/sys2/srv_b
+
+# Cấp quyền thực thi trực tiếp trên nền Debian
+RUN chmod +x /app/sys1/srv_a /app/sys2/srv_b
+
+# Tạo Entrypoint Script bằng BASH (Chuẩn Debian)
 RUN cat <<'EOF' > /app/entrypoint.sh
 #!/bin/bash
 set -e
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ENTRYPOINT] $1"; }
 
 cleanup() {
     trap - TERM INT QUIT
     log "!!! [SHUTDOWN] Đang dừng các dịch vụ an toàn... !!!"
-    kill -TERM "$APP_PID" "$TUNNEL_PID" 2>/dev/null || true
-    wait "$APP_PID" 2>/dev/null || true
+    kill -TERM "$ZORAXY_PID" "$TUNNEL_PID" 2>/dev/null || true
+    wait "$ZORAXY_PID" 2>/dev/null || true
     exit 0
 }
-
 trap 'cleanup' TERM INT QUIT
 
-# Khởi động Cloudflared Tunnel nếu có Token
+# 1. Khởi động Cloudflared Tunnel
 if [ ! -z "$TUNNEL_TOKEN" ]; then
     log "Khởi động Cloudflared Tunnel..."
     /app/sys2/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
     TUNNEL_PID=$!
 fi
 
-log "Khởi động Zoraxy trực tiếp tại thư mục /data (Port: ${PORT})..."
-# Di chuyển vào /data để mọi file cấu hình, db của Zoraxy tự sinh ra tại đây
+# 2. Khởi động Zoraxy và lưu data tại /data
+log "Khởi động Zoraxy Web UI tại cổng ${PORT} (Hệ điều hành: Debian | Dữ liệu: /data)..."
 cd /data
-/app/sys1/srv_a -port=:"${PORT}" -docker &
-APP_PID=$!
 
-wait "$APP_PID" || true
+/app/sys1/srv_a \
+    -autorenew="${AUTORENEW}" \
+    -cfgupgrade="${CFGUPGRADE}" \
+    -db="${DB}" \
+    -docker="${DOCKER}" \
+    -earlyrenew="${EARLYRENEW}" \
+    -enablelog="${ENABLELOG}" \
+    -fastgeoip="${FASTGEOIP}" \
+    -mdns="${MDNS}" \
+    -noauth="${NOAUTH}" \
+    -plugin="${PLUGIN}" \
+    -port=:"${PORT}" \
+    -sshlb="${SSHLB}" \
+    -version="${VERSION}" \
+    -webroot="${WEBROOT}" &
+ZORAXY_PID=$!
+
+wait "$ZORAXY_PID" || true
 EOF
 
-RUN chmod +x /app/entrypoint.sh && chown 1000:1000 /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-# Đặt hẳn WORKDIR tại /data để nhất quán
+# Đặt phân vùng làm việc mặc định tại /data để đồng bộ dữ liệu
 WORKDIR /data
-USER 1000
 
 EXPOSE 7860
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
