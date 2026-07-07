@@ -1,146 +1,22 @@
-# ==============================================================================
-# GIAI ĐOẠN 1: Lấy các file thực thi Task Runner từ Image gốc của n8n
-# ==============================================================================
-FROM n8nio/runners:latest AS n8n-runners-source
+# Sử dụng trực tiếp Image chính thức của n8n
+FROM n8nio/n8n:latest
 
-# ==============================================================================
-# GIAI ĐOẠN 2: Runtime chính chạy Alpine sạch 100%
-# ==============================================================================
-FROM alpine:3.22
+USER root
 
-# --- 1. Cấu hình biến môi trường Smart Backup & Task Runner ---
+# 1. Cấu hình các biến môi trường bắt buộc cho Hugging Face
 ENV N8N_PORT=7860 \
-    BACKUP_DIR=/data \
-    BACKUP_FILENAME=n8n_backup.enc \
-    BACKUP_PASS=MatKhauSaoLuuSieuCapVip123 \
-    N8N_RUNNERS_MODE=external \
-    N8N_RUNNERS_BROKER_LISTEN_ADDRESS=127.0.0.1 \
-    N8N_RUNNERS_AUTH_TOKEN=TokenNoiBoSieuBaoMat999 \
-    HOME=/home/node \
-    NODE_ENV=production
+    N8N_USER_FOLDER=/data \
+    HOME=/data \
+    N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
 
-# --- 2. Cài đặt các công cụ hệ thống + Node.js + NPM + Python3 ---
-RUN apk add --no-cache \
-    curl \
-    bash \
-    inotify-tools \
-    openssl \
-    tar \
-    libstdc++ \
-    libc6-compat \
-    python3 \
-    tini \
-    nodejs \
-    npm
+# 2. Tạo và phân quyền triệt để cho thư mục dữ liệu /data
+RUN mkdir -p /data && chown -R 1000:1000 /data
 
-# --- 3. Dùng NPM cài đặt thẳng n8n toàn cục (Gọn gàng, chuẩn chỉ) ---
-RUN npm install -g n8n --omit=dev
-
-# --- 4. Sao chép lõi Task Runner chuẩn của n8n sang để xử lý Code Node ---
-COPY --from=n8n-runners-source /opt/runners /opt/runners
-COPY --from=n8n-runners-source /usr/local/bin/task-runner-launcher /usr/local/bin/task-runner-launcher
-COPY --from=n8n-runners-source /etc/n8n-task-runners.json /etc/n8n-task-runners.json
-
-# --- 5. Fix đường dẫn Python & Sửa thư mục làm việc từ /home/runner thành /home/node ---
-RUN sed -i 's|/opt/runners/task-runner-python/.venv/bin/python|/usr/bin/python3|g' /etc/n8n-task-runners.json && \
-    sed -i 's|/home/runner|/home/node|g' /etc/n8n-task-runners.json
-
-# --- 6. Tạo Node User để Hugging Face vận hành an toàn ---
-RUN addgroup -g 1000 node && \
-    adduser -u 1000 -G node -s /bin/bash -D node
-
-# --- 7. Viết script Entrypoint điều khiển Smart Backup 5 phút ---
-RUN cat << 'EOF' > /my-entrypoint.sh
-#!/bin/bash
-set -e
-
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
-
-mkdir -p /home/node/.n8n "$BACKUP_DIR"
-INTERVAL_TIME=300
-
-restore_data() {
-    BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
-    log "--- [RESTORE] Đang kiểm tra file backup tại $BACKUP_FILE ---"
-    
-    if [ -f "$BACKUP_FILE" ]; then
-        log "--- [RESTORE] TÌM THẤY file backup mã hóa. Tiến hành phục hồi... ---"
-        if openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -pass "env:BACKUP_PASS" -in "$BACKUP_FILE" | tar -xzf - -C /home/node; then
-            log "--- [RESTORE] PHỤC HỒI DỮ LIỆU THÀNH CÔNG! ---"
-        else
-            log "--- [RESTORE] LỖI: Giải mã thất bại. Vui lòng kiểm tra lại BACKUP_PASS. ---"
-        fi
-    else
-        log "--- [RESTORE] Không có file cũ. Khởi tạo môi trường mới. ---"
-    fi
-}
-
-backup_data() {
-    BACKUP_FILE="$BACKUP_DIR/$BACKUP_FILENAME"
-    if [ ! -d "/home/node/.n8n" ]; then return; fi
-
-    log "--- [BACKUP] Đang tiến hành nén tar và mã hóa AES-256... ---"
-    if tar -czf - --exclude='.n8n/binaryData' --exclude='.n8n/cache' -C /home/node .n8n | \
-       openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -pass "env:BACKUP_PASS" -out "$BACKUP_FILE"; then
-        log "--- [BACKUP] HOÀN TẤT cập nhật bản sao lưu mã hóa bảo mật ---"
-    else
-        log "--- [BACKUP] LỖI: Quá trình mã hóa/sao lưu thất bại! ---"
-    fi
-}
-
-watch_changes() {
-    log "--- [WATCHER] Đang theo dõi biến động tại /home/node/.n8n ---"
-    BACKUP_PENDING=false
-
-    inotifywait -m -r -e modify -e move -e create -e delete \
-        --exclude '(/cache/|/binaryData/|\.log$|crash\.journal$)' \
-        /home/node/.n8n 2>/dev/null | while read -r directory events filename; do
-        
-        if [ "$BACKUP_PENDING" = false ]; then
-            BACKUP_PENDING=true
-            log "--- [WATCHER] Phát hiện thay đổi dữ liệu. Sẽ tự động backup sau 5 phút... ---"
-            (
-                sleep $INTERVAL_TIME
-                backup_data
-                echo "RESET_PENDING" > /tmp/watcher_status
-            ) &
-        fi
-
-        if [ -f /tmp/watcher_status ]; then
-            rm -f /tmp/watcher_status
-            BACKUP_PENDING=false
-        fi
-    done
-}
-
-cleanup() {
-    log "--- [SHUTDOWN] Nhận tín hiệu tắt từ Hugging Face! Đang backup khẩn cấp dòng cuối... ---"
-    backup_data
-    log "--- [SHUTDOWN] Đã sao lưu an toàn. Hệ thống đóng! ---"
-    exit 0
-}
-
-trap 'cleanup' EXIT INT TERM QUIT
-
-restore_data
-watch_changes &
-
-log "--- [LAUNCHER] Khởi động bộ xử lý Code Node (Python/JS) ---"
-N8N_RUNNERS_TASK_BROKER_URI="http://127.0.0.1:5679" \
-N8N_RUNNERS_AUTH_TOKEN="TokenNoiBoSieuBaoMat999" \
-task-runner-launcher javascript python &
-
-log "--- [START] Khởi chạy tiến trình n8n chính thức qua Node.js ---"
-exec n8n
-EOF
-
-RUN chmod +x /my-entrypoint.sh
-
-# --- 8. Cấp toàn quyền cho node user ---
-RUN mkdir -p /data /home/node && \
-    chown -R node:node /data /home/node /my-entrypoint.sh /opt/runners /etc/n8n-task-runners.json
-
-USER node
+# 3. Trả quyền lại cho user node (1000) mặc định của n8n
+USER 1000
 EXPOSE 7860
 
-ENTRYPOINT ["tini", "--", "/bin/sh", "/my-entrypoint.sh"]
+# 4. Giải pháp tối thượng: Bypass hoàn toàn script docker-entrypoint.sh gốc.
+# Gọi thẳng file binary gốc của n8n kết hợp với tini.
+# Dạng Shell form này sẽ nuốt chửng và cô lập hoàn toàn mọi tham số rác ("start") từ Hugging Face.
+ENTRYPOINT tini -- /usr/local/bin/n8n start
