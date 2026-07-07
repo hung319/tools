@@ -5,15 +5,12 @@ WORKDIR /downloads
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
-        WARP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
         CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d); \
     else \
-        WARP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) && \
         CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d); \
     fi && \
-    curl -fsSL "$WARP_URL" -o warp.zip && unzip warp.zip && mv warp-linux-amd64 srv_w && \
     curl -fsSL "$CF_URL" -o srv_b && \
-    chmod +x srv_w srv_b
+    chmod +x srv_b
 
 FROM ghcr.io/zmabin/openlist-chunk:latest
 
@@ -21,12 +18,11 @@ USER root
 
 RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow transmission-daemon aria2 qbittorrent-nox
 
-RUN mkdir -p /opt/openlist/sys1 /opt/openlist/sys3 /data && \
+RUN mkdir -p /opt/openlist/sys3 /data && \
     chown -R openlist:openlist /opt/openlist /data
 
 WORKDIR /opt/openlist
 
-COPY --from=fetcher --chown=openlist:openlist /downloads/srv_w /opt/openlist/sys1/srv_w
 COPY --from=fetcher --chown=openlist:openlist /downloads/srv_b /opt/openlist/sys3/srv_b
 
 RUN cat << 'EOF' > /entrypoint.sh
@@ -35,7 +31,6 @@ set -e
 
 umask 022
 
-# 1. Khởi tạo cấu trúc các thư mục lưu trữ trực tiếp trên gốc /data
 mkdir -p /data/watch /data/downloads /data/log /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
 
 usermod -u 1000 openlist 2>/dev/null || true
@@ -43,12 +38,11 @@ groupmod -g 1000 openlist 2>/dev/null || true
 chown -R openlist:openlist /data /opt/openlist /tmp 2>/dev/null || true
 chmod -R 777 /data /opt/openlist /tmp 2>/dev/null || true
 
-# 2. Khởi chạy các dịch vụ tải xuống phụ trợ
 if [ "$RUN_ARIA2" = "true" ]; then
     echo "[AIO] khoi hanh Aria2..."
     mkdir -p /tmp/.config/aria2
     [ ! -f /tmp/.config/aria2/aria2.session ] && touch /tmp/.config/aria2/aria2.session
-    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data/downloads --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session --all-proxy="http://127.0.0.1:4001" >/dev/null 2>&1 &
+    aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data/downloads --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session >/dev/null 2>&1 &
 fi
 
 if [ "$RUN_QBITTORRENT" = "true" ]; then
@@ -58,11 +52,7 @@ if [ "$RUN_QBITTORRENT" = "true" ]; then
 WebUI\Port=8080
 WebUI\User=admin
 WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)"
-Proxy\Type=1
-Proxy\IP=127.0.0.1
-Proxy\Port=4001
-Proxy\ProxyPeerConnections=true
-Proxy\ProxyHostNameLookup=true
+Proxy\Type=0
 EON
     qbittorrent-nox --confirm-legal-notice --webui-port=8080 >/dev/null 2>&1 &
 fi
@@ -70,7 +60,6 @@ fi
 if [ "$RUN_TRANSMISSION" = "true" ]; then
     echo "[AIO] khoi hanh Transmission..."
     mkdir -p /tmp/.config/transmission-daemon
-    export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
     transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &
 fi
 
@@ -82,23 +71,6 @@ else
     echo "[CLOUDFLARE] Canh bao: Khong tim thay TUNNEL_TOKEN!"
 fi
 
-echo "[CLOUDFLARE WARP] Bat dau setup mang..."
-mkdir -p /tmp/warp_temp && cd /tmp/warp_temp
-
-HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" http_proxy="" https_proxy="" all_proxy="" /opt/openlist/sys1/srv_w generate >/dev/null 2>&1
-/opt/openlist/sys1/srv_w run --http-addr 127.0.0.1:4001 --data-dir /tmp/warp_temp >/dev/null 2>&1 &
-
-echo "[MAIN] Cho dong bo hoa Cloudflare Warp tai port 4001..."
-for i in {1..30}; do
-    if netstat -an | grep -q "4001.*LISTEN"; then
-        echo "[MAIN] Cloudflare Warp da ONLINE thanh cong tai port 4001!"
-        break
-    fi
-    sleep 1
-done
-
-# === ĐOẠN XỬ LÝ NATIVE THEO ĐÚNG CƠ CHẾ OPENLIST ===
-# Di chuyển không gian làm việc chính vào hẳn thư mục /data
 cd /data
 
 CONFIG_FILE="/data/config.json"
@@ -115,9 +87,7 @@ if [ -f "$CONFIG_FILE" ]; then
     echo "[CONFIG] Chinh sua file config sang port 7860, local proxy va Meili..."
     sed -i 's/"http_port": 5244/"http_port": 7860/g' "$CONFIG_FILE"
     sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
-    sed -i 's|"proxy_address": ""|"proxy_address": "http://127.0.0.1:4001"|g' "$CONFIG_FILE"
     
-    # Ép đường dẫn Database và Log tương đối thành Tuyệt Đối trỏ thẳng vào /data
     sed -i 's|"database": "data/data.db"|"database": "/data/data.db"|g' "$CONFIG_FILE"
     sed -i 's|"log_dir": "data/log"|"log_dir": "/data/log"|g' "$CONFIG_FILE"
     
@@ -130,8 +100,6 @@ if [ -f "$CONFIG_FILE" ]; then
         sed -i "s|\"index\": \"\"|\"index\": \"$MEILI_INDEX\"|g" "$CONFIG_FILE"
     fi
 fi
-
-export HTTP_PROXY="http://127.0.0.1:4001" HTTPS_PROXY="http://127.0.0.1:4001" ALL_PROXY="http://127.0.0.1:4001"
 
 if [ "$RUN_QBITTORRENT" = "true" ]; then
     echo "[MAIN] Dang cho qBittorrent san sang..."
@@ -157,7 +125,6 @@ ENV PORT=7860 \
     HOME=/data \
     XDG_CONFIG_HOME=/data/.config \
     XDG_DATA_HOME=/data/.local \
-    NO_PROXY="localhost,127.0.0.1" \
     PYTHONUNBUFFERED=1 \
     TUNNEL_TOKEN="" \
     SITE_URL="" \
