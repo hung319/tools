@@ -1,12 +1,32 @@
-FROM debian:stable-slim AS fetcher
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y curl unzip tar grep sed ca-certificates && rm -rf /var/lib/apt/lists/*
+# ==============================================================================
+# GIAI ĐOẠN 1: Tải bản crw-server + warp mới nhất (Alpine giải mã Base64 chuẩn)
+# ==============================================================================
+FROM alpine:3.22 AS fetcher
+
+RUN apk add --no-cache curl unzip tar grep sed ca-certificates bash
 
 WORKDIR /tmp
 
 RUN set -eux; \
-    curl -fsSL $(echo "aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL3VzL2Nydy9tYWluL2luc3RhbGwuc2g=" | base64 -d) | CRW_BINARY=crw-server sh; \
-    # Tải Cloudflare Warp Go tương tự mẫu cung cấp
+    # 1. Giải mã URL API GitHub của us/crw công khai để tự động bốc bản mới nhất
+    # Chuỗi Base64 này tương đương với: https://api.github.com/repos/us/crw/releases/latest
+    API_URL=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy91cy9jcncvcmVsZWFzZXMvbGF0ZXN0" | base64 -d); \
+    \
+    # Truy vấn lấy Tag mới nhất từ GitHub API công khai
+    LATEST_TAG=$(curl -sSL "$API_URL" | grep -oP '"tag_name":\s*"\K[^"]+' | head -n 1); \
+    echo "Detected latest CRW version: ${LATEST_TAG}"; \
+    \
+    # Tự động ghép chuỗi để tải chính xác gói crw-server-linux-x64.tar.gz của bản mới nhất
+    CRW_DOWNLOAD_URL="https://github.com/us/crw/releases/download/${LATEST_TAG}/crw-server-linux-x64.tar.gz"; \
+    curl -fsSL "$CRW_DOWNLOAD_URL" -o crw-server.tar.gz; \
+    \
+    # Giải nén trực tiếp vào thư mục bàn giao
+    tar -xzf crw-server.tar.gz -C /usr/local/bin/; \
+    if [ -f /usr/local/bin/crw ] && [ ! -f /usr/local/bin/crw-server ]; then mv /usr/local/bin/crw /usr/local/bin/crw-server; fi; \
+    chmod +x /usr/local/bin/crw-server; \
+    rm -f crw-server.tar.gz; \
+    \
+    # 2. Tải Cloudflare Warp Go từ GitHub Release (Đã sửa lỗi giải mã chuỗi)
     WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d); \
     curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip; \
     unzip /tmp/warp.zip -d /usr/local/bin/; \
@@ -14,6 +34,9 @@ RUN set -eux; \
     rm -f /tmp/warp.zip; \
     chmod +x /usr/local/bin/warp
 
+# ==============================================================================
+# GIAI ĐOẠN 2: Runtime chính chạy trên Debian (Chrome Headless và Python)
+# ==============================================================================
 FROM debian:stable-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -21,6 +44,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CRW_CONFIG=/app/config.docker.toml \
     CRW_SERVER__HOST=0.0.0.0 \
     CRW_SERVER__PORT=7860 \
+    CRW_SECRET_KEY \
     CRW_SERVER__RATE_LIMIT_RPS=0 \
     CRW_REQUEST__DEADLINE_MS_DEFAULT=30000 \
     CRW_REQUEST__AUTO_EXTEND_DEADLINE_FOR_LADDER=true \
@@ -56,11 +80,11 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir cloakbrowser && \
     python3 -m cloakbrowser install
 
+# Clone và cài đặt SearXNG trực tiếp từ mã nguồn chính thức (Chuỗi mã hóa chuẩn 100%)
 RUN git clone --depth 1 $(echo "aHR0cHM6Ly9naXRodWIuY29tL3NlYXJ4bmcvc2VhcnhuZy5naXQ=" | base64 -d) /usr/local/src/searxng && \
     cd /usr/local/src/searxng && \
     pip install --no-cache-dir -r requirements.txt
-
-# Tạo thư mục lưu cấu hình warp
+    
 RUN mkdir -p /root/.cloakbrowser/geoip /etc/searxng /tmp/warp_data && chmod -R 777 /tmp/warp_data
 
 RUN cat << 'EOF' > /etc/searxng/settings.yml
@@ -144,7 +168,6 @@ else
     echo -e "[auth]\napi_keys = [\"$CRW_SECRET_KEY\"]" > /app/config.local.toml
 fi
 
-# 1. Khởi chạy Cloudflare Warp Proxy (Bỏ hoàn toàn wgcf và wireproxy)
 echo "=== [WARP] Dang khoi tao va cau hinh dinh tuyen Cloudflare Warp... ==="
 killall warp 2>/dev/null || true
 mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
