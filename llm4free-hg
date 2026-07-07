@@ -26,18 +26,17 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 WORKDIR /app
 
-# Khởi tạo môi trường ảo Python và cài đặt các thư viện backend
+# Khởi tạo môi trường ảo Python và cài đặt các thư viện backend (Đã bỏ fastapi và uvicorn không cần thiết)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    uv pip install "llm4free[api]" fastapi uvicorn httpx
+    uv pip install "llm4free[api]" httpx
 
-# Thiết lập các biến môi trường hệ thống và định tuyến Proxy qua cổng 4001 của Warp
+# THAY ĐỔI: Chuyển HOST thành 0.0.0.0 và PORT thành 7860 để LLM4Free mở trực tiếp ra ngoài
 ENV PORT=7860 \
     PATH="/app/.venv/bin:$PATH" \
-    LLM4FREE_HOST=127.0.0.1 \
-    LLM4FREE_PORT=8000 \
-    LLM4FREE_API_KEY="sk-my-super-secret-key-2026" \
+    LLM4FREE_HOST=0.0.0.0 \
+    LLM4FREE_PORT=7860 \
     HTTP_PROXY="http://127.0.0.1:4001" \
     HTTPS_PROXY="http://127.0.0.1:4001" \
     ALL_PROXY="http://127.0.0.1:4001" \
@@ -46,45 +45,7 @@ ENV PORT=7860 \
 # Tạo sẵn thư mục lưu dữ liệu cấu hình cố định cho Warp để giữ lại reg.json
 RUN mkdir -p /tmp/warp_data /app && chmod -R 777 /tmp/warp_data /app
 
-# Tạo file Auth Wrapper bảo mật kết nối nội bộ
-RUN cat <<'EOF' > /app/auth_wrapper.py
-import os
-import httpx
-from fastapi import FastAPI, Request, Response, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-app = FastAPI(title="LLM4Free Auth Wrapper")
-security = HTTPBearer()
-API_KEY = os.getenv("LLM4FREE_API_KEY", "sk-my-super-secret-key-2026")
-TARGET_URL = "http://127.0.0.1:8000"
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials.credentials != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key / Unauthorized")
-    return credentials.credentials
-
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
-async def proxy_gateway(path: str, request: Request, token: str = Depends(verify_token)):
-    if path in ["docs", "openapi.json", "redoc", "monitor/health"]:
-        pass
-
-    url = f"{TARGET_URL}/{path}"
-    headers = dict(request.headers)
-    headers.pop("host", None)
-    
-    async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
-        req_content = await request.body()
-        resp = await client.request(
-            method=request.method,
-            url=url,
-            headers=headers,
-            params=dict(request.query_params),
-            content=req_content
-        )
-        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
-EOF
-
-# Tạo script Entrypoint điều phối: Quản lý Warp (chỉ generate 1 lần), tự xoay IP sau mỗi 1 giờ
+# Tạo script Entrypoint điều phối: Quản lý Warp và chạy trực tiếp backend LLM4Free
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
 
@@ -142,12 +103,9 @@ init_or_rotate_warp
 # Kích hoạt vòng lặp xoay IP chạy ngầm
 warp_scheduler_loop &
 
-log "--- Starting LLM4Free Backend Server (Internal Port 8000)... ---"
-/app/.venv/bin/llm4free-server > /dev/null 2>&1 &
-
-log "--- Starting Authentication Wrapper Proxy (Public Port 7860)... ---"
-cd /app
-exec /app/.venv/bin/uvicorn auth_wrapper:app --host 0.0.0.0 --port 7860 --log-level info
+# THAY ĐỔI: Chạy trực tiếp LLM4Free làm tiến trình chính (Foreground), không dùng Auth Wrapper nữa
+log "--- Starting LLM4Free Backend Server directly on Port 7860... ---"
+exec /app/.venv/bin/llm4free-server
 EOF
 
 RUN chmod +x /usr/local/bin/hf-entrypoint.sh
