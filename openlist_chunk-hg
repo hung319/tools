@@ -16,7 +16,7 @@ FROM ghcr.io/zmabin/openlist-chunk:latest
 
 USER root
 
-RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow transmission-daemon aria2 qbittorrent-nox
+RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow aria2
 
 RUN mkdir -p /opt/openlist/sys3 /data && \
     chown -R openlist:openlist /opt/openlist /data
@@ -31,7 +31,7 @@ set -e
 
 umask 022
 
-mkdir -p /data/watch /data/downloads /data/log /tmp/.config /tmp/.local /tmp/.config/qBittorrent /tmp/.local/share/qBittorrent
+mkdir -p /data/downloads /data/log /tmp/.config /tmp/.local
 
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
@@ -43,24 +43,6 @@ if [ "$RUN_ARIA2" = "true" ]; then
     mkdir -p /tmp/.config/aria2
     [ ! -f /tmp/.config/aria2/aria2.session ] && touch /tmp/.config/aria2/aria2.session
     aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data/downloads --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session >/dev/null 2>&1 &
-fi
-
-if [ "$RUN_QBITTORRENT" = "true" ]; then
-    echo "[AIO] khoi hanh qBittorrent..."
-    cat <<EON > /tmp/.config/qBittorrent/qBittorrent.conf
-[Preferences]
-WebUI\Port=8080
-WebUI\User=admin
-WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)"
-Proxy\Type=0
-EON
-    qbittorrent-nox --confirm-legal-notice --webui-port=8080 >/dev/null 2>&1 &
-fi
-
-if [ "$RUN_TRANSMISSION" = "true" ]; then
-    echo "[AIO] khoi hanh Transmission..."
-    mkdir -p /tmp/.config/transmission-daemon
-    transmission-daemon --foreground --port 9091 --config-dir /tmp/.config/transmission-daemon --download-dir /data/downloads --watch-dir /data/watch >/dev/null 2>&1 &
 fi
 
 fuser -k "7860/tcp" 2>/dev/null || true
@@ -84,7 +66,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 if [ -f "$CONFIG_FILE" ]; then
-    echo "[CONFIG] Chinh sua file config sang port 7860, local proxy va Meili..."
+    echo "[CONFIG] Chinh sua file config sang port 7860 va Meili..."
     sed -i 's/"http_port": 5244/"http_port": 7860/g' "$CONFIG_FILE"
     sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
     
@@ -101,17 +83,6 @@ if [ -f "$CONFIG_FILE" ]; then
     fi
 fi
 
-if [ "$RUN_QBITTORRENT" = "true" ]; then
-    echo "[MAIN] Dang cho qBittorrent san sang..."
-    for i in {1..15}; do
-        if curl -s http://localhost:8080/api/v2/auth/login >/dev/null 2>&1 || netstat -an | grep -q "8080.*LISTEN"; then
-            echo "[MAIN] qBittorrent da online!"
-            break
-        fi
-        sleep 1
-    done
-fi
-
 echo "[MAIN] Khoi dong OpenList Chunk chinh thuc tu WORKDIR=/data..."
 exec /opt/openlist/openlist server --no-prefix --config /data/config.json --data /data
 EOF
@@ -120,8 +91,6 @@ RUN chmod +x /entrypoint.sh
 
 ENV PORT=7860 \
     RUN_ARIA2=true \
-    RUN_QBITTORRENT=true \
-    RUN_TRANSMISSION=true \
     HOME=/data \
     XDG_CONFIG_HOME=/data/.config \
     XDG_DATA_HOME=/data/.local \
