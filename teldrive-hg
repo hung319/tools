@@ -6,9 +6,8 @@ RUN apk add --no-cache tini curl bash
 
 RUN adduser -D -u 1000 hfuser
 
-RUN export ENC_URL="YUhSMGNEb3ZMM0Z3YVM1bmFYUm9kV0l1WTI5dExYSmxjRzl6TDNSbFpISnBkbVZmZEdVbWRYSnBMM0psYkdGaGMyVnpMMnhsZEdWemRDOTJZWFJsY3c9PQ==" && \
-    export DEC_URL=$(echo "$ENC_URL" | base64 -d | base64 -d) && \
-    export DOWNLOAD_URL=$(curl -s "$DEC_URL" | grep -E "YnJvd3Nlcl9kb3dubG9hZF91cmwuKmxpbnV4LWFtZDY0LnRhci5neg==" | cut -d '"' -f 4) && \
+RUN export DEC_URL=$(echo "YUhSMGNEb3ZMM0Z3YVM1bmFYUm9kV0l1WTI5dExYSmxjRzl6TDNSbFpISnBkbVZmZEdVbWREb3ZMM0psYkdGaGMyVnpMMnhsZEdWemRDOTJZWFJsY3c9PQ==" | base64 -d) && \
+    export DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/tgdrive/teldrive/releases/latest" | grep "browser_download_url.*linux-amd64.tar.gz" | cut -d '"' -f 4) && \
     curl -L "$DOWNLOAD_URL" -o /tmp/bin.tar.gz && \
     tar -xzf /tmp/bin.tar.gz -C /usr/local/bin/ && \
     rm /tmp/bin.tar.gz
