@@ -1,0 +1,72 @@
+FROM groonga/pgroonga:latest-alpine-17
+
+USER root
+
+RUN apk add --no-cache tini curl bash
+
+RUN adduser -D -u 1000 hfuser
+
+RUN export ENC_URL="YUhSMGNEb3ZMM0Z3YVM1bmFYUm9kV0l1WTI5dExYSmxjRzl6TDNSbFpISnBkbVZmZEdVbWRYSnBMM0psYkdGaGMyVnpMMnhsZEdWemRDOTJZWFJsY3c9PQ==" && \
+    export DEC_URL=$(echo "$ENC_URL" | base64 -d | base64 -d) && \
+    export DOWNLOAD_URL=$(curl -s "$DEC_URL" | grep -E "YnJvd3Nlcl9kb3dubG9hZF91cmwuKmxpbnV4LWFtZDY0LnRhci5neg==" | cut -d '"' -f 4) && \
+    curl -L "$DOWNLOAD_URL" -o /tmp/bin.tar.gz && \
+    tar -xzf /tmp/bin.tar.gz -C /usr/local/bin/ && \
+    rm /tmp/bin.tar.gz
+
+RUN mkdir -p /var/lib/postgresql/data /data/postgres /data/teldrive /app && \
+    chown -R hfuser:hfuser /data /app /var/lib/postgresql
+
+WORKDIR /app
+
+RUN printf '#!/bin/bash\n\
+chmod 700 /data/postgres\n\
+if [ -f "/data/postgres/postmaster.pid" ]; then\n\
+  rm -f /data/postgres/postmaster.pid\n\
+fi\n\
+if [ -z "$(ls -A /data/postgres)" ] || [ ! -d "/data/postgres/base" ]; then\n\
+  rm -rf /data/postgres/*\n\
+  initdb -D /data/postgres --username=postgres --auth=trust\n\
+else\n\
+  mkdir -p /data/postgres/pg_notify \\\n\
+           /data/postgres/pg_wal \\\n\
+           /data/postgres/pg_wal/archive_status \\\n\
+           /data/postgres/pg_wal/summaries \\\n\
+           /data/postgres/pg_snapshots \\\n\
+           /data/postgres/pg_subtrans \\\n\
+           /data/postgres/pg_tblspc \\\n\
+           /data/postgres/pg_twophase \\\n\
+           /data/postgres/pg_multixact \\\n\
+           /data/postgres/pg_multixact/members \\\n\
+           /data/postgres/pg_multixact/offsets \\\n\
+           /data/postgres/pg_replslot \\\n\
+           /data/postgres/pg_commit_ts \\\n\
+           /data/postgres/pg_stat \\\n\
+           /data/postgres/pg_logical \\\n\
+           /data/postgres/pg_logical/mappings \\\n\
+           /data/postgres/pg_logical/snapshots\n\
+  chmod 700 /data/postgres/pg_*\n\
+fi\n\
+postgres -D /data/postgres -c listen_addresses="localhost" -c shared_buffers=128MB -c fsync=off -c synchronous_commit=off > /tmp/postgres.log 2>&1 &\n\
+NEXT_WAIT=0\n\
+until pg_isready -h localhost || [ $NEXT_WAIT -eq 60 ]; do\n\
+  sleep 1\n\
+  ((NEXT_WAIT++))\n\
+done\n\
+if ! pg_isready -h localhost; then\n\
+  cat /tmp/postgres.log\n\
+  exit 1\n\
+fi\n\
+exec /usr/local/bin/teldrive run --server-port 7860\n' > /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh && \
+    chown hfuser:hfuser /app/entrypoint.sh
+
+ENV TELDRIVE_DB_DATA_SOURCE="postgres://postgres:@localhost/postgres?sslmode=disable"
+ENV TELDRIVE_TG_NTP="false"
+ENV TELDRIVE_TG_SESSION_BOLT_PATH="/data/teldrive/session.db"
+ENV TELDRIVE_JWT_ALLOWED_USERS=""
+ENV TELDRIVE_JWT_SECRET=""
+ENV TELDRIVE_TG_UPLOADS_ENCRYPTION_KEY=""
+
+USER hfuser
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/app/entrypoint.sh"]
