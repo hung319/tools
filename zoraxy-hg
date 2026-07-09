@@ -3,14 +3,12 @@ RUN apk add --no-cache curl jq coreutils
 
 WORKDIR /downloads
 
-# Tải binary Zoraxy mới nhất từ GitHub
 RUN ZORAXY_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy90b2J5Y2h1aS96b3JheHkvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
     ZORAXY_KEY=$(echo "bGludXhfYW1kNjQ=" | base64 -d) && \
     ZORAXY_URL=$(curl -s "$ZORAXY_API" | jq -r --arg key "$ZORAXY_KEY" '.assets[] | select(.name | contains($key)) | .browser_download_url') && \
     curl -L "$ZORAXY_URL" -o z_bin && \
     chmod +x z_bin
 
-# Tải binary Cloudflared Tunnel mới nhất từ Cloudflare
 RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
     curl -L "$CF_URL" -o c_bin && \
     chmod +x c_bin
@@ -18,10 +16,8 @@ RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZ
 
 FROM debian:bookworm-slim
 
-# Cài đặt các gói hệ thống tối thiểu của Debian (Đầy đủ bash và công cụ quản lý tiến trình)
 RUN apt-get update && apt-get install -y ca-certificates tini procps bash netcat-openbsd && rm -rf /var/lib/apt/lists/*
 
-# Cấu hình PORT=7860 và các biến môi trường chuẩn theo Zoraxy
 ENV PORT=7860 \
     AUTORENEW="86400" \
     CFGUPGRADE="true" \
@@ -38,17 +34,13 @@ ENV PORT=7860 \
     WEBROOT="./www" \
     TZ="Etc/UTC"
 
-# Tạo cấu trúc thư mục hệ thống và data
 RUN mkdir -p /app/sys1 /app/sys2 /data/plugin
 
-# Copy các file thực thi đã tải từ công đoạn fetcher
 COPY --from=fetcher /downloads/z_bin /app/sys1/srv_a
 COPY --from=fetcher /downloads/c_bin /app/sys2/srv_b
 
-# Cấp quyền thực thi trực tiếp trên nền Debian
 RUN chmod +x /app/sys1/srv_a /app/sys2/srv_b
 
-# Tạo Entrypoint Script bằng BASH (Chuẩn Debian)
 RUN cat <<'EOF' > /app/entrypoint.sh
 #!/bin/bash
 set -e
@@ -57,22 +49,20 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ENTRYPOINT] $1"; }
 
 cleanup() {
     trap - TERM INT QUIT
-    log "!!! [SHUTDOWN] Đang dừng các dịch vụ an toàn... !!!"
+    log "!!! [SHUTDOWN] Dang dung cac dich vu an toan... !!!"
     kill -TERM "$ZORAXY_PID" "$TUNNEL_PID" 2>/dev/null || true
     wait "$ZORAXY_PID" 2>/dev/null || true
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
 
-# 1. Khởi động Cloudflared Tunnel
 if [ ! -z "$TUNNEL_TOKEN" ]; then
-    log "Khởi động Cloudflared Tunnel..."
+    log "Khoi dong Cloudflared Tunnel..."
     /app/sys2/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
     TUNNEL_PID=$!
 fi
 
-# 2. Khởi động Zoraxy và lưu data tại /data
-log "Khởi động Zoraxy Web UI tại cổng ${PORT} (Hệ điều hành: Debian | Dữ liệu: /data)..."
+log "Khoi dong Zoraxy Web UI tai cong ${PORT} (He dieu hanh: Debian | Du lieu: /data)..."
 cd /data
 
 /app/sys1/srv_a \
@@ -97,7 +87,6 @@ EOF
 
 RUN chmod +x /app/entrypoint.sh
 
-# Đặt phân vùng làm việc mặc định tại /data để đồng bộ dữ liệu
 WORKDIR /data
 
 EXPOSE 7860
