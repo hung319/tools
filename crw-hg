@@ -1,6 +1,3 @@
-# ==============================================================================
-# GIAI ĐOẠN 1: Tải bản crw-server + warp mới nhất (Alpine giải mã Base64 chuẩn)
-# ==============================================================================
 FROM alpine:3.22 AS fetcher
 
 RUN apk add --no-cache curl unzip tar grep sed ca-certificates bash
@@ -8,35 +5,27 @@ RUN apk add --no-cache curl unzip tar grep sed ca-certificates bash
 WORKDIR /tmp
 
 RUN set -eux; \
-    # 1. Giải mã URL API GitHub của us/crw công khai để tự động bốc bản mới nhất
-    # Chuỗi Base64 này tương đương với: https://api.github.com/repos/us/crw/releases/latest
     API_URL=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy91cy9jcncvcmVsZWFzZXMvbGF0ZXN0" | base64 -d); \
-    \
-    # Truy vấn lấy Tag mới nhất từ GitHub API công khai
-    LATEST_TAG=$(curl -sSL "$API_URL" | grep -oP '"tag_name":\s*"\K[^"]+' | head -n 1); \
+    RELEASE_JSON=$(curl -sSL -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$API_URL"); \
+    LATEST_TAG=$(echo "$RELEASE_JSON" | grep -oP '"tag_name":\s*"\K[^"]+' | head -n 1); \
     echo "Detected latest CRW version: ${LATEST_TAG}"; \
-    \
-    # Tự động ghép chuỗi để tải chính xác gói crw-server-linux-x64.tar.gz của bản mới nhất
-    CRW_DOWNLOAD_URL="https://github.com/us/crw/releases/download/${LATEST_TAG}/crw-server-linux-x64.tar.gz"; \
-    curl -fsSL "$CRW_DOWNLOAD_URL" -o crw-server.tar.gz; \
-    \
-    # Giải nén trực tiếp vào thư mục bàn giao
+    CRW_DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep -E 'linux.*tar\.gz|tar\.gz.*linux' | head -n 1); \
+    if [ -z "$CRW_DOWNLOAD_URL" ]; then \
+        CRW_DOWNLOAD_URL="https://github.com/us/crw/releases/download/${LATEST_TAG}/crw-server-linux-x64.tar.gz"; \
+    fi; \
+    echo "Downloading from: ${CRW_DOWNLOAD_URL}"; \
+    curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" "$CRW_DOWNLOAD_URL" -o crw-server.tar.gz; \
     tar -xzf crw-server.tar.gz -C /usr/local/bin/; \
     if [ -f /usr/local/bin/crw ] && [ ! -f /usr/local/bin/crw-server ]; then mv /usr/local/bin/crw /usr/local/bin/crw-server; fi; \
     chmod +x /usr/local/bin/crw-server; \
     rm -f crw-server.tar.gz; \
-    \
-    # 2. Tải Cloudflare Warp Go từ GitHub Release (Đã sửa lỗi giải mã chuỗi)
     WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d); \
-    curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip; \
+    curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$WARP_ZIP_URL" -o /tmp/warp.zip; \
     unzip /tmp/warp.zip -d /usr/local/bin/; \
     mv /usr/local/bin/warp-linux-amd64 /usr/local/bin/warp; \
     rm -f /tmp/warp.zip; \
     chmod +x /usr/local/bin/warp
 
-# ==============================================================================
-# GIAI ĐOẠN 2: Runtime chính chạy trên Debian (Chrome Headless và Python)
-# ==============================================================================
 FROM debian:stable-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -80,7 +69,6 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir cloakbrowser && \
     python3 -m cloakbrowser install
 
-# Clone và cài đặt SearXNG trực tiếp từ mã nguồn chính thức (Chuỗi mã hóa chuẩn 100%)
 RUN git clone --depth 1 $(echo "aHR0cHM6Ly9naXRodWIuY29tL3NlYXJ4bmcvc2VhcnhuZy5naXQ=" | base64 -d) /usr/local/src/searxng && \
     cd /usr/local/src/searxng && \
     pip install --no-cache-dir -r requirements.txt
@@ -223,7 +211,7 @@ echo "=== Launching CloakBrowser Binary on Port 9222 ==="
 
 echo "=== Waiting for CloakBrowser CDP Endpoint ==="
 while ! nc -z 127.0.0.1 9222; do sleep 1; done
-echo "=== CloakBrowser is Up and Running ==="
+echo "=== Cloudflare Warp Proxy to be ready ==="
 
 echo "=== Starting CRW Server ==="
 cd /app
