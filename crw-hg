@@ -5,13 +5,21 @@ RUN apk add --no-cache curl unzip tar grep sed ca-certificates bash
 WORKDIR /tmp
 
 RUN set -eux; \
-    echo "Y3VybCAtZnNCTCBodHRwczovL2Zhc3RjcncuY29tL2luc3RhbGwgfCBzaA==" | base64 -d | sh; \
-    if [ -f /usr/local/bin/crw ] && [ ! -f /usr/local/bin/crw-server ]; then \
-        mv /usr/local/bin/crw /usr/local/bin/crw-server; \
-    fi; \
+    API_URL=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy91cy9jcncvcmVsZWFzZXMvbGF0ZXN0" | base64 -d); \
+    \
+    LATEST_TAG=$(curl -sSL "$API_URL" | grep -oP '"tag_name":\s*"\K[^"]+' | head -n 1); \
+    echo "Detected latest CRW version: ${LATEST_TAG}"; \
+    \
+    CRW_DOWNLOAD_URL="https://github.com/us/crw/releases/download/${LATEST_TAG}/crw-server-linux-x64.tar.gz"; \
+    curl -fsSL "$CRW_DOWNLOAD_URL" -o crw-server.tar.gz; \
+    \
+    tar -xzf crw-server.tar.gz -C /usr/local/bin/; \
+    if [ -f /usr/local/bin/crw ] && [ ! -f /usr/local/bin/crw-server ]; then mv /usr/local/bin/crw /usr/local/bin/crw-server; fi; \
     chmod +x /usr/local/bin/crw-server; \
+    rm -f crw-server.tar.gz; \
+    \
     WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d); \
-    curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "$WARP_ZIP_URL" -o /tmp/warp.zip; \
+    curl -fsSL "$WARP_ZIP_URL" -o /tmp/warp.zip; \
     unzip /tmp/warp.zip -d /usr/local/bin/; \
     mv /usr/local/bin/warp-linux-amd64 /usr/local/bin/warp; \
     rm -f /tmp/warp.zip; \
@@ -21,10 +29,9 @@ FROM debian:stable-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     RUST_LOG=info \
-    CRW_CONFIG=/app/config.docker.toml \
+    CRW_AUTH__API_KEYS=["uv"] \
     CRW_SERVER__HOST=0.0.0.0 \
     CRW_SERVER__PORT=7860 \
-    CRW_SECRET_KEY=uv \
     CRW_SERVER__RATE_LIMIT_RPS=0 \
     CRW_REQUEST__DEADLINE_MS_DEFAULT=30000 \
     CRW_REQUEST__AUTO_EXTEND_DEADLINE_FOR_LADDER=true \
@@ -37,6 +44,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CRW_RENDERER__CHROME__WS_URL=ws://127.0.0.1:9222/ \
     CRW_SEARCH__ENABLED=true \
     CRW_SEARCH__SEARXNG_URL=http://127.0.0.1:8080 \
+    CRW_SEARCH__QUERY_EXPAND=true \
+    CRW_SEARCH__QUERY_EXPAND_VARIANTS=3 \
+    CRW_DOCUMENT__SANDBOX=true \
+    CRW_DOCUMENT__MAX_CONCURRENT_PARSES=2 \
     CLOAKBROWSER_AUTO_UPDATE=false \
     NO_PROXY=localhost,127.0.0.1 \
     no_proxy=localhost,127.0.0.1 \
@@ -100,38 +111,6 @@ outgoing:
       - http://127.0.0.1:4001
 EOF
 
-RUN cat << 'EOF' > /app/config.docker.toml
-[server]
-host = "0.0.0.0"
-port = 7860
-rate_limit_rps = 0
-
-[request]
-deadline_ms_default = 30000
-auto_extend_deadline_for_ladder = true
-
-[renderer]
-mode = "auto"
-http_timeout_ms = 4000
-chrome_timeout_ms = 30000
-chrome_intercept_resources = true
-chrome_nav_budget_ms = 12000
-chrome_context_pool_enabled = true
-
-[renderer.chrome]
-ws_url = "ws://127.0.0.1:9222/"
-
-[search]
-enabled = true
-searxng_url = "http://127.0.0.1:8080"
-query_expand = true
-query_expand_variants = 3
-
-[document]
-sandbox = true
-max_concurrent_parses = 2
-EOF
-
 RUN cat << 'EOF' > /app/start.sh
 #!/bin/bash
 set -e
@@ -139,13 +118,7 @@ set -e
 WARP_DIR="/tmp/warp_data"
 
 echo "=== Checking Security Configuration ==="
-if [ -z "$CRW_SECRET_KEY" ]; then
-    echo "NOTICE: CRW_SECRET_KEY is empty. Running in OPEN PUBLIC mode."
-    echo -e "[auth]\napi_keys = []" > /app/config.local.toml
-else
-    echo "SUCCESS: CRW_SECRET_KEY detected. API Authentication is enabled."
-    echo -e "[auth]\napi_keys = [\"$CRW_SECRET_KEY\"]" > /app/config.local.toml
-fi
+echo "Current API Keys: $CRW_AUTH__API_KEYS"
 
 echo "=== [WARP] Dang khoi tao va cau hinh dinh tuyen Cloudflare Warp... ==="
 killall warp 2>/dev/null || true
@@ -206,7 +179,7 @@ echo "=== CloakBrowser is Up and Running ==="
 
 echo "=== Starting CRW Server ==="
 cd /app
-exec crw-server serve --port 7860
+exec crw-server
 EOF
 
 RUN chmod +x /app/start.sh
