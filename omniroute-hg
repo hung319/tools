@@ -2,7 +2,6 @@ FROM ghcr.io/diegosouzapw/omniroute:latest-web
 
 USER root
 
-# 1. Cài đặt các công cụ hệ thống cần thiết cho Redis và Warp
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
@@ -10,7 +9,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         tini tar openssl findutils procps redis-server curl jq ca-certificates netcat-openbsd unzip psmisc \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Tải và cấu hình Cloudflare Warp Go Proxy (amd64)
 RUN ARCH=$(dpkg --print-architecture) \
     && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -di) \
     && if [ "$ARCH" = "amd64" ]; then \
@@ -23,7 +21,6 @@ RUN ARCH=$(dpkg --print-architecture) \
          echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
        fi
 
-# 3. Cấu hình biến môi trường hệ thống (Tắt hẳn Live WS bằng biến môi trường của tác giả)
 ENV PORT=7860 \
     HOSTNAME=0.0.0.0 \
     REDIS_URL="redis://127.0.0.1:6379" \
@@ -42,18 +39,15 @@ ENV PORT=7860 \
     ENABLE_HTTP_PROXY=true \
     NEXT_PUBLIC_ENABLE_HTTP_PROXY=true \
     OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS="true" \
-    # Định tuyến mạng qua Warp
     HTTP_PROXY="http://127.0.0.1:4001" \
     HTTPS_PROXY="http://127.0.0.1:4001" \
     ALL_PROXY="http://127.0.0.1:4001" \
     NO_PROXY="localhost,127.0.0.1" \
     DATA_DIR=/data \
-    # 🛑 KHÓA CHẾ ĐỘ LIVE DASHBOARD WEBSOCKET
     OMNIROUTE_DISABLE_LIVE_WS=true \
     LIVE_WS_PORT=20129 \
     LIVE_WS_HOST=127.0.0.1
 
-# 4. Tạo cấu trúc thư mục phân quyền sạch sẽ
 RUN mkdir -p /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node \
     && chown -R node:node /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app \
     && chmod -R 777 /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app
@@ -65,18 +59,17 @@ RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/pidfile .*/pidfile \/var\/run\/redis\/redis-server.pid/' /tmp/redis.conf \
     && chown node:node /tmp/redis.conf && chmod 777 /tmp/redis.conf
 
-# 5. Tạo Script Entrypoint mới tinh - ĐÃ LOẠI BỎ LIVE SOCKET
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
 set -e
 
 WARP_DIR="/tmp/warp_data"
+NODE_PID=""
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
-# Khởi chạy Redis nội bộ
 redis-server /tmp/redis.conf
 
-# Hàm cấu hình và xoay Proxy Warp
 init_or_rotate_warp() {
     mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
@@ -103,7 +96,6 @@ init_or_rotate_warp() {
     log "--- [WARP] Đang chạy lại dịch vụ proxy tại cổng 4001... ---"
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
     
-    # ⏳ TĂNG THỜI GIAN CHỜ: Để Warp ổn định đường truyền trước khi nhường quyền cho OmniRoute Engine
     sleep 10
     
     URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
@@ -121,20 +113,44 @@ warp_scheduler_loop() {
 
 cleanup() {
     trap - TERM INT QUIT
-    log "[SHUTDOWN] Đang dừng hệ thống an toàn..."
+    log "[SHUTDOWN] Đang kích hoạt quy trình dừng hệ thống an toàn..."
+    
+    if [ -n "$NODE_PID" ]; then
+        log "[SHUTDOWN] Gửi tín hiệu dừng (SIGTERM) tới OmniRoute Engine (PID: $NODE_PID)..."
+        kill -15 "$NODE_PID" 2>/dev/null || true
+        
+        log "[SHUTDOWN] Chờ ứng dụng đóng kết nối và giải phóng SQLite..."
+        count=0
+        while kill -0 "$NODE_PID" 2>/dev/null; do
+            sleep 1
+            count=$((count + 1))
+            if [ $count -gt 10 ]; then
+                log "[SHUTDOWN] Ứng dụng không phản hồi sau 10s, tiến hành cưỡng bức tắt..."
+                kill -9 "$NODE_PID" 2>/dev/null || true
+                break
+            fi
+        done
+        log "[SHUTDOWN] OmniRoute Engine đã dừng."
+    fi
+
+    log "[SHUTDOWN] Đang đóng cơ sở dữ liệu Redis an toàn..."
+    redis-cli shutdown 2>/dev/null || true
+    
     killall warp 2>/dev/null || true
+    log "[SHUTDOWN] Toàn bộ hệ thống đã được dọn dẹp sạch sẽ."
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
 
-# Thực thi proxy
 init_or_rotate_warp
 warp_scheduler_loop &
 
-# Chạy ứng dụng chính ở chế độ Foreground (ĐÃ BỎ ĐOẠN START-WS-SERVER)
 log "Starting OmniRoute Engine..."
 cd /app
-exec node dev/run-standalone.mjs
+node dev/run-standalone.mjs &
+NODE_PID=$!
+
+wait "$NODE_PID"
 EOF
 
 RUN chmod +x /usr/local/bin/hf-entrypoint.sh \
