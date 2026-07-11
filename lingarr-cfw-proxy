@@ -1,0 +1,1337 @@
+/**
+ * Lingarr Cloudflare Worker — Simplified Proxy
+ *
+ * Env vars (set via `wrangler secret put`):
+ *   LINGARR_URL   — Base URL of your Lingarr instance (e.g. http://192.168.1.10:9876)
+ *   LINGARR_KEY   — Your Lingarr API key (X-Api-Key)
+ *   WORKER_SECRET — A secret string clients must send as Authorization: Bearer <this>
+ *
+ * Features:
+ *   - Simplified endpoint names
+ *   - Injects X-Api-Key automatically
+ *   - Subtitle input: file upload (multipart), URL, or path string
+ *   - Both GET and POST for most endpoints
+ *   - /docs serves an interactive documentation page
+ */
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+// ── Route table ──────────────────────────────────────────────────────────
+// Each entry: { methods, handler }
+// handler(env, url, request, params) → Response
+
+const ROUTES = [
+  // ── Health / Docs ──────────────────────────────────────────────
+  { path: "/", methods: ["GET"], handler: () => json({ status: "ok", service: "lingarr-proxy", docs: "/docs" }) },
+  { path: "/health", methods: ["GET"], handler: () => json({ status: "ok", service: "lingarr-proxy" }) },
+  { path: "/docs", methods: ["GET"], handler: serveDocs },
+
+  // ── Auth ───────────────────────────────────────────────────────
+  { path: "/login", methods: ["POST"], handler: (env, _u, req) => proxy(env, "/api/Auth/login", req) },
+  { path: "/signup", methods: ["POST"], handler: (env, _u, req) => proxy(env, "/api/Auth/signup", req) },
+  { path: "/apikey", methods: ["POST"], handler: (env, _u, req) => proxy(env, "/api/Auth/apikey/generate", req, { method: "POST" }) },
+
+  // ── Translate: line ────────────────────────────────────────────
+  { path: "/translate/line", methods: ["GET", "POST"], handler: handleTranslateLine },
+
+  // ── Translate: content (batch) ─────────────────────────────────
+  { path: "/translate/content", methods: ["GET", "POST"], handler: handleTranslateContent },
+
+  // ── Translate: file (path / url / upload) ──────────────────────
+  { path: "/translate/file", methods: ["GET", "POST"], handler: handleTranslateFile },
+
+  // ── Translate: file content directly ───────────────────────────
+  { path: "/translate/upload", methods: ["POST"], handler: handleTranslateUpload },
+
+  // ── Translate: languages & models ──────────────────────────────
+  { path: "/translate/languages", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/Translate/languages", req) },
+  { path: "/translate/models", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/Translate/models", req) },
+
+  // ── Media ──────────────────────────────────────────────────────
+  { path: "/movies", methods: ["GET", "POST"], handler: handleMovies },
+  { path: "/shows", methods: ["GET", "POST"], handler: handleShows },
+  { path: "/media/exclude", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/Media/exclude", req) },
+  { path: "/media/threshold", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/Media/threshold", req) },
+
+  // ── Subtitles ──────────────────────────────────────────────────
+  { path: "/subtitles", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/Subtitle/all", req) },
+
+  // ── Translation Requests ───────────────────────────────────────
+  { path: "/requests", methods: ["GET", "POST"], handler: handleRequests },
+  { path: "/requests/active", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/TranslationRequest/active", req) },
+  { path: "/requests/cancel", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/TranslationRequest/cancel", req) },
+  { path: "/requests/remove", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/TranslationRequest/remove", req) },
+  { path: "/requests/retry", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/TranslationRequest/retry", req) },
+
+  // ── Misc ───────────────────────────────────────────────────────
+  { path: "/version", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/Version", req) },
+  { path: "/schedule/jobs", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/Schedule/jobs", req) },
+  { path: "/schedule/job/start", methods: ["GET", "POST"], handler: (env, _u, req) => proxy(env, "/api/Schedule/job/start", req) },
+  { path: "/mapping", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/Mapping/get", req) },
+  { path: "/mapping", methods: ["POST"], handler: (env, _u, req) => proxy(env, "/api/Mapping/set", req) },
+  { path: "/settings", methods: ["GET"], handler: (env, _u, req) => proxy(env, "/api/Setting/get", req) },
+];
+
+// ── Worker entry ─────────────────────────────────────────────────────────
+
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS });
+    }
+
+    // Auth check (skip for /health and /docs; skip entirely if WORKER_SECRET not set)
+    const url = new URL(request.url);
+    const skipAuth = ["/", "/health", "/docs"];
+    if (env.WORKER_SECRET && !skipAuth.includes(url.pathname)) {
+      const authHeader = request.headers.get("Authorization") || "";
+      const token = authHeader.replace(/^Bearer\s+/i, "");
+      if (token !== env.WORKER_SECRET) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+    }
+
+    try {
+      const path = url.pathname;
+      const method = request.method;
+
+      // Match static routes
+      const route = ROUTES.find((r) => r.path === path && r.methods.includes(method));
+      if (route) {
+        return route.handler(env, url, request);
+      }
+
+      // Dynamic route: /requests/:id
+      const reqMatch = path.match(/^\/requests\/(\d+)$/);
+      if (reqMatch && ["GET", "POST"].includes(method)) {
+        return proxy(env, `/api/TranslationRequest/${reqMatch[1]}`, request);
+      }
+
+      // Dynamic route: /image/show/*, /image/movie/*
+      if (path.startsWith("/image/show/")) {
+        const p = path.slice("/image/show/".length);
+        return proxy(env, `/api/Image/show/${p}`, request);
+      }
+      if (path.startsWith("/image/movie/")) {
+        const p = path.slice("/image/movie/".length);
+        return proxy(env, `/api/Image/movie/${p}`, request);
+      }
+
+      // Raw passthrough: /raw/*
+      if (path.startsWith("/raw/")) {
+        const lingarrPath = "/" + path.slice("/raw/".length) + url.search;
+        return proxy(env, lingarrPath, request);
+      }
+
+      return json({ error: "Not found", hint: "GET /docs for full API reference" }, 404);
+    } catch (err) {
+      return json({ error: err.message || "Internal error" }, 500);
+    }
+  },
+};
+
+// ── Handler: translate line ──────────────────────────────────────────────
+
+async function handleTranslateLine(env, url, request) {
+  let body;
+  if (request.method === "GET") {
+    body = {
+      text: url.searchParams.get("text") || "",
+      from: url.searchParams.get("from") || "en",
+      to: url.searchParams.get("to") || "vi",
+    };
+  } else {
+    body = await request.json();
+  }
+
+  const payload = {
+    subtitleLine: body.text,
+    sourceLanguage: body.from || "en",
+    targetLanguage: body.to || "vi",
+    contextLinesBefore: body.contextBefore || null,
+    contextLinesAfter: body.contextAfter || null,
+  };
+
+  return proxy(env, "/api/Translate/line", request, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── Handler: translate content (batch) ───────────────────────────────────
+
+async function handleTranslateContent(env, url, request) {
+  let body;
+  if (request.method === "GET") {
+    // GET only supports simple inline via query (limited, but handy)
+    const text = url.searchParams.get("lines") || ""; // comma-separated
+    const lines = text.split("|").map((l, i) => ({ position: i + 1, line: l }));
+    body = {
+      title: url.searchParams.get("title") || "",
+      from: url.searchParams.get("from") || "en",
+      to: url.searchParams.get("to") || "vi",
+      lines,
+    };
+  } else {
+    body = await request.json();
+  }
+
+  const payload = {
+    arrMediaId: body.mediaId || 0,
+    title: body.title || "",
+    sourceLanguage: body.from || "en",
+    targetLanguage: body.to || "vi",
+    mediaType: body.mediaType || "Movie",
+    lines: body.lines.map((l) => ({ position: l.position, line: l.line })),
+  };
+
+  return proxy(env, "/api/Translate/content", request, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── Handler: translate file (path / url) ─────────────────────────────────
+
+async function handleTranslateFile(env, url, request) {
+  let body;
+  if (request.method === "GET") {
+    body = {
+      path: url.searchParams.get("path") || "",
+      url: url.searchParams.get("url") || "",
+      from: url.searchParams.get("from") || "en",
+      to: url.searchParams.get("to") || "vi",
+      mediaId: url.searchParams.get("mediaId") || "0",
+      mediaType: url.searchParams.get("mediaType") || "Movie",
+      format: url.searchParams.get("format") || "srt",
+    };
+  } else {
+    body = await request.json();
+  }
+
+  // If url is provided, fetch the subtitle content first
+  if (body.url && !body.path) {
+    try {
+      const resp = await fetch(body.url);
+      if (!resp.ok) return json({ error: `Failed to fetch subtitle from URL: ${resp.status}` }, 400);
+      const content = await resp.text();
+      const ext = body.url.split(".").pop().split("?")[0] || "srt";
+
+      // Send as content-based translation
+      const lines = parseSubtitleContent(content);
+      const payload = {
+        arrMediaId: parseInt(body.mediaId) || 0,
+        title: body.title || "URL Subtitle",
+        sourceLanguage: body.from || "en",
+        targetLanguage: body.to || "vi",
+        mediaType: body.mediaType || "Movie",
+        lines: lines,
+      };
+
+      return proxy(env, "/api/Translate/content", request, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      return json({ error: `Failed to fetch URL: ${e.message}` }, 400);
+    }
+  }
+
+  // Otherwise, translate by file path on Lingarr
+  const payload = {
+    subtitlePath: body.path,
+    sourceLanguage: body.from || "en",
+    targetLanguage: body.to || "vi",
+    mediaId: parseInt(body.mediaId) || 0,
+    mediaType: body.mediaType || "Movie",
+    subtitleFormat: body.format || "srt",
+  };
+
+  return proxy(env, "/api/Translate/file", request, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── Handler: upload subtitle file for translation ────────────────────────
+
+async function handleTranslateUpload(env, url, request) {
+  const contentType = request.headers.get("Content-Type") || "";
+
+  let subtitleText = "";
+  let from = "en";
+  let to = "vi";
+  let title = "";
+  let mediaId = 0;
+  let mediaType = "Movie";
+
+  if (contentType.includes("multipart/form-data")) {
+    // Multipart form: field "file" = subtitle file, plus form fields
+    const formData = await request.formData();
+    const file = formData.get("file");
+    if (!file) return json({ error: "No 'file' field in form data" }, 400);
+    subtitleText = await file.text();
+    from = formData.get("from") || "en";
+    to = formData.get("to") || "vi";
+    title = formData.get("title") || file.name || "";
+    mediaId = parseInt(formData.get("mediaId")) || 0;
+    mediaType = formData.get("mediaType") || "Movie";
+  } else if (contentType.includes("application/json")) {
+    // JSON body: { content: "srt text...", from, to }
+    const body = await request.json();
+    subtitleText = body.content || body.text || "";
+    from = body.from || "en";
+    to = body.to || "vi";
+    title = body.title || "";
+    mediaId = body.mediaId || 0;
+    mediaType = body.mediaType || "Movie";
+  } else {
+    // Raw text body — the subtitle content itself
+    subtitleText = await request.text();
+    from = url.searchParams.get("from") || "en";
+    to = url.searchParams.get("to") || "vi";
+  }
+
+  if (!subtitleText.trim()) {
+    return json({ error: "Empty subtitle content" }, 400);
+  }
+
+  // Parse SRT/VTT content into lines
+  const lines = parseSubtitleContent(subtitleText);
+  if (!lines.length) {
+    return json({ error: "No translatable lines found in subtitle content" }, 400);
+  }
+
+  const payload = {
+    arrMediaId: mediaId,
+    title: title || "Uploaded Subtitle",
+    sourceLanguage: from,
+    targetLanguage: to,
+    mediaType,
+    lines,
+  };
+
+  return proxy(env, "/api/Translate/content", request, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── Handler: movies ──────────────────────────────────────────────────────
+
+async function handleMovies(env, url, request) {
+  let qs;
+  if (request.method === "GET") {
+    qs = forwardQS(url, {
+      searchQuery: "search",
+      pageNumber: "page",
+      pageSize: "size",
+      orderBy: "sort",
+      ascending: "asc",
+      subtitleFilter: "filter",
+    });
+  } else {
+    const body = await request.json();
+    const params = new URLSearchParams();
+    if (body.search) params.set("searchQuery", body.search);
+    if (body.page) params.set("pageNumber", body.page);
+    if (body.size) params.set("pageSize", body.size);
+    if (body.sort) params.set("orderBy", body.sort);
+    if (body.asc !== undefined) params.set("ascending", body.asc);
+    if (body.filter) params.set("subtitleFilter", body.filter);
+    qs = params.toString() ? "?" + params.toString() : "";
+  }
+  return proxy(env, `/api/Media/movies${qs || ""}`, request);
+}
+
+// ── Handler: shows ───────────────────────────────────────────────────────
+
+async function handleShows(env, url, request) {
+  let qs;
+  if (request.method === "GET") {
+    qs = forwardQS(url, {
+      searchQuery: "search",
+      pageNumber: "page",
+      pageSize: "size",
+      orderBy: "sort",
+      ascending: "asc",
+      subtitleFilter: "filter",
+    });
+  } else {
+    const body = await request.json();
+    const params = new URLSearchParams();
+    if (body.search) params.set("searchQuery", body.search);
+    if (body.page) params.set("pageNumber", body.page);
+    if (body.size) params.set("pageSize", body.size);
+    if (body.sort) params.set("orderBy", body.sort);
+    if (body.asc !== undefined) params.set("ascending", body.asc);
+    if (body.filter) params.set("subtitleFilter", body.filter);
+    qs = params.toString() ? "?" + params.toString() : "";
+  }
+  return proxy(env, `/api/Media/shows${qs || ""}`, request);
+}
+
+// ── Handler: translation requests ────────────────────────────────────────
+
+async function handleRequests(env, url, request) {
+  if (request.method === "GET") {
+    const qs = forwardQS(url, {
+      searchQuery: "search",
+      pageNumber: "page",
+      pageSize: "size",
+      orderBy: "sort",
+      ascending: "asc",
+    });
+    return proxy(env, `/api/TranslationRequest/requests${qs}`, request);
+  }
+  // POST — pass through body
+  return proxy(env, "/api/TranslationRequest/requests", request);
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+async function proxy(env, lingarrPath, originalReq, overrides = {}) {
+  const upstream = env.LINGARR_URL.replace(/\/+$/, "") + lingarrPath;
+  const headers = { "Content-Type": "application/json" };
+  if (env.LINGARR_KEY) headers["X-Api-Key"] = env.LINGARR_KEY;
+
+  const init = {
+    method: overrides.method || originalReq.method,
+    headers,
+  };
+
+  if (overrides.body !== undefined) {
+    init.body = overrides.body;
+  } else if (originalReq.method !== "GET" && originalReq.method !== "HEAD") {
+    const cloned = originalReq.clone();
+    const body = await cloned.text();
+    if (body) init.body = body;
+  }
+
+  const resp = await fetch(upstream, init);
+  const text = await resp.text();
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = text;
+  }
+
+  return new Response(JSON.stringify(data), {
+    status: resp.status,
+    headers: { "Content-Type": "application/json", ...CORS },
+  });
+}
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json", ...CORS },
+  });
+}
+
+function forwardQS(clientURL, mapping) {
+  const parts = [];
+  for (const [upstreamKey, clientKey] of Object.entries(mapping)) {
+    const v = clientURL.searchParams.get(clientKey);
+    if (v !== null && v !== "") parts.push(`${upstreamKey}=${encodeURIComponent(v)}`);
+  }
+  return parts.length ? "?" + parts.join("&") : "";
+}
+
+/**
+ * Parse SRT/VTT subtitle content into { position, line } array.
+ * Strips timestamps, sequence numbers, and formatting tags.
+ */
+function parseSubtitleContent(content) {
+  const lines = [];
+  // Split into blocks (separated by blank lines)
+  const blocks = content.split(/\r?\n\r?\n/);
+  let position = 1;
+
+  for (const block of blocks) {
+    const blockLines = block.trim().split(/\r?\n/);
+    if (blockLines.length < 2) continue;
+
+    // Find the text lines (skip sequence numbers and timestamp lines)
+    for (const line of blockLines) {
+      const trimmed = line.trim();
+      // Skip empty, sequence numbers, timestamp lines (contain -->), and VTT header
+      if (!trimmed) continue;
+      if (/^\d+$/.test(trimmed)) continue;
+      if (trimmed.includes("-->")) continue;
+      if (trimmed === "WEBVTT") continue;
+      if (trimmed.startsWith("Kind:") || trimmed.startsWith("Language:")) continue;
+
+      // Strip HTML/SRT tags: <i>, </i>, <b>, <b>, <font ...>, etc.
+      const cleaned = trimmed.replace(/<[^>]+>/g, "").trim();
+      if (cleaned) {
+        lines.push({ position, line: cleaned });
+        position++;
+      }
+    }
+  }
+  return lines;
+}
+
+// ── Docs page ────────────────────────────────────────────────────────────
+
+function serveDocs() {
+  return new Response(DOCS_HTML, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", ...CORS },
+  });
+}
+
+const DOCS_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lingarr Worker — API Docs</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e1e4ed;
+    --muted: #8b8fa3;
+    --accent: #6c8cff;
+    --green: #4ade80;
+    --orange: #fb923c;
+    --red: #f87171;
+    --cyan: #22d3ee;
+    --purple: #a78bfa;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1.5rem;
+    margin-bottom: 2rem;
+  }
+  header h1 { font-size: 1.75rem; font-weight: 700; }
+  header h1 span { color: var(--accent); }
+  header p { color: var(--muted); margin-top: .35rem; font-size: .95rem; }
+
+  .base-url {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .75rem 1rem;
+    margin-bottom: 2rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: .85rem;
+    color: var(--cyan);
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+  .base-url .label { color: var(--muted); font-family: inherit; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+  .base-url code { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+  .section-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 2rem 0 1rem;
+    padding-bottom: .4rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-size: .8rem;
+  }
+
+  .endpoint {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+    transition: border-color .15s;
+  }
+  .endpoint:hover { border-color: #3a3d4a; }
+
+  .endpoint-header {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .85rem 1rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .endpoint-header:hover { background: rgba(108,140,255,.04); }
+
+  .method {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: .7rem;
+    font-weight: 700;
+    padding: .2rem .5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    min-width: 48px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .method-get { background: rgba(74,222,128,.15); color: var(--green); }
+  .method-post { background: rgba(251,146,60,.15); color: var(--orange); }
+  .method-any { background: rgba(167,139,250,.15); color: var(--purple); }
+
+  .endpoint-path {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: .88rem;
+    font-weight: 500;
+    flex: 1;
+  }
+  .endpoint-desc {
+    color: var(--muted);
+    font-size: .82rem;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .endpoint-body {
+    display: none;
+    padding: 0 1rem 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .endpoint.open .endpoint-body { display: block; }
+
+  .endpoint-body h4 {
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--muted);
+    margin: 1rem 0 .4rem;
+  }
+  .endpoint-body p { font-size: .88rem; color: var(--text); margin-bottom: .5rem; }
+
+  pre {
+    background: #12141c;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .85rem 1rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: .8rem;
+    line-height: 1.55;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #c4c8d8;
+  }
+  pre .key { color: var(--cyan); }
+  pre .str { color: var(--green); }
+  pre .num { color: var(--orange); }
+  pre .comment { color: #555a6e; }
+
+  .params-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .85rem;
+    margin: .5rem 0;
+  }
+  .params-table th {
+    text-align: left;
+    font-size: .7rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+    padding: .4rem .5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .params-table td {
+    padding: .4rem .5rem;
+    border-bottom: 1px solid rgba(42,45,58,.5);
+    vertical-align: top;
+  }
+  .params-table code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: .8rem;
+    color: var(--accent);
+  }
+  .params-table .optional { color: var(--muted); font-size: .75rem; }
+
+  .try-it {
+    margin-top: .75rem;
+  }
+  .try-it textarea {
+    width: 100%;
+    background: #12141c;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: .8rem;
+    padding: .6rem .8rem;
+    resize: vertical;
+    min-height: 60px;
+  }
+  .try-it textarea:focus { outline: none; border-color: var(--accent); }
+  .try-it .btn-row { display: flex; gap: .5rem; margin-top: .5rem; align-items: center; }
+  .try-it button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: .45rem 1rem;
+    font-size: .8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+  .try-it button:hover { opacity: .85; }
+  .try-it .result {
+    margin-top: .5rem;
+    max-height: 250px;
+    overflow: auto;
+  }
+
+  .tag { display: inline-block; font-size: .65rem; padding: .1rem .4rem; border-radius: 3px; margin-left: .35rem; vertical-align: middle; }
+  .tag-file { background: rgba(251,146,60,.15); color: var(--orange); }
+  .tag-url { background: rgba(34,211,238,.15); color: var(--cyan); }
+
+  .footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: .78rem;
+    text-align: center;
+  }
+
+  @media (max-width: 640px) {
+    .endpoint-desc { display: none; }
+    .container { padding: 1rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1><span>Lingarr</span> Worker API</h1>
+  <p>Simplified proxy for the Lingarr subtitle translation API. Deploy on Cloudflare Workers.</p>
+</header>
+
+<div class="base-url">
+  <span class="label">Base URL</span>
+  <code id="baseUrl">https://your-worker.workers.dev</code>
+</div>
+
+<!-- ═══ Health ═══════════════════════════════════════════════════ -->
+<div class="section-title">Health</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/health</span>
+    <span class="endpoint-desc">Health check</span>
+  </div>
+  <div class="endpoint-body">
+    <p>Returns service status. No auth required.</p>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/health')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Auth ═════════════════════════════════════════════════════ -->
+<div class="section-title">Auth</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/login</span>
+    <span class="endpoint-desc">Login with username & password</span>
+  </div>
+  <div class="endpoint-body">
+    <h4>Body (JSON)</h4>
+    <pre>{ <span class="key">"username"</span>: <span class="str">"admin"</span>, <span class="key">"password"</span>: <span class="str">"****"</span> }</pre>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <textarea class="body-input">{ "username": "admin", "password": "" }</textarea>
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'POST', '/login', this.closest('.try-it').querySelector('textarea').value)">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/apikey</span>
+    <span class="endpoint-desc">Generate API key</span>
+  </div>
+  <div class="endpoint-body">
+    <p>Generates a new API key for the Lingarr instance.</p>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'POST', '/apikey')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Translate ════════════════════════════════════════════════ -->
+<div class="section-title">Translate</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/translate/line</span>
+    <span class="endpoint-desc">Translate a single subtitle line</span>
+  </div>
+  <div class="endpoint-body">
+    <h4>Parameters</h4>
+    <table class="params-table">
+      <tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>text</code></td><td>string</td><td>—</td><td>The text to translate</td></tr>
+      <tr><td><code>from</code></td><td>string</td><td><code>en</code></td><td>Source language code</td></tr>
+      <tr><td><code>to</code></td><td>string</td><td><code>vi</code></td><td>Target language code</td></tr>
+    </table>
+    <h4>Body (JSON)</h4>
+    <pre>{ <span class="key">"text"</span>: <span class="str">"Hello, how are you?"</span>, <span class="key">"from"</span>: <span class="str">"en"</span>, <span class="key">"to"</span>: <span class="str">"vi"</span> }</pre>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <textarea class="body-input">{ "text": "Hello, how are you?", "from": "en", "to": "vi" }</textarea>
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/translate/line?text=Hello%2C+how+are+you%3F&from=en&to=vi')">GET</button>
+        <button onclick="tryIt(this, 'POST', '/translate/line', this.closest('.try-it').querySelector('textarea').value)">POST</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/translate/content</span>
+    <span class="endpoint-desc">Batch translate multiple lines</span>
+  </div>
+  <div class="endpoint-body">
+    <h4>Body (JSON)</h4>
+    <pre>{
+  <span class="key">"title"</span>: <span class="str">"Movie Name"</span>,
+  <span class="key">"from"</span>: <span class="str">"en"</span>,
+  <span class="key">"to"</span>: <span class="str">"vi"</span>,
+  <span class="key">"lines"</span>: [
+    { <span class="key">"position"</span>: <span class="num">1</span>, <span class="key">"line"</span>: <span class="str">"Hello"</span> },
+    { <span class="key">"position"</span>: <span class="num">2</span>, <span class="key">"line"</span>: <span class="str">"World"</span> }
+  ]
+}</pre>
+    <h4>GET mode</h4>
+    <p>Pass <code>lines</code> as pipe-separated: <code>/translate/content?lines=Hello|World&from=en&to=vi</code></p>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <textarea class="body-input">{
+  "title": "Test",
+  "from": "en",
+  "to": "vi",
+  "lines": [
+    { "position": 1, "line": "Hello world" },
+    { "position": 2, "line": "Goodbye world" }
+  ]
+}</textarea>
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'POST', '/translate/content', this.closest('.try-it').querySelector('textarea').value)">POST</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/translate/file</span>
+    <span class="endpoint-desc">Translate a subtitle file <span class="tag tag-url">URL</span></span>
+  </div>
+  <div class="endpoint-body">
+    <p>Translate by <strong>file path</strong> on Lingarr, or by <strong>URL</strong> (fetches and parses SRT/VTT automatically).</p>
+    <h4>Parameters</h4>
+    <table class="params-table">
+      <tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      <tr><td><code>path</code></td><td>string</td><td><span class="optional">one of path/url</span></td><td>Subtitle file path on Lingarr media server</td></tr>
+      <tr><td><code>url</code></td><td>string</td><td><span class="optional">one of path/url</span></td><td>URL to download the subtitle file from</td></tr>
+      <tr><td><code>from</code></td><td>string</td><td></td><td>Source language (default: <code>en</code>)</td></tr>
+      <tr><td><code>to</code></td><td>string</td><td></td><td>Target language (default: <code>vi</code>)</td></tr>
+      <tr><td><code>mediaId</code></td><td>int</td><td></td><td>Media ID (default: <code>0</code>)</td></tr>
+      <tr><td><code>mediaType</code></td><td>string</td><td></td><td><code>Movie</code> or <code>Show</code> (default: <code>Movie</code>)</td></tr>
+      <tr><td><code>format</code></td><td>string</td><td></td><td>Subtitle format (default: <code>srt</code>)</td></tr>
+    </table>
+    <h4>JSON Body</h4>
+    <pre>{ <span class="key">"url"</span>: <span class="str">"https://example.com/subtitle.srt"</span>, <span class="key">"from"</span>: <span class="str">"en"</span>, <span class="key">"to"</span>: <span class="str">"vi"</span> }</pre>
+    <h4>GET Example</h4>
+    <pre>GET /translate/file?url=https://example.com/sub.srt&amp;from=en&amp;to=vi</pre>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <textarea class="body-input">{ "url": "", "path": "", "from": "en", "to": "vi" }</textarea>
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'POST', '/translate/file', this.closest('.try-it').querySelector('textarea').value)">POST</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/translate/upload</span>
+    <span class="endpoint-desc">Upload & translate subtitle <span class="tag tag-file">FILE</span></span>
+  </div>
+  <div class="endpoint-body">
+    <p>Upload a subtitle file directly. Supports <code>multipart/form-data</code>, JSON with content string, or raw SRT/VTT text body.</p>
+    <h4>Multipart Form</h4>
+    <table class="params-table">
+      <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+      <tr><td><code>file</code></td><td>file</td><td>yes</td><td>The subtitle file (.srt, .vtt, .ass)</td></tr>
+      <tr><td><code>from</code></td><td>string</td><td></td><td>Source language (default: <code>en</code>)</td></tr>
+      <tr><td><code>to</code></td><td>string</td><td></td><td>Target language (default: <code>vi</code>)</td></tr>
+      <tr><td><code>title</code></td><td>string</td><td></td><td>Media title (default: filename)</td></tr>
+      <tr><td><code>mediaId</code></td><td>int</td><td></td><td>Media ID</td></tr>
+      <tr><td><code>mediaType</code></td><td>string</td><td></td><td><code>Movie</code> or <code>Show</code></td></tr>
+    </table>
+    <h4>JSON Body</h4>
+    <pre>{ <span class="key">"content"</span>: <span class="str">"1\\n00:00:01,000 --> 00:00:03,000\\nHello world\\n\\n2\\n00:00:04,000 --> ..."</span>, <span class="key">"from"</span>: <span class="str">"en"</span>, <span class="key">"to"</span>: <span class="str">"vi"</span> }</pre>
+    <h4>Raw Text</h4>
+    <p>Send the SRT/VTT content as raw body with <code>Content-Type: text/plain</code>. Use query params for <code>from</code> and <code>to</code>.</p>
+    <h4>curl Example</h4>
+    <pre><span class="comment"># Upload a file</span>
+curl -X POST https://worker.dev/translate/upload \\
+  -H "Authorization: Bearer YOUR_SECRET" \\
+  -F "file=@subtitle.srt" \\
+  -F "from=en" -F "to=vi"
+
+<span class="comment"># Raw SRT text</span>
+curl -X POST https://worker.dev/translate/upload \\
+  -H "Authorization: Bearer YOUR_SECRET" \\
+  -H "Content-Type: text/plain" \\
+  --data-binary @subtitle.srt \\
+  "?from=en&to=vi"</pre>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <textarea class="body-input" rows="4">1
+00:00:01,000 --> 00:00:03,000
+Hello world
+
+2
+00:00:04,000 --> 00:00:06,000
+Goodbye world</textarea>
+      <div class="btn-row">
+        <button onclick="tryUpload(this)">POST (raw text)</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/translate/languages</span>
+    <span class="endpoint-desc">List available languages</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/translate/languages')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/translate/models</span>
+    <span class="endpoint-desc">List AI translation models</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/translate/models')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Media ════════════════════════════════════════════════════ -->
+<div class="section-title">Media</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/movies</span>
+    <span class="endpoint-desc">List movies (paginated)</span>
+  </div>
+  <div class="endpoint-body">
+    <h4>Parameters</h4>
+    <table class="params-table">
+      <tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>search</code></td><td>string</td><td></td><td>Search query</td></tr>
+      <tr><td><code>page</code></td><td>int</td><td><code>1</code></td><td>Page number</td></tr>
+      <tr><td><code>size</code></td><td>int</td><td><code>20</code></td><td>Items per page</td></tr>
+      <tr><td><code>sort</code></td><td>string</td><td></td><td>Sort field (e.g. <code>Title</code>)</td></tr>
+      <tr><td><code>asc</code></td><td>bool</td><td><code>true</code></td><td>Ascending order</td></tr>
+      <tr><td><code>filter</code></td><td>string</td><td></td><td>Subtitle filter</td></tr>
+    </table>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/movies?search=&page=1&size=5')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/shows</span>
+    <span class="endpoint-desc">List TV shows (paginated)</span>
+  </div>
+  <div class="endpoint-body">
+    <h4>Parameters</h4>
+    <table class="params-table">
+      <tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>search</code></td><td>string</td><td></td><td>Search query</td></tr>
+      <tr><td><code>page</code></td><td>int</td><td><code>1</code></td><td>Page number</td></tr>
+      <tr><td><code>size</code></td><td>int</td><td><code>20</code></td><td>Items per page</td></tr>
+      <tr><td><code>sort</code></td><td>string</td><td></td><td>Sort field</td></tr>
+      <tr><td><code>asc</code></td><td>bool</td><td><code>true</code></td><td>Ascending order</td></tr>
+    </table>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/shows?page=1&size=5')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/media/exclude</span>
+    <span class="endpoint-desc">Toggle media exclusion</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>{ <span class="key">"mediaType"</span>: <span class="str">"Movie"</span>, <span class="key">"id"</span>: <span class="num">1</span> }</pre>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/media/threshold</span>
+    <span class="endpoint-desc">Set translation threshold (hours)</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>{ <span class="key">"mediaType"</span>: <span class="str">"Movie"</span>, <span class="key">"id"</span>: <span class="num">1</span>, <span class="key">"hours"</span>: <span class="num">24</span> }</pre>
+  </div>
+</div>
+
+<!-- ═══ Requests ═════════════════════════════════════════════════ -->
+<div class="section-title">Translation Requests</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/requests</span>
+    <span class="endpoint-desc">List translation requests</span>
+  </div>
+  <div class="endpoint-body">
+    <h4>Parameters</h4>
+    <table class="params-table">
+      <tr><th>Name</th><th>Type</th><th>Default</th></tr>
+      <tr><td><code>page</code></td><td>int</td><td><code>1</code></td></tr>
+      <tr><td><code>size</code></td><td>int</td><td><code>20</code></td></tr>
+      <tr><td><code>sort</code></td><td>string</td><td></td></tr>
+      <tr><td><code>asc</code></td><td>bool</td><td><code>true</code></td></tr>
+      <tr><td><code>search</code></td><td>string</td><td></td></tr>
+    </table>
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/requests?page=1&size=5')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/requests/active</span>
+    <span class="endpoint-desc">Count active requests</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/requests/active')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/requests/:id</span>
+    <span class="endpoint-desc">Get request detail</span>
+  </div>
+  <div class="endpoint-body">
+    <p>Returns a translation request with its event timeline.</p>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/requests/cancel</span>
+    <span class="endpoint-desc">Cancel a request</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>{ <span class="key">"id"</span>: <span class="num">123</span>, ... }</pre>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/requests/remove</span>
+    <span class="endpoint-desc">Remove a request</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>{ <span class="key">"id"</span>: <span class="num">123</span>, ... }</pre>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/requests/retry</span>
+    <span class="endpoint-desc">Retry a request</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>{ <span class="key">"id"</span>: <span class="num">123</span>, ... }</pre>
+  </div>
+</div>
+
+<!-- ═══ Misc ═════════════════════════════════════════════════════ -->
+<div class="section-title">Misc</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/version</span>
+    <span class="endpoint-desc">Version info & update check</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/version')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/schedule/jobs</span>
+    <span class="endpoint-desc">List scheduled jobs</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/schedule/jobs')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">GET/POST</span>
+    <span class="endpoint-path">/schedule/job/start</span>
+    <span class="endpoint-desc">Start a scheduled job</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>{ <span class="key">"jobName"</span>: <span class="str">"TranslationJob"</span> }</pre>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/mapping</span>
+    <span class="endpoint-desc">List path mappings</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/mapping')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/mapping</span>
+    <span class="endpoint-desc">Set path mappings</span>
+  </div>
+  <div class="endpoint-body">
+    <pre>[
+  {
+    <span class="key">"sourcePath"</span>: <span class="str">"/mnt/media"</span>,
+    <span class="key">"destinationPath"</span>: <span class="str">"/data/media"</span>,
+    <span class="key">"mediaType"</span>: <span class="str">"Movie"</span>
+  }
+]</pre>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/settings</span>
+    <span class="endpoint-desc">Get all settings</span>
+  </div>
+  <div class="endpoint-body">
+    <div class="try-it" onclick="event.stopPropagation()">
+      <div class="btn-row">
+        <button onclick="tryIt(this, 'GET', '/settings')">Try it</button>
+      </div>
+      <div class="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="endpoint" onclick="toggle(this)">
+  <div class="endpoint-header">
+    <span class="method method-any">*</span>
+    <span class="endpoint-path">/raw/*</span>
+    <span class="endpoint-desc">Raw passthrough to Lingarr</span>
+  </div>
+  <div class="endpoint-body">
+    <p>Forward any request directly to the Lingarr API. Example:</p>
+    <pre>GET /raw/api/SomeEndpoint?foo=bar</pre>
+  </div>
+</div>
+
+<div class="footer">
+  Lingarr Worker API Docs &mdash; <a href="https://lingarr.com/docs/api/definitions/1.0.5.json" style="color:var(--accent)">Lingarr API Spec</a>
+</div>
+
+</div>
+
+<script>
+function toggle(el) {
+  el.classList.toggle('open');
+}
+
+async function tryIt(btn, method, path, body) {
+  const baseUrl = document.getElementById('baseUrl').textContent;
+  const secret = prompt('Enter your WORKER_SECRET:');
+  if (!secret) return;
+
+  const opts = {
+    method,
+    headers: {
+      'Authorization': 'Bearer ' + secret,
+      'Content-Type': 'application/json',
+    },
+  };
+  if (body && method !== 'GET') {
+    opts.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+
+  const resultDiv = btn.closest('.try-it').querySelector('.result');
+  resultDiv.innerHTML = '<pre style="color:var(--muted)">Loading...</pre>';
+
+  try {
+    const resp = await fetch(baseUrl + path, opts);
+    const text = await resp.text();
+    let formatted;
+    try {
+      formatted = JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      formatted = text;
+    }
+    const color = resp.ok ? 'var(--green)' : 'var(--red)';
+    resultDiv.innerHTML =
+      '<pre style="border-left:3px solid ' + color + '; padding-left:.8rem">' +
+      '<span style="color:' + color + '">HTTP ' + resp.status + '</span>\\n' +
+      escapeHtml(formatted) + '</pre>';
+  } catch (e) {
+    resultDiv.innerHTML = '<pre style="color:var(--red)">Error: ' + escapeHtml(e.message) + '</pre>';
+  }
+}
+
+async function tryUpload(btn) {
+  const baseUrl = document.getElementById('baseUrl').textContent;
+  const secret = prompt('Enter your WORKER_SECRET:');
+  if (!secret) return;
+
+  const textarea = btn.closest('.try-it').querySelector('textarea');
+  const content = textarea.value;
+
+  const resultDiv = btn.closest('.try-it').querySelector('.result');
+  resultDiv.innerHTML = '<pre style="color:var(--muted)">Loading...</pre>';
+
+  try {
+    const resp = await fetch(baseUrl + '/translate/upload?from=en&to=vi', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + secret,
+        'Content-Type': 'text/plain',
+      },
+      body: content,
+    });
+    const text = await resp.text();
+    let formatted;
+    try {
+      formatted = JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      formatted = text;
+    }
+    const color = resp.ok ? 'var(--green)' : 'var(--red)';
+    resultDiv.innerHTML =
+      '<pre style="border-left:3px solid ' + color + '; padding-left:.8rem">' +
+      '<span style="color:' + color + '">HTTP ' + resp.status + '</span>\\n' +
+      escapeHtml(formatted) + '</pre>';
+  } catch (e) {
+    resultDiv.innerHTML = '<pre style="color:var(--red)">Error: ' + escapeHtml(e.message) + '</pre>';
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
+</body>
+</html>`;
