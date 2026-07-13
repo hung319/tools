@@ -19,11 +19,9 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates tini procps bash netcat-openbsd && rm -rf /var/lib/apt/lists/*
 
 ENV PORT=7860 \
-    AUTORENEW="86400" \
     CFGUPGRADE="true" \
     DB="auto" \
     DOCKER="true" \
-    EARLYRENEW="30" \
     ENABLELOG="true" \
     FASTGEOIP="false" \
     MDNS="false" \
@@ -66,11 +64,9 @@ log "Khoi dong Zoraxy Web UI tai cong ${PORT} (He dieu hanh: Debian | Du lieu: /
 cd /data
 
 /app/sys1/srv_a \
-    -autorenew="${AUTORENEW}" \
     -cfgupgrade="${CFGUPGRADE}" \
     -db="${DB}" \
     -docker="${DOCKER}" \
-    -earlyrenew="${EARLYRENEW}" \
     -enablelog="${ENABLELOG}" \
     -fastgeoip="${FASTGEOIP}" \
     -mdns="${MDNS}" \
