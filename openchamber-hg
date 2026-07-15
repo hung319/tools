@@ -2,7 +2,6 @@ FROM node:22-slim
 
 USER root
 
-# Cài đặt các gói phụ trợ hệ thống trên nền Debian 13
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git ssh build-essential tini procps unzip psmisc \
         make g++ python3 tar openssl findutils gnupg lsof \
@@ -10,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# SỬA LỖI ĐỔI TÊN: Giải nén ra warp-linux-amd64 và đổi tên thành warp
 RUN ARCH=$(dpkg --print-architecture) \
     && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) \
     && if [ "$ARCH" != "amd64" ]; then \
@@ -45,17 +43,14 @@ RUN HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" npm install -g opencode-ai@latest 
 
 WORKDIR /root
 
-# Tạo trước cả 2 thư mục cấu hình cho openchamber và opencode, sau đó xả quyền 777
 RUN mkdir -p /root/.config/openchamber /root/.config/opencode /tmp/warp_data && chmod -R 777 /root
 
-# ── SCRIPT ENTRYPOINT TINH GỌN ───────────────────────────────────────────
 RUN cat << 'EOF' > /usr/local/bin/entrypoint.sh
 #!/bin/bash
 WARP_DIR="/tmp/warp_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
-# 1. Khởi chạy Cloudflare Warp Proxy
 log "--- [WARP] Dang khoi tao va cau hinh dinh tuyen Cloudflare Warp... ---"
 killall warp 2>/dev/null || true
 mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
@@ -70,10 +65,8 @@ HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http
 sleep 5
 cd /root
 
-# Giải phóng cổng (nếu có tiến trình rác chiếm dụng trước đó)
 fuser -k "${OPENCHAMBER_PORT}/tcp" 2>/dev/null || true
 
-# 2. Khởi chạy ứng dụng chính (Chạy bằng lệnh exec để đưa OpenChamber làm PID 1 thay thế shell)
 log "=== Dang khoi dong OpenChamber vung foreground... ==="
 exec openchamber serve \
     --port "${OPENCHAMBER_PORT}" \
