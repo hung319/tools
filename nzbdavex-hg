@@ -1,0 +1,15 @@
+FROM ghcr.io/qooode/nzbdavex:stable
+
+USER root
+
+RUN mkdir -p /data && chmod -R 777 /data
+
+ENV CONFIG_PATH="/data"
+ENV PORT=7860
+ENV BACKEND_URL="http://localhost:8080"
+ENV PUID=1000
+ENV PGID=1000
+
+EXPOSE 7860
+
+CMD ["/entrypoint.sh"]
