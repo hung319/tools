@@ -11,10 +11,6 @@ RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZ
     curl -L "$CF_URL" -o c_bin && \
     chmod +x c_bin
 
-RUN PEN_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL215emhhbmcxMDI5L3Blbmd1aW4tcnMvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL3Blbmd1aW4teDg2XzY0LXVua25vd24tbGludXgtbXVzbA==" | base64 -d) && \
-    curl -L "$PEN_URL" -o p_bin && \
-    chmod +x p_bin
-
 
 FROM debian:bookworm-slim
 
@@ -32,17 +28,14 @@ ENV PORT=7860 \
     SSHLB="false" \
     VERSION="false" \
     WEBROOT="./www" \
-    TZ="Etc/UTC" \
-    PENGUIN_PORT=9000 \
-    PENGUIN_PSK="mysecretpsk123"
+    TZ="Etc/UTC"
 
-RUN mkdir -p /app/sys1 /app/sys2 /app/sys3 /data/plugin
+RUN mkdir -p /app/sys1 /app/sys2 /data/plugin
 
 COPY --from=fetcher /downloads/z_bin /app/sys1/srv_a
 COPY --from=fetcher /downloads/c_bin /app/sys2/srv_b
-COPY --from=fetcher /downloads/p_bin /app/sys3/srv_c
 
-RUN chmod +x /app/sys1/srv_a /app/sys2/srv_b /app/sys3/srv_c
+RUN chmod +x /app/sys1/srv_a /app/sys2/srv_b
 
 RUN cat <<'EOF' > /app/entrypoint.sh
 #!/bin/bash
@@ -53,8 +46,8 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ENTRYPOINT] $1"; }
 cleanup() {
     trap - TERM INT QUIT
     log "!!! [SHUTDOWN] Dang dung cac dich vu an toan... !!!"
-    kill -TERM "$ZORAXY_PID" "$TUNNEL_PID" "$PENGUIN_PID" 2>/dev/null || true
-    wait "$ZORAXY_PID" "$PENGUIN_PID" 2>/dev/null || true
+    kill -TERM "$ZORAXY_PID" "$TUNNEL_PID" 2>/dev/null || true
+    wait "$ZORAXY_PID" 2>/dev/null || true
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
@@ -64,13 +57,6 @@ if [ ! -z "$TUNNEL_TOKEN" ]; then
     /app/sys2/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
     TUNNEL_PID=$!
 fi
-
-log "Khoi dong Rusty Penguin Server tai cong ${PENGUIN_PORT}..."
-/app/sys3/srv_c server \
-    --host "0.0.0.0" \
-    --port "${PENGUIN_PORT}" \
-    --ws-psk "${PENGUIN_PSK}" &
-PENGUIN_PID=$!
 
 log "Khoi dong Zoraxy Web UI tai cong ${PORT} (He dieu hanh: Debian | Du lieu: /data)..."
 cd /data
