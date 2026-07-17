@@ -2,8 +2,6 @@ FROM nzbdav/nzbdav:latest
 
 USER root
 
-RUN mkdir -p /data && chmod -R 777 /data
-
 ENV CONFIG_PATH="/data"
 ENV PORT=7860
 ENV BACKEND_URL="http://localhost:8080"
@@ -12,4 +10,4 @@ ENV PGID=1000
 
 EXPOSE 7860
 
-CMD ["/entrypoint.sh"]
+CMD ["/bin/sh", "-c", "mkdir -p /data && chown -R ${PUID}:${PGID} /data && chmod -R 775 /data && exec /entrypoint.sh"]
