@@ -97,5 +97,5 @@ RUN chmod +x /app/entrypoint.sh
 
 WORKDIR /data
 
-EXPOSE 7860 9000
+EXPOSE 7860
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
