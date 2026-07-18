@@ -1,10 +1,18 @@
+FROM alpine:latest AS fetcher
+RUN apk add --no-cache curl base64
+
+WORKDIR /downloads
+
+RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+    curl -fsSL "$CF_URL" -o srv_b && \
+    chmod +x srv_b
+
 FROM python:3.10-slim
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 USER root
 
-# Cài đặt các gói hệ thống cần thiết (bao gồm unzip để giải nén warp và psmisc để dùng lệnh killall)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
@@ -12,9 +20,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         tini tar openssl findutils procps inotify-tools curl jq ca-certificates unzip psmisc \
     && rm -rf /var/lib/apt/lists/*
 
-# Tải và cấu hình Cloudflare Warp Go Proxy (Thay thế cho wgcf và wireproxy)
 RUN ARCH=$(dpkg --print-architecture) \
-    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) \
+    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemyw" | base64 -d) \
     && if [ "$ARCH" != "amd64" ]; then \
          echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
        fi \
@@ -24,15 +31,16 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm -f /tmp/warp.zip \
     && chmod +x /usr/local/bin/warp
 
+RUN mkdir -p /sys3
+COPY --from=fetcher /downloads/srv_b /sys3/srv_b
+
 WORKDIR /app
 
-# Khởi tạo môi trường ảo Python và cài đặt các thư viện backend (Đã bỏ fastapi và uvicorn không cần thiết)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
     uv pip install "llm4free[api]" httpx
 
-# THAY ĐỔI: Chuyển HOST thành 0.0.0.0 và PORT thành 7860 để LLM4Free mở trực tiếp ra ngoài
 ENV PORT=7860 \
     PATH="/app/.venv/bin:$PATH" \
     LLM4FREE_HOST=0.0.0.0 \
@@ -40,22 +48,25 @@ ENV PORT=7860 \
     HTTP_PROXY="http://127.0.0.1:4001" \
     HTTPS_PROXY="http://127.0.0.1:4001" \
     ALL_PROXY="http://127.0.0.1:4001" \
-    NO_PROXY="localhost,127.0.0.1"
+    NO_PROXY="localhost,127.0.0.1" \
+    TUNNEL_TOKEN=""
 
-# Tạo sẵn thư mục lưu dữ liệu cấu hình cố định cho Warp để giữ lại reg.json
-RUN mkdir -p /tmp/warp_data /app && chmod -R 777 /tmp/warp_data /app
+RUN mkdir -p /tmp/warp_data /app /sys3 && chmod -R 777 /tmp/warp_data /app /sys3
 
-# Tạo script Entrypoint điều phối: Quản lý Warp và chạy trực tiếp backend LLM4Free
 RUN cat <<'EOF' > /usr/local/bin/hf-entrypoint.sh
 #!/bin/sh
 
 WARP_DIR="/tmp/warp_data"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
+if [ -n "$TUNNEL_TOKEN" ]; then
+    log "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel doc lap..."
+    /sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
+fi
+
 init_or_rotate_warp() {
     mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
-    # 1. KIỂM TRA ĐĂNG KÝ: Chỉ tạo file reg.json một lần duy nhất lúc khởi tạo container lần đầu
     if [ ! -f "$WARP_DIR/reg.json" ]; then
         log "--- [WARP] Sinh thông tin định danh tài khoản mới (Chỉ thực hiện lần đầu)... ---"
         OLD_HTTP_PROXY="$HTTP_PROXY"
@@ -70,25 +81,21 @@ init_or_rotate_warp() {
         export ALL_PROXY="$OLD_ALL_PROXY"
     fi
 
-    # 2. NGẮT KẾT NỐI: Tắt tiến trình cũ nếu đang chạy để chuẩn bị làm mới đường truyền
     if pgrep -x "warp" > /dev/null; then
         log "--- [WARP] Đang ngắt kết nối để chuẩn bị làm mới IP Public... ---"
         killall warp 2>/dev/null || true
         sleep 3
     fi
 
-    # 3. KẾT NỐI LẠI: Chạy lại Warp dựa trên token cũ, ép đổi Edge Node để lấy IP Public mới
     log "--- [WARP] Đang khởi chạy lại dịch vụ proxy tại cổng 4001... ---"
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
     sleep 5
     
-    # Kiểm định thực tế IP Public vừa được cập nhật
     URL_CHECK=$(echo "aHR0cHM6Ly9pZmNvbmZpZy5tZQ==" | base64 -d);
     CURRENT_IP=$(curl -s --max-time 5 -x http://127.0.0.1:4001 "$URL_CHECK" || echo "FAILED")
     log "--- [WARP STATUS] Hoàn tất kết nối | IP Public hiện tại: $CURRENT_IP ---"
 }
 
-# Vòng lặp chạy ngầm: Tự động ngắt - kết nối lại sau mỗi 3600 giây (1 giờ)
 warp_scheduler_loop() {
     while true; do
         sleep 3600
@@ -97,13 +104,9 @@ warp_scheduler_loop() {
     done
 }
 
-# Thực thi cấu hình Warp ban đầu
 init_or_rotate_warp
-
-# Kích hoạt vòng lặp xoay IP chạy ngầm
 warp_scheduler_loop &
 
-# THAY ĐỔI: Chạy trực tiếp LLM4Free làm tiến trình chính (Foreground), không dùng Auth Wrapper nữa
 log "--- Starting LLM4Free Backend Server directly on Port 7860... ---"
 exec /app/.venv/bin/llm4free-server
 EOF
