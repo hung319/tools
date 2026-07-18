@@ -33,11 +33,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
         libxrandr2 libgbm1 libasound2 xvfb \
-    && wget -qO- $(echo "aHR0cHM6Ly9kbC5nb29kbGUuY29tL2xpbnV4L2xpbnV4X3NpZ25pbmdfa2V5LnB1Yg==" | base64 -d) \
-       | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] $(echo "aHR0cHM6Ly9kbC5nb29kbGUuY29tL2xpbnV4L2Nocm9tZS9kZWIv" | base64 -d) stable main" \
-       > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && wget -q $(echo "aHR0cHM6Ly9kbC5nb29nbGUuY29tL2xpbnV4L2RpcmVjdC9nb29nbGUtY2hyb21lLXN0YWJsZV9jdXJyZW50X2FtZDY0LmRlYg==" | base64 -d) \
+    && apt-get install -y ./google-chrome-stable_current_amd64.deb --no-install-recommends \
+    && rm -f google-chrome-stable_current_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
 RUN echo '#!/bin/sh' > /usr/local/bin/chrome-hf && \
