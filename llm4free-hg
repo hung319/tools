@@ -20,8 +20,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         tini tar openssl findutils procps inotify-tools curl jq ca-certificates unzip psmisc \
     && rm -rf /var/lib/apt/lists/*
 
+# ĐÃ SỬA: Chuỗi base64 chuẩn xác không bị thừa ký tự rác
 RUN ARCH=$(dpkg --print-architecture) \
-    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemyw" | base64 -d) \
+    && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) \
     && if [ "$ARCH" != "amd64" ]; then \
          echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
        fi \
