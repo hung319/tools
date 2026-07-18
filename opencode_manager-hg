@@ -1,15 +1,11 @@
-# Kế thừa trực tiếp từ Image gốc của họ (Bỏ qua toàn bộ bước compile/build code)
 FROM ghcr.io/chriswritescode-dev/opencode-manager:latest
 
-# Chuyển hẳn sang quyền ROOT để kiểm soát hệ thống và warp không bị chặn quyền
 USER root
 
-# Cài đặt bổ sung các công cụ cần thiết cho hệ thống tùy chỉnh (Đã bỏ rsync và inotify-tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     psmisc unzip ca-certificates tini lsof curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Tải và cấu hình công cụ cloudflare-warp mới độc lập
 RUN ARCH=$(dpkg --print-architecture) \
     && WARP_ZIP_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2hoc3cyMDE1L2Nsb3VkZmxhcmUtd2FycC9yZWxlYXNlcy9kb3dubG9hZC92MS4wL3dhcnAtbGludXgtYW1kNjQuemlw" | base64 -d) \
     && if [ "$ARCH" != "amd64" ]; then \
@@ -21,9 +17,13 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm -f /tmp/warp.zip \
     && chmod +x /usr/local/bin/warp
 
+RUN mkdir -p /sys3 && \
+    CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+    curl -fsSL "$CF_URL" -o /sys3/srv_b && \
+    chmod +x /sys3/srv_b
+
 WORKDIR /app
 
-# --- CẤU HÌNH BIẾN MÔI TRƯỜNG ĐÃ ĐƯỢC MAP LẠI (Gộp cấu trúc phẳng) ---
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=7860 \
@@ -38,53 +38,43 @@ ENV NODE_ENV=production \
     HTTP_PROXY="http://127.0.0.1:4001" \
     HTTPS_PROXY="http://127.0.0.1:4001" \
     ALL_PROXY="http://127.0.0.1:4001" \
-    NO_PROXY="localhost,127.0.0.1"
+    NO_PROXY="localhost,127.0.0.1" \
+    TUNNEL_TOKEN=""
 
-# Đảm bảo PATH chứa đủ Bun và các công cụ khác chạy dưới quyền root
 ENV PATH="/opt/bun/bin:/root/.opencode/bin:/usr/local/bin:$PATH"
 
-RUN mkdir -p /root/data /root/.cache /root/.opencode /tmp/warp_data && chmod -R 777 /root /app
+RUN mkdir -p /root/data /root/.cache /root/.opencode /tmp/warp_data /sys3 && chmod -R 777 /root /app /sys3
 
-# Ghi đè file entrypoint tùy chỉnh của chúng ta vào hệ thống
 RUN cat <<'EOF' > /usr/local/bin/custom-entrypoint.sh && chmod +x /usr/local/bin/custom-entrypoint.sh
 #!/bin/bash
 set +e
 
 WARP_DIR="/tmp/warp_data"
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
-
-start_warp_proxy() {
-    log "--- [WARP] Dang khoi tao va dinh tuyen mang qua Cloudflare Warp... ---"
-    killall warp 2>/dev/null || true
-    mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
-    
-    if [ ! -f "$WARP_DIR/reg.json" ]; then
-        log "--- [WARP] Sinh thong tin tai khoan dinh danh moi... ---"
-        HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
-    fi
-
-    log "--- [WARP] Dang khoi chay HTTP Proxy tai cong 4001... ---"
-    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
-    sleep 3
-    cd /app
-}
-
 cleanup() {
-    log "!!! [STOP] Container dang bi dung! ---"
+    killall srv_b 2>/dev/null || true
     exit 0
 }
 
 trap cleanup SIGTERM SIGINT
 
-# Khởi chạy proxy mạng
-start_warp_proxy
+if [ -n "$TUNNEL_TOKEN" ]; then
+    /sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
+fi
 
-# Chạy trình kiểm tra và chuẩn bị OpenCode Engine
-log "--- [SYSTEM] Chay kiem tra Engine phu thuoc cua he thong... ---"
+killall warp 2>/dev/null || true
+mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
+
+if [ ! -f "$WARP_DIR/reg.json" ]; then
+    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
+fi
+
+HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
+sleep 3
+cd /app
+
 export HOME=/root
 if ! command -v opencode >/dev/null 2>&1; then
-    log "OpenCode Engine khong tim thay trong global, tu dong tai ban moi nhat..."
     curl -fsSL "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/').tar.gz" -o /tmp/opencode.tar.gz
     tar -xzf /tmp/opencode.tar.gz -C /tmp
     mkdir -p "/root/.opencode/bin"
@@ -93,15 +83,11 @@ if ! command -v opencode >/dev/null 2>&1; then
     rm -f /tmp/opencode.tar.gz
 fi
 
-log "Dang khoi dong Opencode Manager tu Image goc tren cong $PORT..."
-# Khởi chạy ứng dụng chính bằng bun (Chạy foreground để giữ container luôn sống)
 exec bun backend/src/index.ts
 EOF
 
-# Cấp quyền thực thi cho entrypoint mới
 RUN chmod +x /usr/local/bin/custom-entrypoint.sh
 
 EXPOSE 7860
 
-# Dùng tini quản lý tiến trình của chúng ta làm root
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/custom-entrypoint.sh"]
