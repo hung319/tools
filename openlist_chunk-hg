@@ -4,11 +4,7 @@ RUN apk add --no-cache curl jq coreutils unzip
 WORKDIR /downloads
 
 RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
-        CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d); \
-    else \
-        CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFybTY0" | base64 -d); \
-    fi && \
+    CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
     curl -fsSL "$CF_URL" -o srv_b && \
     chmod +x srv_b
 
@@ -16,7 +12,7 @@ FROM ghcr.io/zmabin/openlist-chunk:latest
 
 USER root
 
-RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow aria2
+RUN apk add --no-cache jq bash tini procps psmisc net-tools shadow aria2 curl ca-certificates
 
 RUN mkdir -p /opt/openlist/sys3 /data && \
     chown -R openlist:openlist /opt/openlist /data
@@ -27,11 +23,10 @@ COPY --from=fetcher --chown=openlist:openlist /downloads/srv_b /opt/openlist/sys
 
 RUN cat << 'EOF' > /entrypoint.sh
 #!/bin/bash
-set -e
 
 umask 022
 
-mkdir -p /data/downloads /data/log /tmp/.config /tmp/.local
+mkdir -p /data/downloads /data/log /tmp/.config /tmp/.local /tmp/.cloudflared
 
 usermod -u 1000 openlist 2>/dev/null || true
 groupmod -g 1000 openlist 2>/dev/null || true
@@ -45,20 +40,43 @@ if [ "$RUN_ARIA2" = "true" ]; then
     aria2c --enable-rpc --rpc-listen-all --rpc-allow-origin-all --dir=/data/downloads --input-file=/tmp/.config/aria2/aria2.session --save-session=/tmp/.config/aria2/aria2.session >/dev/null 2>&1 &
 fi
 
+if [ -n "$TUNNEL_CREDENTIALS_JSON" ]; then
+    echo "[CLOUDFLARE LOCAL] Phát hiện cấu hình Tunnel dạng Local. Tiến hành thiết lập tệp..."
+    echo "$TUNNEL_CREDENTIALS_JSON" > /tmp/.cloudflared/tunnel-credentials.json
+    
+    LOCAL_TUNNEL_ID=$(echo "$TUNNEL_CREDENTIALS_JSON" | jq -r '.TunnelID // .tunnelID')
+    echo "[CLOUDFLARE LOCAL] Đang thiết lập cấu hình định tuyến cho Tunnel ID: $LOCAL_TUNNEL_ID"
+
+    cat << CFEOP > /tmp/.cloudflared/config.yml
+tunnel: $LOCAL_TUNNEL_ID
+credentials-file: /tmp/.cloudflared/tunnel-credentials.json
+ingress:
+CFEOP
+
+    if [ -n "$WEBUI_DOMAIN" ]; then
+        echo "  - hostname: $WEBUI_DOMAIN" >> /tmp/.cloudflared/config.yml
+        echo "    service: http://127.0.0.1:7860" >> /tmp/.cloudflared/config.yml
+    fi
+
+    if [ -n "$S3_DOMAIN" ]; then
+        echo "  - hostname: $S3_DOMAIN" >> /tmp/.cloudflared/config.yml
+        echo "    service: http://127.0.0.1:5246" >> /tmp/.cloudflared/config.yml
+    fi
+
+    echo "  - service: http_status:404" >> /tmp/.cloudflared/config.yml
+    echo "[CLOUDFLARE LOCAL] Tạo tệp cấu hình config.yml hoàn tất."
+fi
+
 fuser -k "7860/tcp" 2>/dev/null || true
-if [ -n "$TUNNEL_TOKEN" ]; then
-    echo "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel..."
-    /opt/openlist/sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
-else
-    echo "[CLOUDFLARE] Canh bao: Khong tim thay TUNNEL_TOKEN!"
+if [ -n "$TUNNEL_CREDENTIALS_JSON" ]; then
+    echo "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel o che do LOCAL CONFIG..."
+    /opt/openlist/sys3/srv_b tunnel --config /tmp/.cloudflared/config.yml --no-autoupdate run >/dev/null 2>&1 &
 fi
 
 cd /data
-
 CONFIG_FILE="/data/config.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "[CONFIG] Khong tim thay config.json tren /data. Dang tu tao cau hinh mac dinh..."
     /opt/openlist/openlist server --no-prefix --config /data/config.json --data /data &
     PID_TEMP=$!
     sleep 3
@@ -66,10 +84,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 if [ -f "$CONFIG_FILE" ]; then
-    echo "[CONFIG] Chinh sua file config sang port 7860 va Meili..."
     sed -i 's/"http_port": 5244/"http_port": 7860/g' "$CONFIG_FILE"
     sed -i 's/"enable": false/"enable": true/g' "$CONFIG_FILE"
-    
     sed -i 's|"database": "data/data.db"|"database": "/data/data.db"|g' "$CONFIG_FILE"
     sed -i 's|"log_dir": "data/log"|"log_dir": "/data/log"|g' "$CONFIG_FILE"
     
@@ -95,7 +111,9 @@ ENV PORT=7860 \
     XDG_CONFIG_HOME=/data/.config \
     XDG_DATA_HOME=/data/.local \
     PYTHONUNBUFFERED=1 \
-    TUNNEL_TOKEN="" \
+    TUNNEL_CREDENTIALS_JSON="" \
+    WEBUI_DOMAIN="" \
+    S3_DOMAIN="" \
     SITE_URL="" \
     JWT_SECRET="" \
     MEILI_HOST="" \
