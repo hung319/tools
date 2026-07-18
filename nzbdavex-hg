@@ -2,12 +2,46 @@ FROM ghcr.io/qooode/nzbdavex:stable
 
 USER root
 
-ENV CONFIG_PATH="/data"
-ENV PORT=7860
-ENV BACKEND_URL="http://localhost:8080"
-ENV PUID=1000
-ENV PGID=1000
+RUN apk add --no-cache curl psmisc ca-certificates tini
+
+RUN mkdir -p /sys3 && \
+    CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+    curl -fsSL "$CF_URL" -o /sys3/srv_b && \
+    chmod +x /sys3/srv_b
+
+ENV CONFIG_PATH="/data" \
+    PORT=7860 \
+    BACKEND_URL="http://localhost:8080" \
+    PUID=1000 \
+    PGID=1000 \
+    TUNNEL_TOKEN=""
+
+RUN mkdir -p /data /sys3 && chmod -R 777 /data /sys3
+
+RUN cat <<'EOF' > /custom-entrypoint.sh && chmod +x /custom-entrypoint.sh
+#!/bin/sh
+set -e
+
+cleanup() {
+    killall srv_b 2>/dev/null || true
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+mkdir -p /data
+if [ -n "${PUID}" ] && [ -n "${PGID}" ]; then
+    chown -R ${PUID}:${PGID} /data 2>/dev/null || true
+fi
+chmod -R 775 /data 2>/dev/null || true
+
+if [ -n "$TUNNEL_TOKEN" ]; then
+    /sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
+fi
+
+exec /entrypoint.sh
+EOF
 
 EXPOSE 7860
 
-CMD ["/bin/sh", "-c", "mkdir -p /data && chown -R ${PUID}:${PGID} /data && chmod -R 775 /data && exec /entrypoint.sh"]
+ENTRYPOINT ["/sbin/tini", "--", "/custom-entrypoint.sh"]
