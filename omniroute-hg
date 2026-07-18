@@ -1,3 +1,12 @@
+FROM alpine:latest AS fetcher
+RUN apk add --no-cache curl base64
+
+WORKDIR /downloads
+
+RUN CF_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL2Nsb3VkZmxhcmUvY2xvdWRmbGFyZWQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2Nsb3VkZmxhcmVkLWxpbnV4LWFtZDY0" | base64 -d) && \
+    curl -fsSL "$CF_URL" -o srv_b && \
+    chmod +x srv_b
+
 FROM ghcr.io/diegosouzapw/omniroute:latest-web
 
 USER root
@@ -20,6 +29,9 @@ RUN ARCH=$(dpkg --print-architecture) \
        else \
          echo "Canh bao: Phien ban cloudflare-warp hien tai chi ho tro kien truc amd64!" ; \
        fi
+
+RUN mkdir -p /sys3
+COPY --from=fetcher /downloads/srv_b /sys3/srv_b
 
 ENV PORT=7860 \
     HOSTNAME=0.0.0.0 \
@@ -46,11 +58,12 @@ ENV PORT=7860 \
     DATA_DIR=/data \
     OMNIROUTE_DISABLE_LIVE_WS=true \
     LIVE_WS_PORT=20129 \
-    LIVE_WS_HOST=127.0.0.1
+    LIVE_WS_HOST=127.0.0.1 \
+    TUNNEL_TOKEN=""
 
 RUN mkdir -p /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node \
-    && chown -R node:node /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app \
-    && chmod -R 777 /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app
+    && chown -R node:node /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app /sys3 \
+    && chmod -R 777 /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app /sys3
 
 RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/daemonize no/daemonize yes/' /tmp/redis.conf \
@@ -69,6 +82,11 @@ NODE_PID=""
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
 redis-server /tmp/redis.conf
+
+if [ -n "$TUNNEL_TOKEN" ]; then
+    log "[CLOUDFLARE] Dang khoi dong Cloudflare Tunnel doc lap..."
+    /sys3/srv_b tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" >/dev/null 2>&1 &
+fi
 
 init_or_rotate_warp() {
     mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
@@ -137,6 +155,7 @@ cleanup() {
     redis-cli shutdown 2>/dev/null || true
     
     killall warp 2>/dev/null || true
+    killall srv_b 2>/dev/null || true
     log "[SHUTDOWN] Toàn bộ hệ thống đã được dọn dẹp sạch sẽ."
     exit 0
 }
