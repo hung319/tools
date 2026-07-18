@@ -9,19 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     procps \
     psmisc \
-    jq \
     ffmpeg \
     tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ARCH=$(uname -m) \
-    && GITHUB_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy85MDAwMDAwL1RvcnJTZXJ2ZXIvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) \
-    && DOWNLOAD_URL=$(curl -fsSL "$GITHUB_API" | jq -r ".assets[].browser_download_url") \
-    && if [ "$ARCH" = "x86_64" ]; then \
-         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "linux-amd64"); \
-       else \
-         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "linux-arm64"); \
-       fi \
+RUN TS_URL=$(echo "aHR0cHM6Ly9naXRodWIuY29tLzkwMDAwMDAvVG9yclNlcnZlci9yZWxlYXNlcy9sYXRlc3QvZG93bmxvYWQvVG9yclNlcnZlci1saW51eC1hbWQ2NA==" | base64 -d) \
     && curl -fsSL "$TS_URL" -o /usr/bin/torrserver \
     && chmod +x /usr/bin/torrserver
 
