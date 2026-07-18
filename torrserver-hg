@@ -15,12 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ARCH=$(uname -m) \
-    && GITHUB_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9Zb3Vyb2MvVG9yclNlcnZlci9yZWxlYXNlcy9sYXRlc3Q=" | base64 -d) \
+    && GITHUB_API=$(echo "aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy85MDAwMDAwL1RvcnJTZXJ2ZXIvcmVsZWFzZXMvbGF0ZXN0" | base64 -d) \
     && DOWNLOAD_URL=$(curl -fsSL "$GITHUB_API" | jq -r ".assets[].browser_download_url") \
     && if [ "$ARCH" = "x86_64" ]; then \
-         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "TorrServer-linux-amd64$"); \
+         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "linux-amd64"); \
        else \
-         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "TorrServer-linux-arm64$"); \
+         TS_URL=$(echo "$DOWNLOAD_URL" | grep -Ei "linux-arm64"); \
        fi \
     && curl -fsSL "$TS_URL" -o /usr/bin/torrserver \
     && chmod +x /usr/bin/torrserver
