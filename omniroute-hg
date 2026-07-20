@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        tini tar openssl findutils procps redis-server curl jq ca-certificates netcat-openbsd unzip psmisc \
+        tini tar openssl findutils procps redis-server curl jq ca-certificates netcat-openbsd unzip psmisc sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ARCH=$(dpkg --print-architecture) \
@@ -78,8 +78,85 @@ set -e
 
 WARP_DIR="/tmp/warp_data"
 NODE_PID=""
+DB_PATH="/data/storage.sqlite"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
+
+repair_sqlite_if_corrupt() {
+    if [ -f "$DB_PATH" ]; then
+        log "--- [DATABASE] Kiem tra tinh toan ven va Schema cua $DB_PATH... ---"
+        INTEGRITY=$(sqlite3 "$DB_PATH" "PRAGMA integrity_check;" 2>&1 || echo "error")
+        HAS_TABLES=$(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_connections';" 2>&1 || echo "")
+
+        if [ "$INTEGRITY" != "ok" ]; then
+            log "⚠️ [DATABASE ALERT] File SQLite bi malformed! Dang tien hanh khoi phuc..."
+            BACKUP_FILE="${DB_PATH}.corrupt.$(date +%s)"
+            cp "$DB_PATH" "$BACKUP_FILE"
+            
+            FIXED_TMP="/tmp/storage_fixed.sqlite"
+            rm -f "$FIXED_TMP"
+            
+            sqlite3 "$DB_PATH" ".recover" | sqlite3 "$FIXED_TMP" 2>/dev/null || \
+            sqlite3 "$DB_PATH" ".dump" | sqlite3 "$FIXED_TMP" 2>/dev/null || true
+
+            if [ -s "$FIXED_TMP" ] && sqlite3 "$FIXED_TMP" "SELECT count(*) FROM sqlite_master;" >/dev/null 2>&1; then
+                mv "$FIXED_TMP" "$DB_PATH"
+                log "--- [DATABASE] Khoi phuc du lieu thanh cong tu file malformed! ---"
+            else
+                rm -f "$DB_PATH" "$FIXED_TMP"
+                log "--- [DATABASE] Khong the khoi phuc DB cu. Da xoa file hong de OmniRoute tu sinh DB va Migration tu dau. ---"
+            fi
+        elif [ -z "$HAS_TABLES" ]; then
+            log "⚠️ [DATABASE ALERT] File SQLite thieu bang schema (chua Migration/bi rỗng). Tiến hành xoa file de OmniRoute Re-Init..."
+            rm -f "$DB_PATH" "${DB_PATH}-wal" "${DB_PATH}-shm"
+        else
+            log "--- [DATABASE] SQLite DB hop le va chua day du Schema. ---"
+        fi
+    fi
+}
+
+cleanup() {
+    trap - TERM INT QUIT
+    log "[SHUTDOWN] Nhan tin hieu dung he thong. Dang kich hoat quy trinh SAFE SHUTDOWN..."
+    
+    if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
+        log "[SHUTDOWN] Gui SIGTERM toi OmniRoute Engine (PID: $NODE_PID)..."
+        kill -15 "$NODE_PID" 2>/dev/null || true
+        
+        count=0
+        while kill -0 "$NODE_PID" 2>/dev/null; do
+            sleep 1
+            count=$((count + 1))
+            if [ $count -gt 15 ]; then
+                log "[SHUTDOWN] OmniRoute phan hoi cham, dang cuong bac tat..."
+                kill -9 "$NODE_PID" 2>/dev/null || true
+                break
+            fi
+        done
+        log "[SHUTDOWN] OmniRoute Engine da ngat ket noi DB va dung han."
+    fi
+
+    if [ -f "$DB_PATH" ]; then
+        log "[SHUTDOWN] Dang Sync va Flush toan bo SQLite write buffer xuong o cung..."
+        sqlite3 "$DB_PATH" "PRAGMA wal_checkpoint(FULL);" 2>/dev/null || true
+        sqlite3 "$DB_PATH" "PRAGMA optimize;" 2>/dev/null || true
+    fi
+
+    log "[SHUTDOWN] Flush I/O buffer cua he thong..."
+    sync || true
+
+    log "[SHUTDOWN] Dong Redis Server..."
+    redis-cli shutdown 2>/dev/null || true
+    
+    killall warp 2>/dev/null || true
+    killall srv_b 2>/dev/null || true
+    log "[SHUTDOWN] Toan bo he thong da duoc bao ve va cleanup an toan!"
+    exit 0
+}
+
+trap 'cleanup' TERM INT QUIT
+
+repair_sqlite_if_corrupt
 
 redis-server /tmp/redis.conf
 
@@ -129,38 +206,6 @@ warp_scheduler_loop() {
     done
 }
 
-cleanup() {
-    trap - TERM INT QUIT
-    log "[SHUTDOWN] Đang kích hoạt quy trình dừng hệ thống an toàn..."
-    
-    if [ -n "$NODE_PID" ]; then
-        log "[SHUTDOWN] Gửi tín hiệu dừng (SIGTERM) tới OmniRoute Engine (PID: $NODE_PID)..."
-        kill -15 "$NODE_PID" 2>/dev/null || true
-        
-        log "[SHUTDOWN] Chờ ứng dụng đóng kết nối và giải phóng SQLite..."
-        count=0
-        while kill -0 "$NODE_PID" 2>/dev/null; do
-            sleep 1
-            count=$((count + 1))
-            if [ $count -gt 10 ]; then
-                log "[SHUTDOWN] Ứng dụng không phản hồi sau 10s, tiến hành cưỡng bức tắt..."
-                kill -9 "$NODE_PID" 2>/dev/null || true
-                break
-            fi
-        done
-        log "[SHUTDOWN] OmniRoute Engine đã dừng."
-    fi
-
-    log "[SHUTDOWN] Đang đóng cơ sở dữ liệu Redis an toàn..."
-    redis-cli shutdown 2>/dev/null || true
-    
-    killall warp 2>/dev/null || true
-    killall srv_b 2>/dev/null || true
-    log "[SHUTDOWN] Toàn bộ hệ thống đã được dọn dẹp sạch sẽ."
-    exit 0
-}
-trap 'cleanup' TERM INT QUIT
-
 init_or_rotate_warp
 warp_scheduler_loop &
 
@@ -179,4 +224,4 @@ USER node
 EXPOSE 7860
 WORKDIR /app
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hf-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/hf-entrypoint.sh"]
