@@ -2,21 +2,21 @@ FROM docker.io/linuxserver/prowlarr:latest
 
 USER root
 
-RUN apk update && apk add --no-cache bash && rm -rf /var/cache/apk/*
-
 ENV PORT_CHAMBER=7860 \
-    XDG_CONFIG_HOME=/data \
-    XDG_DATA_HOME=/data
+    XDG_CONFIG_HOME=/data
+
+RUN apk update && apk add --no-cache bash && rm -rf /var/cache/apk/* && \
+    find /etc/s6-overlay /etc/services.d /etc/cont-init.d -type f -exec sed -i 's|/config|/data|g' {} + 2>/dev/null || true
 
 RUN mkdir -p /custom-cont-init.d && cat <<'EOF' > /custom-cont-init.d/prowlarr-config.sh
 #!/bin/bash
 
-mkdir -p /data/Prowlarr
-if [ ! -f /data/Prowlarr/config.xml ]; then
-    echo "<Config><Port>${PORT_CHAMBER}</Port><UrlBase></UrlBase><LogLevel>warn</LogLevel><AuthenticationMethod>None</AuthenticationMethod></Config>" > /data/Prowlarr/config.xml
+mkdir -p /data
+if [ ! -f /data/config.xml ]; then
+    echo "<Config><Port>${PORT_CHAMBER}</Port><UrlBase></UrlBase><LogLevel>warn</LogLevel><AuthenticationMethod>None</AuthenticationMethod></Config>" > /data/config.xml
 else
-    sed -i "s|<Port>.*</Port>|<Port>${PORT_CHAMBER}</Port>|g" /data/Prowlarr/config.xml
-    sed -i "s|<LogLevel>.*</LogLevel>|<LogLevel>warn</LogLevel>|g" /data/Prowlarr/config.xml
+    sed -i "s|<Port>.*</Port>|<Port>${PORT_CHAMBER}</Port>|g" /data/config.xml
+    sed -i "s|<LogLevel>.*</LogLevel>|<LogLevel>warn</LogLevel>|g" /data/config.xml
 fi
 
 chown -R 911:911 /data
@@ -26,5 +26,6 @@ RUN sed -i 's/\r$//' /custom-cont-init.d/prowlarr-config.sh && \
     chmod +x /custom-cont-init.d/prowlarr-config.sh
 
 EXPOSE 7860
+VOLUME /data
 
 ENTRYPOINT ["/init"]
