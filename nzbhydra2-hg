@@ -16,7 +16,7 @@ ENV PORT_CHAMBER=7860 \
 
 COPY --from=fetcher /downloads/srv_b /usr/local/bin/srv_b
 
-RUN sed -i 's|--datafolder /config|--datafolder /data|g' /etc/s6-overlay/s6-rc.d/svc-nzbhydra2/run && \
+RUN sed -i 's|--datafolder /config|--datafolder /data --port 7860|g' /etc/s6-overlay/s6-rc.d/svc-nzbhydra2/run && \
     sed -i 's|nc -z localhost 5076|nc -z localhost 7860|g' /etc/s6-overlay/s6-rc.d/svc-nzbhydra2/run && \
     sed -i 's|/config|/data|g' /etc/s6-overlay/s6-rc.d/init-nzbhydra2-config/run
 
