@@ -28,6 +28,7 @@ ENV MEILI_HTTP_ADDR="0.0.0.0:7860" \
     MEILI_SERVER_PROVIDER="docker" \
     MEILI_ENV="production" \
     MEILI_MASTER_KEY="MY_SECURE_MASTER_KEY_CHANGE_ME" \
+    MEILI_UPGRADE_DB="true" \
     TUNNEL_TOKEN=""
 
 WORKDIR /data
@@ -44,7 +45,7 @@ fi
 
 sleep 2
 
-exec /bin/meilisearch --db-path /data/data.ms --experimental-dumpless-upgrade
+exec /bin/meilisearch --db-path /data/data.ms
 EOF
 
 RUN chmod +x /bin/entrypoint.sh
