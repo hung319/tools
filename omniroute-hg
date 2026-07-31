@@ -52,15 +52,15 @@ ENV PORT=7860 \
     ENABLE_HTTP_PROXY=true \
     NEXT_PUBLIC_ENABLE_HTTP_PROXY=true \
     OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS="true" \
-    DATA_DIR=/data \
+    DATA_DIR=/app/data \
     OMNIROUTE_DISABLE_LIVE_WS=true \
     LIVE_WS_PORT=20129 \
     LIVE_WS_HOST=127.0.0.1 \
     TUNNEL_TOKEN=""
 
-RUN mkdir -p /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node \
-    && chown -R node:node /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app /sys3 \
-    && chmod -R 777 /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app /sys3
+RUN mkdir -p /app/data /data/omniroute_data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node \
+    && chown -R node:node /app/data /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app /sys3 \
+    && chmod -R 777 /app/data /data /tmp/warp_data /var/run/redis /var/log/redis /var/lib/redis /home/node /app /sys3
 
 RUN cp /etc/redis/redis.conf /tmp/redis.conf \
     && sed -i 's/daemonize no/daemonize yes/' /tmp/redis.conf \
@@ -75,21 +75,37 @@ set -e
 
 WARP_DIR="/tmp/warp_data"
 NODE_PID=""
-DB_PATH="/data/storage.sqlite"
+DB_PATH="/app/data/storage.sqlite"
+BACKUP_DIR="/data/omniroute_data"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HF-ENTRYPOINT] $1"; }
 
-optimize_and_check_sqlite() {
-    if [ -f "$DB_PATH" ]; then
-        log "--- [DATABASE] Kiem tra va Toi uu hoa SQLite... ---"
-        sqlite3 "$DB_PATH" "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA mmap_size=268435456;" >/dev/null 2>&1 || true
-        
-        INTEGRITY=$(sqlite3 "$DB_PATH" "PRAGMA integrity_check;" 2>&1 || echo "error")
-        if [ "$INTEGRITY" != "ok" ]; then
-            log "⚠️ [DATABASE ALERT] File DB bi loi cau truc! Tien hanh don dep..."
-            rm -f /data/storage.sqlite*
-        fi
+restore_data_if_needed() {
+    mkdir -p /app/data "$BACKUP_DIR"
+    if [ -z "$(ls -A /app/data 2>/dev/null)" ] && [ -n "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+        log "--- [RESTORE] Thu muc /app/data trong. Dang restore du lieu tu backup... ---"
+        cp -ru "$BACKUP_DIR"/. /app/data/ 2>/dev/null || true
+        log "--- [RESTORE] Hoan tat restore du lieu! ---"
     fi
+}
+
+sync_data() {
+    if [ -d "/app/data" ]; then
+        mkdir -p "$BACKUP_DIR"
+        
+        if [ -f "$DB_PATH" ]; then
+            sqlite3 "$DB_PATH" "PRAGMA wal_checkpoint(PASSIVE);" 2>/dev/null || true
+        fi
+        
+        find /app/data -type f -mmin -6 -exec cp --parents -u {} "$BACKUP_DIR"/ \; 2>/dev/null || true
+    fi
+}
+
+sync_data_loop() {
+    while true; do
+        sleep 300
+        sync_data
+    done
 }
 
 cleanup() {
@@ -99,6 +115,8 @@ cleanup() {
     if [ -f "$DB_PATH" ]; then
         sqlite3 "$DB_PATH" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
     fi
+
+    cp -ru /app/data/. "$BACKUP_DIR"/ 2>/dev/null || true
 
     if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
         kill -15 "$NODE_PID" 2>/dev/null || true
@@ -114,7 +132,7 @@ cleanup() {
 
 trap 'cleanup' TERM INT QUIT
 
-optimize_and_check_sqlite
+restore_data_if_needed
 
 redis-server /tmp/redis.conf
 
@@ -126,16 +144,7 @@ init_or_rotate_warp() {
     mkdir -p "$WARP_DIR" && cd "$WARP_DIR"
 
     if [ ! -f "$WARP_DIR/reg.json" ]; then
-        OLD_HTTP_PROXY="$HTTP_PROXY"
-        OLD_HTTPS_PROXY="$HTTPS_PROXY"
-        OLD_ALL_PROXY="$ALL_PROXY"
-        unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
-
         warp --data-dir "$WARP_DIR" generate >/dev/null 2>&1 || true
-
-        export HTTP_PROXY="$OLD_HTTP_PROXY"
-        export HTTPS_PROXY="$OLD_HTTPS_PROXY"
-        export ALL_PROXY="$OLD_ALL_PROXY"
     fi
 
     if pgrep -x "warp" > /dev/null; then
@@ -143,7 +152,7 @@ init_or_rotate_warp() {
         sleep 3
     fi
 
-    HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
+    warp --data-dir "$WARP_DIR" run --http-addr 127.0.0.1:4001 >/dev/null 2>&1 &
     
     sleep 10
     
@@ -161,6 +170,7 @@ warp_scheduler_loop() {
 
 init_or_rotate_warp
 warp_scheduler_loop &
+sync_data_loop &
 
 log "Starting OmniRoute Engine..."
 cd /app
