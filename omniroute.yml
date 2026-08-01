@@ -1,25 +1,21 @@
-version: '3.8'
 services:
   omniroute:
     image: 'ghcr.io/diegosouzapw/omniroute:latest-web'
-    container_name: omniroute
     restart: unless-stopped
     environment:
       - NODE_ENV=production
       - DATA_DIR=/app/data
-      - PORT=20128
-      - DASHBOARD_PORT=20128
-      - API_PORT=20128
-      - LIVE_WS_PORT=20128
       - HOSTNAME=0.0.0.0
-      - API_HOST=0.0.0.0
-      - LIVE_WS_HOST=0.0.0.0
-      - 'LIVE_WS_ALLOWED_ORIGINS=*'
+      - PORT=20128
+      - 'LIVE_WS_ALLOWED_ORIGINS=https://your-domain.com'
       - 'REDIS_URL=redis://redis:6379'
-      - QDRANT_ENABLED=true
-      - 'QDRANT_URL=http://qdrant:6333'
-      - BIFROST_ENABLED=true
-      - 'BIFROST_URL=http://bifrost:8080'
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - 'BIFROST_BASE_URL=http://bifrost:8080'
+      - INITIAL_PASSWORD=CHANGEME
+      - JWT_SECRET=
+      - API_KEY_SECRET=
+      - STORAGE_ENCRYPTION_KEY=
     volumes:
       - 'omniroute-data:/app/data'
     depends_on:
@@ -27,59 +23,43 @@ services:
         condition: service_healthy
   redis:
     image: 'redis:7-alpine'
-    container_name: omniroute-redis
     restart: unless-stopped
     volumes:
       - 'redis-data:/data'
     command: 'redis-server --save 60 1 --loglevel warning'
     healthcheck:
-      test:
-        - CMD
-        - redis-cli
-        - ping
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 5s
       retries: 3
   qdrant:
     image: qdrant/qdrant
-    container_name: omniroute-qdrant
     restart: unless-stopped
     volumes:
       - 'qdrant-data:/qdrant/storage'
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
     healthcheck:
-      test:
-        - CMD
-        - wget
-        - '--spider'
-        - '-q'
-        - 'http://127.0.0.1:6333/readyz'
-      interval: 15s
+      test: bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1
+      interval: 10s
       timeout: 5s
       retries: 3
       start_period: 10s
   bifrost:
     image: maximhq/bifrost
-    container_name: omniroute-bifrost
     restart: unless-stopped
     volumes:
-      - 'bifrost-data:/data'
+      - 'bifrost-data:/app/data'
     environment:
-      - BIFROST_LOG_LEVEL=info
+      - APP_PORT=8080
+      - APP_HOST=0.0.0.0
+      - LOG_LEVEL=info
     healthcheck:
-      test:
-        - CMD
-        - wget
-        - '--spider'
-        - '-q'
-        - 'http://127.0.0.1:8080/v1/models'
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/health']
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
 volumes:
-  omniroute-data: null
-  redis-data: null
-  qdrant-data: null
-  bifrost-data: null
+  omniroute-data:
+  redis-data:
+  qdrant-data:
+  bifrost-data:
