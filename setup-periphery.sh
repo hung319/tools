@@ -86,7 +86,9 @@ fi
 # Init system detection
 # ══════════════════════════════════════════════
 detect_init_system() {
-  if command -v systemctl &>/dev/null && [[ -d /run/systemd/system ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    INIT_SYSTEM="launchd"
+  elif command -v systemctl &>/dev/null && [[ -d /run/systemd/system ]]; then
     INIT_SYSTEM="systemd"
   elif [[ -d /etc/init.d ]] && command -v rc-service &>/dev/null; then
     INIT_SYSTEM="openrc"
@@ -96,7 +98,7 @@ detect_init_system() {
     INIT_SYSTEM="sysvinit"
   else
     echo "Error: No supported init system detected."
-    echo "Supported: systemd, openrc, sysvinit, runit"
+    echo "Supported: systemd, openrc, sysvinit, runit, launchd"
     exit 1
   fi
 }
@@ -390,13 +392,92 @@ init_runit_note() {
   echo "Note. Periphery is linked to /var/service/periphery and starts on boot automatically."
 }
 
-# ══════════════════════════════════════════════
-# Dispatch functions based on detected init system
-# ══════════════════════════════════════════════
-svc_stop()        { init_${INIT_SYSTEM}_stop "$@"; }
+# --- launchd (macOS) ---
+init_launchd_stop() {
+  local plist="$1"
+  if [[ -f "$plist" ]]; then
+    launchctl unload "$plist" 2>/dev/null || true
+  fi
+}
+
+init_launchd_write_service() {
+  local service_file="$1"
+  local home_dir="$2" bin_dir="$3" config_dir="$4" service_dir="$5"
+
+  mkdir -p "$service_dir"
+
+  cat > "$service_file" <<PLEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.komodo.periphery</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>${bin_dir}/periphery</string>
+        <string>--config-path</string>
+        <string>${config_dir}/periphery.config.toml</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${home_dir}</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/periphery.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/periphery.log</string>
+</dict>
+</plist>
+PLEOF
+}
+
+init_launchd_start() {
+  local plist="$1"
+  launchctl load "$plist"
+}
+
+init_launchd_enable() {
+  # launchd services are enabled by being in the right directory (RunAtLoad=true)
+  return 0
+}
+
+init_launchd_service_path() {
+  if [[ "$USER_INSTALL" == true ]]; then
+    echo "$HOME/Library/LaunchAgents/com.komodo.periphery.plist"
+  else
+    echo "/Library/LaunchDaemons/com.komodo.periphery.plist"
+  fi
+}
+
+init_launchd_service_dir() {
+  if [[ "$USER_INSTALL" == true ]]; then
+    echo "$HOME/Library/LaunchAgents"
+  else
+    echo "/Library/LaunchDaemons"
+  fi
+}
+
+init_launchd_note() {
+  echo "Note. Use \"launchctl list com.komodo.periphery\" to check if Periphery is running"
+  echo "Note. Use \"launchctl unload <plist>\" to stop / \"launchctl load <plist>\" to start"
+}
+svc_stop()        { init_${INIT_SYSTEM}_stop "$(svc_service_path)"; }
 svc_write()       { init_${INIT_SYSTEM}_write_service "$@"; }
-svc_start()       { init_${INIT_SYSTEM}_start "$@"; }
-svc_enable()      { init_${INIT_SYSTEM}_enable "$@"; }
+svc_start()       { init_${INIT_SYSTEM}_start "$(svc_service_path)"; }
+svc_enable()      { init_${INIT_SYSTEM}_enable "$(svc_service_path)"; }
 svc_service_path(){ init_${INIT_SYSTEM}_service_path "$@"; }
 svc_service_dir() { init_${INIT_SYSTEM}_service_dir "$@"; }
 svc_note()        { init_${INIT_SYSTEM}_note "$@"; }
@@ -409,8 +490,8 @@ svc_note()        { init_${INIT_SYSTEM}_note "$@"; }
 detect_init_system
 
 # ── Validate user install support ──
-if [[ "$USER_INSTALL" == true && "$INIT_SYSTEM" != "systemd" ]]; then
-  echo "Warning: --user is only supported with systemd. Ignoring --user flag."
+if [[ "$USER_INSTALL" == true && "$INIT_SYSTEM" != "systemd" && "$INIT_SYSTEM" != "launchd" ]]; then
+  echo "Warning: --user is only supported with systemd and launchd. Ignoring --user flag."
   USER_INSTALL=false
 fi
 
@@ -421,7 +502,11 @@ SERVICE_DIR=$(svc_service_dir)
 
 if [[ "$USER_INSTALL" == true ]]; then
   BIN_DIR="$HOME/.local/bin"
-  CONFIG_DIR="$HOME/.config/komodo"
+  if [[ "$INIT_SYSTEM" == "launchd" ]]; then
+    CONFIG_DIR="$HOME/Library/Application Support/komodo"
+  else
+    CONFIG_DIR="$HOME/.config/komodo"
+  fi
 else
   BIN_DIR="/usr/local/bin"
   CONFIG_DIR="/etc/komodo"
