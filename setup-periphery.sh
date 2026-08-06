@@ -29,7 +29,7 @@ EOF
 }
 
 # ── Defaults ──
-VERSION=""
+VERSION="v2.2.0"
 USER_INSTALL=false
 ROOT_DIR="/etc/komodo"
 CORE_ADDRESS=""
@@ -56,31 +56,6 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
-
-# ── Fetch latest version if not specified ──
-if [[ -z "$VERSION" ]]; then
-  # Use ?per_page=1 instead of /latest to avoid 302 redirect being cached by proxies
-  github_api_url="https://api.github.com/repos/moghtech/komodo/releases?per_page=1"
-  curl_opts=(-fsSL)
-
-  # Use GH_TOKEN for authenticated requests (rate limit: 5000 vs 60 req/hour)
-  if [[ -n "${GH_TOKEN:-}" ]]; then
-    curl_opts+=(-H "Authorization: Bearer ${GH_TOKEN}")
-  fi
-
-  VERSION=$(curl "${curl_opts[@]}" "$github_api_url" \
-    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
-
-  if [[ -z "$VERSION" ]]; then
-    echo "Error: Failed to fetch latest version from GitHub API."
-    if [[ -z "${GH_TOKEN:-}" ]]; then
-      echo "  Tip: Set GH_TOKEN for higher API rate limit (5000 req/hour):"
-      echo "    export GH_TOKEN=ghp_..."
-    fi
-    echo "  Or specify version manually: $0 -v v2.3.1"
-    exit 1
-  fi
-fi
 
 # ══════════════════════════════════════════════
 # Init system detection
