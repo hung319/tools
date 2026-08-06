@@ -29,7 +29,7 @@ EOF
 }
 
 # ── Defaults ──
-VERSION="v2.2.0"
+VERSION=""
 USER_INSTALL=false
 ROOT_DIR="/etc/komodo"
 CORE_ADDRESS=""
@@ -56,6 +56,17 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
+
+# ── Fetch latest version if not specified ──
+if [[ -z "$VERSION" ]]; then
+  VERSION=$(curl -fsSL "https://api.github.com/repos/moghtech/komodo/releases?per_page=1" \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  if [[ -z "$VERSION" ]]; then
+    echo "Error: Failed to fetch latest version from GitHub API."
+    echo "  Or specify version manually: $0 -v v2.3.1"
+    exit 1
+  fi
+fi
 
 # ══════════════════════════════════════════════
 # Init system detection
