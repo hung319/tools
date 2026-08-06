@@ -59,8 +59,27 @@ done
 
 # ── Fetch latest version if not specified ──
 if [[ -z "$VERSION" ]]; then
-  VERSION=$(curl -fsSL https://api.github.com/repos/moghtech/komodo/releases/latest \
-    | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+  # Use ?per_page=1 instead of /latest to avoid 302 redirect being cached by proxies
+  github_api_url="https://api.github.com/repos/moghtech/komodo/releases?per_page=1"
+  curl_opts=(-fsSL)
+
+  # Use GH_TOKEN for authenticated requests (rate limit: 5000 vs 60 req/hour)
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    curl_opts+=(-H "Authorization: Bearer ${GH_TOKEN}")
+  fi
+
+  VERSION=$(curl "${curl_opts[@]}" "$github_api_url" \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+
+  if [[ -z "$VERSION" ]]; then
+    echo "Error: Failed to fetch latest version from GitHub API."
+    if [[ -z "${GH_TOKEN:-}" ]]; then
+      echo "  Tip: Set GH_TOKEN for higher API rate limit (5000 req/hour):"
+      echo "    export GH_TOKEN=ghp_..."
+    fi
+    echo "  Or specify version manually: $0 -v v2.3.1"
+    exit 1
+  fi
 fi
 
 # ══════════════════════════════════════════════
@@ -430,9 +449,14 @@ mkdir -p "$BIN_DIR"
 BIN_PATH="$BIN_DIR/periphery"
 [[ -f "$BIN_PATH" ]] && rm -f "$BIN_PATH"
 
-# Detect architecture
+# Detect OS and architecture
 ARCH="$(uname -m | tr '[:upper:]' '[:lower:]')"
-if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+
+if [[ "$OS" == "darwin" ]]; then
+  echo "apple/macOS detected"
+  PERIPHERY_BIN="periphery-apple"
+elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
   echo "aarch64 detected"
   PERIPHERY_BIN="periphery-aarch64"
 else
