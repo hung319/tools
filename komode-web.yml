@@ -16,7 +16,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
 
   core:
     image: ghcr.io/moghtech/komodo-core:2
@@ -26,9 +26,12 @@ services:
       mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9120/health || exit 1"]
+      # Core listens on 9120 but has no dedicated /health endpoint.
+      # Just checking TCP connectivity is sufficient — curl exits 0
+      # if port responds, non-zero if connection refused.
+      test: ["CMD-SHELL", "curl -s -o /dev/null --connect-timeout 5 http://localhost:9120/"]
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 5
       start_period: 30s
     environment:
