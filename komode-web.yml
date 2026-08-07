@@ -11,13 +11,26 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: admin_password_change_me
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} --authenticationDatabase admin --eval 'db.adminCommand(\"ping\").ok' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   core:
     image: ghcr.io/moghtech/komodo-core:2
     init: true
     restart: unless-stopped
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9120/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     environment:
       KOMODO_DATABASE_ADDRESS: mongo:27017
       KOMODO_DATABASE_USERNAME: admin
