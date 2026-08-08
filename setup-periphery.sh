@@ -20,8 +20,9 @@ set -euo pipefail
 #     - Binary download uses HTTP/1.1 + partial-download resume (-C -) with
 #       --retry-all-errors, so a dropped HTTP/2 stream over flaky transit
 #       (curl exit 92) retries and resumes instead of hanging/restarting.
-#     - If the chosen proxy still fails, the download falls back to the other
-#       reachable proxies, then direct GitHub (unless --github-mode always).
+#     - If the chosen proxy fails, the download falls back to the other
+#       reachable proxies (speed-ranked by a 2MB ranged probe of the real
+#       binary), then direct GitHub (unless --github-mode always).
 #
 # GitHub access routing (works in China AND internationally):
 #   --github-mode always    (default) always download everything via a proxy.
@@ -92,10 +93,12 @@ REACHABLE_PROXIES=()   # every proxy that passed the reachability probe
 # Order matters: first proxy that answers is used. Proxies die often — the
 # list is trimmed to ones verified reachable at patch time; keep a couple of
 # backups anyway. Test with: curl -sI --max-time 8 https://<proxy>/
+# ghfast.top first: verified fastest for large (25MB) transfers from CN;
+# ghproxy.net relays small files fine but stalls large ones there.
 PROXY_LIST=(
-  "https://ghproxy.net/"
   "https://ghfast.top/"
   "https://gh-proxy.com/"
+  "https://ghproxy.net/"
   "https://ghproxy.homeboyc.cn/"
   "https://mirror.ghproxy.com/"
 )
@@ -806,16 +809,24 @@ fi
 
 echo "Downloading ${BINARY_URL}/${VERSION}/${PERIPHERY_BIN} ..."
 
-# Ordered candidate URLs: chosen proxy first, then the other reachable
-# proxies, then direct GitHub (unless mode is 'always'). If a flaky transit
-# kills one proxy's HTTP/2 stream mid-transfer (curl exit 92), the next
-# candidate takes over instead of aborting the whole install.
+# Ordered candidate URLs: the chosen proxy, then the other reachable proxies
+# ranked by real throughput (a 2MB ranged probe of the actual binary — on CN
+# transit proxies that stall large transfers sink to the bottom of the list),
+# then direct GitHub (unless mode is 'always'). If a flaky transit kills one
+# proxy's stream mid-transfer (curl exit 92), the next candidate takes over
+# instead of aborting the whole install.
 DL_URLS=("${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
-if [[ "$BINARY_URL_SET" != true && -n "$PROXY_BASE" ]]; then
-  for p in "${REACHABLE_PROXIES[@]}"; do
-    [[ -z "$p" || "$p" == "$PROXY_BASE" ]] && continue
+if [[ "$BINARY_URL_SET" != true && -n "$PROXY_BASE" && "${#REACHABLE_PROXIES[@]}" -gt 1 ]]; then
+  while read -r _ _ p; do
+    [[ -z "$p" ]] && continue
     DL_URLS+=("${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
-  done
+  done < <(for p in "${REACHABLE_PROXIES[@]}"; do
+             t0=$(date +%s)
+             bytes=$(curl -fsSL --http1.1 -r 0-2097151 --connect-timeout 5 --max-time 20 \
+                    -o /dev/null -w '%{size_download}' \
+                    "${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" 2>/dev/null || true)
+             echo "${bytes:-0} $(( $(date +%s) - t0 )) $p"
+           done | sort -t' ' -k1,1 -rn)
   [[ "$GITHUB_MODE" != "always" ]] && DL_URLS+=("${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
 fi
 
@@ -825,9 +836,11 @@ for url in "${DL_URLS[@]}"; do
   # --http1.1: HTTP/2 streams die on flaky transit ("stream not closed
   # cleanly"); HTTP/1.1 is far more forgiving. -C -: resume partial
   # downloads so retries make progress instead of restarting ~25MB from
-  # zero (that restart loop was the "hang").
-  if curl -fsSL --http1.1 -C - --retry 3 --retry-delay 3 "${RETRY_ALL_FLAGS[@]}" \
-       --connect-timeout 10 --max-time 180 "$url" -o "$BIN_PATH"; then
+  # zero. One retry only, short max-time: a proxy that stalls large
+  # transfers is abandoned quickly instead of burning 4x180s before the
+  # next (speed-ranked) candidate is tried.
+  if curl -fsSL --http1.1 -C - --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" \
+       --connect-timeout 10 --max-time 90 "$url" -o "$BIN_PATH"; then
     DL_OK=true
     break
   fi
@@ -865,7 +878,7 @@ else
   mkdir -p "$CONFIG_DIR"
 
   # Download template (same hardening as the binary: HTTP/1.1 + retry-all)
-  CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 3 --retry-delay 3 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 60 "$CONFIG_URL")
+  CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 30 "$CONFIG_URL")
 
   # Apply mappings via sed
   OUTPUT="$CONFIG_TEMPLATE"
