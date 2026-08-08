@@ -8,9 +8,11 @@ set -euo pipefail
 # Patched extras:
 #   --core-public-keys KEY  Pin the Core public key explicitly in the config
 #                           (upstream PR #1524). If the config already exists,
-#                           the line is updated in place — fixes stale-pin
-#                           handshake failures ("Periphery failed to validate
-#                           Core public key") without wiping the install.
+#                           the line is updated in place, and the stale TOFU
+#                           pin (keys/core.pub) is cleared so the new pin takes
+#                           effect — fixes handshake failures ("Periphery
+#                           failed to validate Core public key") without
+#                           wiping the install.
 #   --clean                 Remove the old install (service, binary, config,
 #                           keys/ dir) BEFORE installing fresh. Selective:
 #                           never touches stacks/repos/builds.
@@ -23,13 +25,18 @@ set -euo pipefail
 #     - If the chosen proxy fails, the download falls back to the other
 #       reachable proxies (speed-ranked by a 2MB ranged probe of the real
 #       binary), then direct GitHub (unless --github-mode always).
+#     - Every binary download is integrity-gated: the result must be a valid
+#       ELF/Mach-O executable of plausible size, rejecting mirrors that
+#       return HTTP 200 with a challenge/suspension page instead of the file.
+#     - The config template falls back to the jsDelivr CDN if the primary
+#       route and all proxies fail (repo files <20MB, no prefix required).
 #
 # GitHub access routing (works in China AND internationally):
-#   --github-mode always    (default) always download everything via a proxy.
-#   --github-mode auto      probe direct GitHub first; use it only if it
-#                           answers within 3s, otherwise fall back to the
-#                           first reachable proxy in the built-in list.
-#   --github-mode never     direct GitHub only (original behavior).
+#   --github-mode auto     (default) probe direct GitHub first; use it only if
+#                          it answers within 3s, otherwise fall back to the
+#                          first reachable proxy in the built-in list.
+#   --github-mode always   always download everything via a proxy.
+#   --github-mode never    direct GitHub only (original behavior).
 #   --config-url/--binary-url still override the resolved route.
 #   GITHUB_MODE env var can be used instead of the flag.
 #
@@ -52,15 +59,17 @@ Options:
                                Leave blank to enable inbound connection server.
   -n, --connect-as NAME        Server name to connect as (default: hostname)
   -k, --onboarding-key KEY     Onboarding key for automatic Server onboarding into Komodo Core.
-  --core-public-keys KEY       Core public key(s) to pin, comma separated.
-                               Updates in place if the config already exists.
+  --core-public-keys KEY       Core public key(s) to pin, comma separated
+                               (SPKI base64 DER, PEM, or file:/path/to/key.pub).
+                               Updates in place if the config already exists;
+                               also clears the stale TOFU pin (keys/core.pub).
   --clean                      Remove old install (service, binary, config, keys/)
                                before installing fresh.
   --uninstall                  Remove old install and exit (no reinstall).
   --force-service-file         Recreate the service file even if it already exists.
-  --github-mode MODE           GitHub access strategy: always (default) | auto | never.
-                               always: always fetch via proxy. auto: direct GitHub if fast
-                               (<3s), else first reachable proxy. never: direct only.
+  --github-mode MODE           GitHub access strategy: auto (default) | always | never.
+                               auto: direct GitHub if fast (<3s), else first reachable proxy.
+                               always: always fetch via proxy. never: direct only.
   --config-url URL             Use a custom config URL.
   --binary-url URL             Use alternate binary source.
   -h, --help                   Show this help message.
@@ -84,17 +93,39 @@ BINARY_URL="https://github.com/moghtech/komodo/releases/download"
 INIT_SYSTEM=""
 
 # ── GitHub access routing ──
-GITHUB_MODE="${GITHUB_MODE:-always}"   # auto | always | never
+GITHUB_MODE="${GITHUB_MODE:-auto}"   # auto | always | never
 CONFIG_URL_SET=false
 BINARY_URL_SET=false
 PROXY_BASE=""
 ORIG_BINARY_URL=""
 REACHABLE_PROXIES=()   # every proxy that passed the reachability probe
-# Single proxy on purpose: ghfast.top is the only one verified to move
-# large (25MB) transfers from CN; the others either stall or are dead.
-# If it ever dies, add a backup here or pass --binary-url explicitly.
+# Proxies verified (2026-08) to serve large (25MB+) release binaries AND
+# raw files byte-identical to GitHub (md5-verified against direct fetch).
+# gh-proxy.com and ghfast.top are the long-running primaries; the rest are
+# Tier-2 standbys (ghproxy.net supports HTTP Range -> resumable, gh.llkk.cc /
+# gh.zwy.one / ghproxy.cxkpro.top topped 2026 speed tests). All are probed at
+# install time and speed-ranked by a real 2MB ranged transfer of the actual
+# binary, so the fastest wins automatically.
+# Dead/risky mirrors intentionally NOT listed (as of 2026-08):
+#   gh.con.sh           alive but suspended - serves a 48-byte "suspent.txt"
+#                       notice for every path (would silently poison installs)
+#   github.moeyy.xyz    DNS dead; operator stopped service due to pollution
+#   mirror.ghproxy.com  DNS dead          ghps.cc / ghp.ci  DNS dead
+#   ghproxy.cn          returns HTML challenge page, not files (hash mismatch)
+#   hub.fastgit.xyz     JS redirect shell only, not wget/curl usable
+#   github.akams.cn     404 on prefix paths (web UI only)
+# If the list ever dies, add a backup here or pass --binary-url explicitly.
 PROXY_LIST=(
+  "https://gh-proxy.com/"
   "https://ghfast.top/"
+  "https://ghproxy.net/"
+  "https://gh.llkk.cc/"
+  "https://gh.zwy.one/"
+  "https://ghproxy.cxkpro.top/"
+  "https://cors.isteed.cc/"
+  "https://fastgit.cc/"
+  "https://gh.monlor.com/"
+  "https://cdn.crashmc.com/"
 )
 # Small, version-independent canary used to probe reachability
 RAW_CANARY="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
@@ -167,6 +198,16 @@ select_github_route() {
     auto)
       if probe_ok "$RAW_CANARY" 3; then
         echo "github mode: auto → direct GitHub reachable"
+        # Probe proxies anyway so the download step can fall back to them
+        # if the direct transfer of the real binary fails mid-stream (a
+        # small canary passing doesn't guarantee a 25MB transfer does).
+        for p in "${PROXY_LIST[@]}"; do
+          if probe_ok "${p}${RAW_CANARY}" 8; then
+            REACHABLE_PROXIES+=("$p")
+          else
+            echo "→ proxy unreachable: $p"
+          fi
+        done
       else
         echo "github mode: auto → direct GitHub slow/unreachable, trying proxies"
         choose_proxy || {
@@ -267,7 +308,7 @@ Description=Agent to connect with Komodo Core
 
 [Service]
 Environment="HOME=${home_dir}"
-ExecStart=/bin/sh -lc "${bin_dir}/periphery --config-path ${config_dir}/periphery.config.toml"
+ExecStart=/bin/sh -lc "\"${bin_dir}/periphery\" --config-path \"${config_dir}/periphery.config.toml\""
 Restart=on-failure
 TimeoutStartSec=0
 
@@ -801,17 +842,29 @@ if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
   RETRY_ALL_FLAGS+=(--retry-all-errors)
 fi
 
-# Ordered candidate URLs: the chosen proxy, then the other reachable proxies
-# ranked by real throughput (a 2MB ranged probe of the actual binary — on CN
-# transit proxies that stall large transfers sink to the bottom of the list),
-# then direct GitHub (unless mode is 'always'). If a flaky transit kills one
-# proxy's stream mid-transfer (curl exit 92), the next candidate takes over
-# instead of aborting the whole install.
-DL_URLS=("${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
-if [[ "$BINARY_URL_SET" != true && -n "$PROXY_BASE" && "${#REACHABLE_PROXIES[@]}" -gt 1 ]]; then
+# Ordered candidate URLs: the primary route (chosen proxy, or direct when
+# mode is auto and GitHub answered the probe) first, then the reachable
+# proxies ranked by real throughput (a 2MB ranged probe of the actual
+# binary — on CN transit proxies that stall large transfers sink to the
+# bottom of the list), then direct GitHub (unless mode is 'always' or
+# direct is already the primary). If a flaky transit kills a stream
+# mid-transfer (curl exit 92), the next candidate takes over instead of
+# aborting the whole install.
+DIRECT_URL="${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}"
+DL_URLS=()
+if [[ -n "$PROXY_BASE" ]]; then
+  DL_URLS+=("${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
+else
+  DL_URLS+=("$DIRECT_URL")
+fi
+if [[ "$BINARY_URL_SET" != true && "${#REACHABLE_PROXIES[@]}" -gt 0 ]]; then
   while read -r _ _ p; do
     [[ -z "$p" ]] && continue
-    DL_URLS+=("${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
+    url="${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}"
+    # Skip candidates that duplicate the primary route (the first reachable
+    # proxy may already be BINARY_URL, and direct may already be primary).
+    [[ "$url" == "${DL_URLS[0]}" || "$url" == "$DIRECT_URL" ]] && continue
+    DL_URLS+=("$url")
   done < <(for p in "${REACHABLE_PROXIES[@]}"; do
              t0=$(date +%s)
              bytes=$(curl -fsSL --http1.1 -r 0-2097151 --connect-timeout 5 --max-time 20 \
@@ -819,8 +872,32 @@ if [[ "$BINARY_URL_SET" != true && -n "$PROXY_BASE" && "${#REACHABLE_PROXIES[@]}
                     "${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" 2>/dev/null || true)
              echo "${bytes:-0} $(( $(date +%s) - t0 )) $p"
            done | sort -t' ' -k1,1 -rn)
-  [[ "$GITHUB_MODE" != "always" ]] && DL_URLS+=("${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
 fi
+# Direct GitHub as last resort, unless mode forbids it or it is already primary.
+if [[ "$GITHUB_MODE" != "always" && "${DL_URLS[0]}" != "$DIRECT_URL" ]]; then
+  DL_URLS+=("$DIRECT_URL")
+fi
+
+# Integrity gate: a mirror can return HTTP 200 with garbage instead of the
+# binary (gh.con.sh serves a 48-byte suspension notice, ghproxy.cn serves an
+# HTML challenge page). curl -f only rejects HTTP error codes, not wrong
+# content - so require a plausible size + valid ELF/Mach-O magic before
+# accepting a download as successful.
+verify_binary() { # $1 = path; returns 0 if it looks like a real executable
+  local f="$1" size magic
+  size=$(wc -c < "$f" 2>/dev/null || echo 0)
+  [[ "$size" -gt 1048576 ]] || return 1        # real binary is ~25MB; reject tiny garbage
+  magic=$(od -An -t x1 -N4 "$f" 2>/dev/null | tr -d ' \n')
+  if [[ "$OS" == "darwin" ]]; then
+    case "$magic" in
+      cffaedfe|cefaedfe|cafebabe) return 0 ;;  # Mach-O 64/32 LE, fat binary
+      *) return 1 ;;
+    esac
+  else
+    [[ "$magic" == "7f454c46" ]] || return 1  # 0x7F 'E' 'L' 'F'
+  fi
+  return 0
+}
 
 DL_OK=false
 for url in "${DL_URLS[@]}"; do
@@ -832,11 +909,11 @@ for url in "${DL_URLS[@]}"; do
   # transfers is abandoned quickly instead of burning 4x180s before the
   # next (speed-ranked) candidate is tried.
   if curl -fsSL --http1.1 -C - --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" \
-       --connect-timeout 10 --max-time 90 "$url" -o "$BIN_PATH"; then
+       --connect-timeout 10 --max-time 90 "$url" -o "$BIN_PATH" && verify_binary "$BIN_PATH"; then
     DL_OK=true
     break
   fi
-  echo "  download failed via $url — trying next source..."
+  echo "  download failed via $url (or failed integrity check) — trying next source..."
   rm -f "$BIN_PATH"
 done
 
@@ -869,8 +946,21 @@ else
   echo "creating config at ${CONFIG_FILE}"
   mkdir -p "$CONFIG_DIR"
 
-  # Download template (same hardening as the binary: HTTP/1.1 + retry-all)
-  CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 30 "$CONFIG_URL")
+  # Download template (same hardening as the binary: HTTP/1.1 + retry-all).
+  # jsDelivr CDN fallback: serves repo files <20MB with no prefix needed, and
+  # is reachable where raw.githubusercontent.com (and the proxy prefixes) are
+  # not. Only used for the built-in config URL, not --config-url overrides.
+  CONFIG_TEMPLATE=""
+  if ! CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 30 "$CONFIG_URL" 2>/dev/null); then
+    if [[ "$CONFIG_URL_SET" == false ]]; then
+      echo "→ config fetch failed via $CONFIG_URL — trying jsDelivr CDN..."
+      CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 30 "https://cdn.jsdelivr.net/gh/moghtech/komodo@main/config/periphery.config.toml" 2>/dev/null) || true
+    fi
+  fi
+  if [[ -z "$CONFIG_TEMPLATE" ]]; then
+    echo "Error: failed to download config template from $CONFIG_URL"
+    exit 1
+  fi
 
   # Apply mappings via sed
   OUTPUT="$CONFIG_TEMPLATE"
@@ -903,6 +993,19 @@ else
   fi
 
   echo "$OUTPUT" > "$CONFIG_FILE"
+fi
+
+# ── Stale TOFU pin cleanup ──
+# keys/core.pub holds the previously pinned Core public key (the default
+# trust-on-first-use pin when the config doesn't pin one explicitly). A
+# stale pin keeps failing the handshake ("Periphery failed to validate Core
+# public key") until the file is cleared AND Periphery restarts — the
+# installer already stopped the service before downloading and starts it at
+# the end, so the restart is guaranteed. Only core.pub is touched:
+# periphery.key is Periphery's own identity and must be preserved.
+if [[ -n "$CORE_PUBLIC_KEYS" && -f "$EFFECTIVE_ROOT_DIR/keys/core.pub" ]]; then
+  rm -f "$EFFECTIVE_ROOT_DIR/keys/core.pub"
+  echo "removed stale Core public key pin: $EFFECTIVE_ROOT_DIR/keys/core.pub"
 fi
 
 # ── Write service file ──
