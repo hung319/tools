@@ -90,17 +90,11 @@ BINARY_URL_SET=false
 PROXY_BASE=""
 ORIG_BINARY_URL=""
 REACHABLE_PROXIES=()   # every proxy that passed the reachability probe
-# Order matters: first proxy that answers is used. Proxies die often — the
-# list is trimmed to ones verified reachable at patch time; keep a couple of
-# backups anyway. Test with: curl -sI --max-time 8 https://<proxy>/
-# ghfast.top first: verified fastest for large (25MB) transfers from CN;
-# ghproxy.net relays small files fine but stalls large ones there.
+# Single proxy on purpose: ghfast.top is the only one verified to move
+# large (25MB) transfers from CN; the others either stall or are dead.
+# If it ever dies, add a backup here or pass --binary-url explicitly.
 PROXY_LIST=(
   "https://ghfast.top/"
-  "https://gh-proxy.com/"
-  "https://ghproxy.net/"
-  "https://ghproxy.homeboyc.cn/"
-  "https://mirror.ghproxy.com/"
 )
 # Small, version-independent canary used to probe reachability
 RAW_CANARY="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
@@ -806,8 +800,6 @@ RETRY_ALL_FLAGS=()
 if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
   RETRY_ALL_FLAGS+=(--retry-all-errors)
 fi
-
-echo "Downloading ${BINARY_URL}/${VERSION}/${PERIPHERY_BIN} ..."
 
 # Ordered candidate URLs: the chosen proxy, then the other reachable proxies
 # ranked by real throughput (a 2MB ranged probe of the actual binary — on CN
