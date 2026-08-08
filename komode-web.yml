@@ -1,6 +1,11 @@
 services:
   mongo:
-    image: mongo
+    # VẤN ĐỀ 3 FIX: pin version để tránh mongo:latest tự drift,
+    # major upgrade làm vỡ wiredTiger / auth.
+    # Db hiện tại đang chạy MongoDB 8.x (mongod --version) nên pin mongo:8
+    # (KHÔNG được downgrade xuống 7 - wiredTiger không tương thích ngược).
+    # Muốn chặt hơn nữa có thể pin exact minor: mongo:8.0
+    image: mongo:8
     labels:
       komodo.skip: "true"
     command: --quiet --wiredTigerCacheSizeGB 0.25
@@ -26,10 +31,10 @@ services:
       mongo:
         condition: service_healthy
     healthcheck:
-      # Core listens on 9120 but has no dedicated /health endpoint.
-      # Just checking TCP connectivity is sufficient — curl exits 0
-      # if port responds, non-zero if connection refused.
-      test: ["CMD-SHELL", "curl -s -o /dev/null --connect-timeout 5 http://localhost:9120/"]
+      # VẤN ĐỀ 4 FIX: thử https (self-signed, cần -k) trước,
+      # fallback http khi core chạy ssl_enabled=false (mặc định).
+      # Chỉ fail khi port không phản hồi (exit != 0 cả 2 nhánh).
+      test: ["CMD-SHELL", "curl -sk https://localhost:9120/ || curl -s http://localhost:9120/"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -39,6 +44,8 @@ services:
       KOMODO_DATABASE_USERNAME: admin
       KOMODO_DATABASE_PASSWORD: admin_password_change_me
       TZ: Asia/Ho_Chi_Minh
+      # VẤN ĐỀ 5 FIX: TODO - đổi thành URL truy cập thật (vd https://komodo.example.com).
+      # Quên đổi sẽ làm webhook URL và OAuth redirect sai.
       KOMODO_HOST: https://your-domain.com
       KOMODO_TITLE: Komodo
       KOMODO_LOCAL_AUTH: "true"
@@ -59,8 +66,23 @@ services:
       KOMODO_PRETTY_STARTUP_CONFIG: "false"
     volumes:
       - komodo-backups:/backups
+      # VẤN ĐỀ 1 FIX (root cause handshake): mount key storage giống
+      # compose chính thức của komodo (mongo.compose.yaml: keys:/config/keys).
+      # Thiếu volume này, core.key nằm ở writable layer -> mỗi lần
+      # recreate container là sinh key MỚI -> toàn bộ agent vỡ handshake.
+      - keys:/config/keys
+      # VẤN ĐỀ 5 FIX: persist sync files (ResourceSyncs)
+      - komodo-syncs:/syncs
+      # VẤN ĐỀ 5 FIX: persist repo cache, tránh re-clone lại mỗi recreate
+      - komodo-repo-cache:/repo-cache
 
 volumes:
   mongo-data:
   mongo-config:
   komodo-backups:
+  # VẤN ĐỀ 1 FIX: volume keys (tên trùng chuẩn komodo official,
+  # share được với periphery.compose.yaml nếu chạy cùng host)
+  keys:
+  # VẤN ĐỀ 5 FIX
+  komodo-syncs:
+  komodo-repo-cache:
