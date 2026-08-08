@@ -15,6 +15,19 @@ set -euo pipefail
 #                           keys/ dir) BEFORE installing fresh. Selective:
 #                           never touches stacks/repos/builds.
 #   --uninstall             Same removal as --clean, then exit (no reinstall).
+#
+# GitHub access routing (works in China AND internationally):
+#   --github-mode always    (default) always download everything via a proxy.
+#   --github-mode auto      probe direct GitHub first; use it only if it
+#                           answers within 3s, otherwise fall back to the
+#                           first reachable proxy in the built-in list.
+#   --github-mode never     direct GitHub only (original behavior).
+#   --config-url/--binary-url still override the resolved route.
+#   GITHUB_MODE env var can be used instead of the flag.
+#
+#   Version detection no longer uses api.github.com (most proxies refuse to
+#   relay it): it follows the releases/latest redirect, which works both
+#   direct and through proxies.
 # ──────────────────────────────────────────────
 
 usage() {
@@ -37,6 +50,9 @@ Options:
                                before installing fresh.
   --uninstall                  Remove old install and exit (no reinstall).
   --force-service-file         Recreate the service file even if it already exists.
+  --github-mode MODE           GitHub access strategy: always (default) | auto | never.
+                               always: always fetch via proxy. auto: direct GitHub if fast
+                               (<3s), else first reachable proxy. never: direct only.
   --config-url URL             Use a custom config URL.
   --binary-url URL             Use alternate binary source.
   -h, --help                   Show this help message.
@@ -59,6 +75,24 @@ CONFIG_URL="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/co
 BINARY_URL="https://github.com/moghtech/komodo/releases/download"
 INIT_SYSTEM=""
 
+# ── GitHub access routing ──
+GITHUB_MODE="${GITHUB_MODE:-always}"   # auto | always | never
+CONFIG_URL_SET=false
+BINARY_URL_SET=false
+PROXY_BASE=""
+# Order matters: first proxy that answers is used. Proxies die often — the
+# list is trimmed to ones verified reachable at patch time; keep a couple of
+# backups anyway. Test with: curl -sI --max-time 8 https://<proxy>/
+PROXY_LIST=(
+  "https://ghproxy.net/"
+  "https://ghfast.top/"
+  "https://gh-proxy.com/"
+  "https://ghproxy.homeboyc.cn/"
+  "https://mirror.ghproxy.com/"
+)
+# Small, version-independent canary used to probe reachability
+RAW_CANARY="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
+
 # ── Parse args ──
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -72,22 +106,104 @@ while [[ $# -gt 0 ]]; do
     --clean)              CLEAN=true;           shift   ;;
     --uninstall)          UNINSTALL=true;       shift   ;;
     --force-service-file) FORCE_SERVICE=true;   shift   ;;
-    --config-url)         CONFIG_URL="$2";      shift 2 ;;
-    --binary-url)         BINARY_URL="$2";      shift 2 ;;
+    --github-mode)        GITHUB_MODE="$2";     shift 2 ;;
+    --config-url)         CONFIG_URL="$2"; CONFIG_URL_SET=true; shift 2 ;;
+    --binary-url)         BINARY_URL="$2"; BINARY_URL_SET=true; shift 2 ;;
     -h|--help)            usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
 
+# ── Validate routing mode ──
+case "$GITHUB_MODE" in
+  auto|always|never) ;;
+  *) echo "Error: unknown --github-mode '$GITHUB_MODE' (use auto|always|never)"; exit 1 ;;
+esac
+
+# ══════════════════════════════════════════════
+# GitHub access routing (direct vs proxy)
+# ══════════════════════════════════════════════
+probe_ok() { # $1=url $2=max-time(s)
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time "${2:-8}" "$1" 2>/dev/null) || return 1
+  [[ "$code" =~ ^[23] ]]
+}
+
+choose_proxy() {
+  local p
+  for p in "${PROXY_LIST[@]}"; do
+    if probe_ok "${p}${RAW_CANARY}" 8; then
+      PROXY_BASE="$p"
+      echo "→ using GitHub proxy: $p"
+      return 0
+    fi
+    echo "→ proxy unreachable: $p"
+  done
+  return 1
+}
+
+select_github_route() {
+  case "$GITHUB_MODE" in
+    never)
+      echo "github mode: never (direct GitHub only)"
+      ;;
+    always)
+      echo "github mode: always (proxy only)"
+      choose_proxy || {
+        echo "Error: no GitHub proxy reachable."
+        echo "  Fix network, or use GITHUB_MODE=never, or pass --config-url/--binary-url manually."
+        exit 1
+      }
+      ;;
+    auto)
+      if probe_ok "$RAW_CANARY" 3; then
+        echo "github mode: auto → direct GitHub reachable"
+      else
+        echo "github mode: auto → direct GitHub slow/unreachable, trying proxies"
+        choose_proxy || {
+          echo "Error: no GitHub proxy reachable either."
+          echo "  Pass -v + --config-url + --binary-url manually, or fix network."
+          exit 1
+        }
+      fi
+      ;;
+  esac
+
+  # Rewrite the download targets to go through the proxy (unless overridden)
+  if [[ -n "$PROXY_BASE" ]]; then
+    [[ "$CONFIG_URL_SET" == false ]] && CONFIG_URL="${PROXY_BASE}${CONFIG_URL}"
+    [[ "$BINARY_URL_SET" == false ]] && BINARY_URL="${PROXY_BASE}${BINARY_URL}"
+  fi
+}
+
+# ── Pick route (probe + rewrite CONFIG_URL/BINARY_URL) ──
+select_github_route
+
 # ── Fetch latest version if not specified ──
 if [[ -z "$VERSION" ]]; then
-  VERSION=$(curl -fsSL "https://api.github.com/repos/moghtech/komodo/releases?per_page=1" \
-    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  # Follows the releases/latest redirect (302 → Location .../releases/tag/vX.Y.Z).
+  # Works direct AND through proxies (api.github.com is not proxied by most mirrors).
+  fetch_latest_version() { # $1 = releases/latest URL
+    curl -sI --connect-timeout 4 --max-time 8 "$1" 2>/dev/null \
+      | sed -n 's|.*releases/tag/\(v[^/" ]*\).*|\1|p' \
+      | tr -d '\r' | head -1   # HTTP headers are CRLF — strip the trailing \r
+  }
+
+  if [[ "$GITHUB_MODE" != "always" ]]; then
+    VERSION=$(fetch_latest_version "https://github.com/moghtech/komodo/releases/latest") || true
+  fi
+  if [[ -z "$VERSION" && "$GITHUB_MODE" != "never" ]]; then
+    for p in "${PROXY_LIST[@]}"; do
+      VERSION=$(fetch_latest_version "${p}https://github.com/moghtech/komodo/releases/latest") || true
+      [[ -n "$VERSION" ]] && break
+    done
+  fi
   if [[ -z "$VERSION" ]]; then
-    echo "Error: Failed to fetch latest version from GitHub API."
+    echo "Error: Failed to detect latest version (GitHub unreachable)."
     echo "  Or specify version manually: $0 -v v2.3.1"
     exit 1
   fi
+  echo "latest version: $VERSION"
 fi
 
 # ══════════════════════════════════════════════
@@ -616,6 +732,8 @@ echo " PERIPHERY INSTALLER "
 echo "====================="
 echo "init system: $INIT_SYSTEM"
 echo "version: $VERSION"
+echo "github mode: $GITHUB_MODE"
+echo "github route: ${PROXY_BASE:-direct}"
 echo "core address: ${CORE_ADDRESS:-(inbound)}"
 echo "connect as: $CONNECT_AS"
 echo "user install: $USER_INSTALL"
@@ -662,7 +780,7 @@ else
 fi
 
 echo "Downloading ${BINARY_URL}/${VERSION}/${PERIPHERY_BIN} ..."
-if ! curl -fsSL "${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" -o "$BIN_PATH"; then
+if ! curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" -o "$BIN_PATH"; then
   echo "Failed to download binary from ${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}"
   echo ""
   echo "Did you provide a valid tag for '--version'? Check here for valid version tags:"
@@ -691,7 +809,7 @@ else
   mkdir -p "$CONFIG_DIR"
 
   # Download template
-  CONFIG_TEMPLATE=$(curl -fsSL "$CONFIG_URL")
+  CONFIG_TEMPLATE=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 "$CONFIG_URL")
 
   # Apply mappings via sed
   OUTPUT="$CONFIG_TEMPLATE"
