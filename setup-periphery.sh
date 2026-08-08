@@ -3,7 +3,18 @@ set -euo pipefail
 
 # ──────────────────────────────────────────────
 # Komodo Periphery Installer (shell version)
-# Supports: systemd, OpenRC, sysvinit, runit
+# Supports: systemd, OpenRC, sysvinit, runit, launchd
+#
+# Patched extras:
+#   --core-public-keys KEY  Pin the Core public key explicitly in the config
+#                           (upstream PR #1524). If the config already exists,
+#                           the line is updated in place — fixes stale-pin
+#                           handshake failures ("Periphery failed to validate
+#                           Core public key") without wiping the install.
+#   --clean                 Remove the old install (service, binary, config,
+#                           keys/ dir) BEFORE installing fresh. Selective:
+#                           never touches stacks/repos/builds.
+#   --uninstall             Same removal as --clean, then exit (no reinstall).
 # ──────────────────────────────────────────────
 
 usage() {
@@ -20,6 +31,11 @@ Options:
                                Leave blank to enable inbound connection server.
   -n, --connect-as NAME        Server name to connect as (default: hostname)
   -k, --onboarding-key KEY     Onboarding key for automatic Server onboarding into Komodo Core.
+  --core-public-keys KEY       Core public key(s) to pin, comma separated.
+                               Updates in place if the config already exists.
+  --clean                      Remove old install (service, binary, config, keys/)
+                               before installing fresh.
+  --uninstall                  Remove old install and exit (no reinstall).
   --force-service-file         Recreate the service file even if it already exists.
   --config-url URL             Use a custom config URL.
   --binary-url URL             Use alternate binary source.
@@ -35,6 +51,9 @@ ROOT_DIR="/etc/komodo"
 CORE_ADDRESS=""
 CONNECT_AS="$(hostname)"
 ONBOARDING_KEY=""
+CORE_PUBLIC_KEYS=""
+CLEAN=false
+UNINSTALL=false
 FORCE_SERVICE=false
 CONFIG_URL="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
 BINARY_URL="https://github.com/moghtech/komodo/releases/download"
@@ -49,6 +68,9 @@ while [[ $# -gt 0 ]]; do
     -c|--core-address)    CORE_ADDRESS="$2";    shift 2 ;;
     -n|--connect-as)      CONNECT_AS="$2";      shift 2 ;;
     -k|--onboarding-key)  ONBOARDING_KEY="$2";  shift 2 ;;
+    --core-public-keys)   CORE_PUBLIC_KEYS="$2"; shift 2 ;;
+    --clean)              CLEAN=true;           shift   ;;
+    --uninstall)          UNINSTALL=true;       shift   ;;
     --force-service-file) FORCE_SERVICE=true;   shift   ;;
     --config-url)         CONFIG_URL="$2";      shift 2 ;;
     --binary-url)         BINARY_URL="$2";      shift 2 ;;
@@ -98,6 +120,12 @@ init_systemd_stop() {
   local user_flag=""
   [[ "$USER_INSTALL" == true ]] && user_flag=" --user"
   systemctl${user_flag} stop periphery 2>/dev/null || true
+}
+
+init_systemd_disable() {
+  local user_flag=""
+  [[ "$USER_INSTALL" == true ]] && user_flag=" --user"
+  systemctl${user_flag} disable periphery 2>/dev/null || true
 }
 
 init_systemd_write_service() {
@@ -165,6 +193,10 @@ init_openrc_stop() {
   rc-service periphery stop 2>/dev/null || true
 }
 
+init_openrc_disable() {
+  rc-update del periphery 2>/dev/null || true
+}
+
 init_openrc_write_service() {
   local service_file="$1"
   local home_dir="$2" bin_dir="$3" config_dir="$4"
@@ -226,6 +258,14 @@ init_openrc_note() {
 # --- sysvinit ---
 init_sysvinit_stop() {
   /etc/init.d/periphery stop 2>/dev/null || true
+}
+
+init_sysvinit_disable() {
+  if command -v update-rc.d &>/dev/null; then
+    update-rc.d -f periphery remove 2>/dev/null || true
+  elif command -v chkconfig &>/dev/null; then
+    chkconfig --del periphery 2>/dev/null || true
+  fi
 }
 
 init_sysvinit_write_service() {
@@ -328,6 +368,12 @@ init_runit_stop() {
   fi
 }
 
+init_runit_disable() {
+  # runit: remove the service symlink
+  local svc_link="/var/service/periphery"
+  [[ -L "$svc_link" ]] && rm -f "$svc_link"
+}
+
 init_runit_write_service() {
   local service_dir="$1"
   local home_dir="$2" bin_dir="$3" config_dir="$4"
@@ -380,6 +426,13 @@ init_runit_note() {
 
 # --- launchd (macOS) ---
 init_launchd_stop() {
+  local plist="$1"
+  if [[ -f "$plist" ]]; then
+    launchctl unload "$plist" 2>/dev/null || true
+  fi
+}
+
+init_launchd_disable() {
   local plist="$1"
   if [[ -f "$plist" ]]; then
     launchctl unload "$plist" 2>/dev/null || true
@@ -461,12 +514,59 @@ init_launchd_note() {
   echo "Note. Use \"launchctl unload <plist>\" to stop / \"launchctl load <plist>\" to start"
 }
 svc_stop()        { init_${INIT_SYSTEM}_stop "$(svc_service_path)"; }
+svc_disable()     { init_${INIT_SYSTEM}_disable "$(svc_service_path)"; }
 svc_write()       { init_${INIT_SYSTEM}_write_service "$@"; }
 svc_start()       { init_${INIT_SYSTEM}_start "$(svc_service_path)"; }
 svc_enable()      { init_${INIT_SYSTEM}_enable "$(svc_service_path)"; }
 svc_service_path(){ init_${INIT_SYSTEM}_service_path "$@"; }
 svc_service_dir() { init_${INIT_SYSTEM}_service_dir "$@"; }
 svc_note()        { init_${INIT_SYSTEM}_note "$@"; }
+
+# ── Portable in-place sed (GNU vs BSD/macOS) ──
+sed_inplace() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
+# ══════════════════════════════════════════════
+# Cleanup: remove old install (selective)
+# ══════════════════════════════════════════════
+cleanup() {
+  echo "── Cleaning old Periphery install ──"
+
+  svc_stop
+  svc_disable
+
+  local svc_file
+  svc_file="$(svc_service_path)"
+  if [[ -f "$svc_file" ]]; then
+    rm -f "$svc_file"
+    echo "removed service file: $svc_file"
+  fi
+
+  if [[ -f "$BIN_DIR/periphery" ]]; then
+    rm -f "$BIN_DIR/periphery"
+    echo "removed binary: $BIN_DIR/periphery"
+  fi
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    rm -f "$CONFIG_FILE"
+    echo "removed config: $CONFIG_FILE"
+  fi
+
+  # keys dir holds the pinned Core key (core.pub) and Periphery's own key
+  # (periphery.key). Removing it forces a fresh TOFU pin / key regeneration
+  # on next start. stacks/repos/builds are left untouched.
+  if [[ -d "$EFFECTIVE_ROOT_DIR/keys" ]]; then
+    rm -rf "$EFFECTIVE_ROOT_DIR/keys"
+    echo "removed keys dir: $EFFECTIVE_ROOT_DIR/keys"
+  fi
+
+  echo "── Cleanup done ──"
+}
 
 # ══════════════════════════════════════════════
 # Main
@@ -498,6 +598,18 @@ else
   CONFIG_DIR="/etc/komodo"
 fi
 
+# ── Effective root directory (mirrors config-generation logic) ──
+if [[ -n "$ROOT_DIR" ]]; then
+  EFFECTIVE_ROOT_DIR="$ROOT_DIR"
+elif [[ "$USER_INSTALL" == true ]]; then
+  EFFECTIVE_ROOT_DIR="$HOME_DIR/komodo"
+else
+  EFFECTIVE_ROOT_DIR="/etc/komodo"
+fi
+
+# Config file path (needed by cleanup before the install section runs)
+CONFIG_FILE="${CONFIG_DIR}/periphery.config.toml"
+
 # ── Print info ──
 echo "====================="
 echo " PERIPHERY INSTALLER "
@@ -511,6 +623,20 @@ echo "home dir: $HOME_DIR"
 echo "bin dir: $BIN_DIR"
 echo "config dir: $CONFIG_DIR"
 echo "service dir: $SERVICE_DIR"
+
+# ── Uninstall mode: clean and exit ──
+if [[ "$UNINSTALL" == true ]]; then
+  cleanup
+  echo ""
+  echo "Periphery has been uninstalled."
+  echo "Note: stacks/repos/builds under ${EFFECTIVE_ROOT_DIR} were left intact."
+  exit 0
+fi
+
+# ── Clean mode: remove old install before installing fresh ──
+if [[ "$CLEAN" == true ]]; then
+  cleanup
+fi
 
 # ── Download binary ──
 svc_stop
@@ -547,10 +673,19 @@ fi
 chmod +x "$BIN_PATH"
 
 # ── Write config ──
-CONFIG_FILE="${CONFIG_DIR}/periphery.config.toml"
-
 if [[ -f "$CONFIG_FILE" ]]; then
-  echo "Config at ${CONFIG_FILE} already exists, skipping..."
+  if [[ -n "$CORE_PUBLIC_KEYS" ]]; then
+    echo "Updating core_public_keys in existing config at ${CONFIG_FILE}"
+    if grep -q '^core_public_keys' "$CONFIG_FILE"; then
+      sed_inplace "s|^core_public_keys = .*|core_public_keys = \"${CORE_PUBLIC_KEYS}\"|" "$CONFIG_FILE"
+    elif grep -q '^# core_public_keys' "$CONFIG_FILE"; then
+      sed_inplace "s|^# core_public_keys = .*|core_public_keys = \"${CORE_PUBLIC_KEYS}\"|" "$CONFIG_FILE"
+    else
+      printf '\ncore_public_keys = "%s"\n' "$CORE_PUBLIC_KEYS" >> "$CONFIG_FILE"
+    fi
+  else
+    echo "Config at ${CONFIG_FILE} already exists, skipping..."
+  fi
 else
   echo "creating config at ${CONFIG_FILE}"
   mkdir -p "$CONFIG_DIR"
@@ -581,6 +716,11 @@ else
   # onboarding_key (uncomment + set)
   if [[ -n "$ONBOARDING_KEY" ]]; then
     OUTPUT=$(echo "$OUTPUT" | sed "s|^# onboarding_key = .*|onboarding_key = \"${ONBOARDING_KEY}\"|")
+  fi
+
+  # core_public_keys (uncomment + set)
+  if [[ -n "$CORE_PUBLIC_KEYS" ]]; then
+    OUTPUT=$(echo "$OUTPUT" | sed "s|^# core_public_keys = .*|core_public_keys = \"${CORE_PUBLIC_KEYS}\"|")
   fi
 
   echo "$OUTPUT" > "$CONFIG_FILE"
