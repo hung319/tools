@@ -16,6 +16,13 @@ set -euo pipefail
 #                           never touches stacks/repos/builds.
 #   --uninstall             Same removal as --clean, then exit (no reinstall).
 #
+#   Download resilience:
+#     - Binary download uses HTTP/1.1 + partial-download resume (-C -) with
+#       --retry-all-errors, so a dropped HTTP/2 stream over flaky transit
+#       (curl exit 92) retries and resumes instead of hanging/restarting.
+#     - If the chosen proxy still fails, the download falls back to the other
+#       reachable proxies, then direct GitHub (unless --github-mode always).
+#
 # GitHub access routing (works in China AND internationally):
 #   --github-mode always    (default) always download everything via a proxy.
 #   --github-mode auto      probe direct GitHub first; use it only if it
@@ -80,6 +87,8 @@ GITHUB_MODE="${GITHUB_MODE:-always}"   # auto | always | never
 CONFIG_URL_SET=false
 BINARY_URL_SET=false
 PROXY_BASE=""
+ORIG_BINARY_URL=""
+REACHABLE_PROXIES=()   # every proxy that passed the reachability probe
 # Order matters: first proxy that answers is used. Proxies die often — the
 # list is trimmed to ones verified reachable at patch time; keep a couple of
 # backups anyway. Test with: curl -sI --max-time 8 https://<proxy>/
@@ -133,13 +142,16 @@ choose_proxy() {
   local p
   for p in "${PROXY_LIST[@]}"; do
     if probe_ok "${p}${RAW_CANARY}" 8; then
-      PROXY_BASE="$p"
-      echo "→ using GitHub proxy: $p"
-      return 0
+      REACHABLE_PROXIES+=("$p")
+      if [[ -z "$PROXY_BASE" ]]; then
+        PROXY_BASE="$p"
+        echo "→ using GitHub proxy: $p"
+      fi
+    else
+      echo "→ proxy unreachable: $p"
     fi
-    echo "→ proxy unreachable: $p"
   done
-  return 1
+  [[ -n "$PROXY_BASE" ]]
 }
 
 select_github_route() {
@@ -168,6 +180,10 @@ select_github_route() {
       fi
       ;;
   esac
+
+  # Keep the un-rewritten binary base so the download step can build
+  # fallback candidates (other proxies / direct) if the chosen proxy fails.
+  ORIG_BINARY_URL="$BINARY_URL"
 
   # Rewrite the download targets to go through the proxy (unless overridden)
   if [[ -n "$PROXY_BASE" ]]; then
@@ -779,12 +795,52 @@ else
   PERIPHERY_BIN="periphery-x86_64"
 fi
 
+# Feature-detect --retry-all-errors (curl >= 7.71). Older curl (Debian 10,
+# Ubuntu 18/20, CentOS 8) lacks it — without it, default --retry may not
+# retry HTTP/2 stream errors (exit 92), so the download dies on the first
+# dropped stream.
+RETRY_ALL_FLAGS=()
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  RETRY_ALL_FLAGS+=(--retry-all-errors)
+fi
+
 echo "Downloading ${BINARY_URL}/${VERSION}/${PERIPHERY_BIN} ..."
-if ! curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" -o "$BIN_PATH"; then
-  echo "Failed to download binary from ${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}"
+
+# Ordered candidate URLs: chosen proxy first, then the other reachable
+# proxies, then direct GitHub (unless mode is 'always'). If a flaky transit
+# kills one proxy's HTTP/2 stream mid-transfer (curl exit 92), the next
+# candidate takes over instead of aborting the whole install.
+DL_URLS=("${BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
+if [[ "$BINARY_URL_SET" != true && -n "$PROXY_BASE" ]]; then
+  for p in "${REACHABLE_PROXIES[@]}"; do
+    [[ -z "$p" || "$p" == "$PROXY_BASE" ]] && continue
+    DL_URLS+=("${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
+  done
+  [[ "$GITHUB_MODE" != "always" ]] && DL_URLS+=("${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}")
+fi
+
+DL_OK=false
+for url in "${DL_URLS[@]}"; do
+  echo "Downloading $url ..."
+  # --http1.1: HTTP/2 streams die on flaky transit ("stream not closed
+  # cleanly"); HTTP/1.1 is far more forgiving. -C -: resume partial
+  # downloads so retries make progress instead of restarting ~25MB from
+  # zero (that restart loop was the "hang").
+  if curl -fsSL --http1.1 -C - --retry 3 --retry-delay 3 "${RETRY_ALL_FLAGS[@]}" \
+       --connect-timeout 10 --max-time 180 "$url" -o "$BIN_PATH"; then
+    DL_OK=true
+    break
+  fi
+  echo "  download failed via $url — trying next source..."
+  rm -f "$BIN_PATH"
+done
+
+if [[ "$DL_OK" != true ]]; then
+  echo "Failed to download binary."
   echo ""
   echo "Did you provide a valid tag for '--version'? Check here for valid version tags:"
   echo "https://github.com/moghtech/komodo/tags"
+  echo "Or retry later, or pass --binary-url to a mirror that works for you."
   exit 1
 fi
 
@@ -808,8 +864,8 @@ else
   echo "creating config at ${CONFIG_FILE}"
   mkdir -p "$CONFIG_DIR"
 
-  # Download template
-  CONFIG_TEMPLATE=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 "$CONFIG_URL")
+  # Download template (same hardening as the binary: HTTP/1.1 + retry-all)
+  CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 3 --retry-delay 3 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 60 "$CONFIG_URL")
 
   # Apply mappings via sed
   OUTPUT="$CONFIG_TEMPLATE"
