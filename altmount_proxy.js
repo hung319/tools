@@ -12,10 +12,9 @@
  *   POST /api/nzb/streams              native NZB streams API (long-poll 5-10 phút)
  *   GET/HEAD /api/files/stream         endpoint stream THẬT (Range/206/ETag passthrough)
  *   GET/POST /sabnzbd/api              SABnzbd-compatible API
- *   /webdav, /webdav/*                 WebDAV fallback (PROPFIND/GET/PUT/...)
  *   OPTIONS                            preflight CORS
  *
- * Lưu ý: origin tự auth (X-Api-Key, download_key, JWT/basic WebDAV). Worker không
+ * Lưu ý: origin tự auth (X-Api-Key, download_key, JWT/basic). Worker không
  * thêm auth riêng. Stream passthrough KHÔNG buffer -> giữ 206/Range, an toàn RAM.
  */
 
@@ -27,8 +26,6 @@ const ROUTES = [
   // SABnzbd-compatible API (fallback). Lưu ý: /api/sabnzbd/api KHÔNG tồn tại trên
   // origin (SPA fallback trả HTML) nên không whitelist.
   { methods: ["GET", "POST"], test: (p) => p === "/sabnzbd/api" },
-  // WebDAV fallback - mọi method.
-  { test: (p) => p === "/webdav" || p.startsWith("/webdav/") },
 ];
 
 function isAllowed(method, pathname) {
@@ -73,9 +70,9 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods":
-            "GET, HEAD, POST, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK, OPTIONS",
+            "GET, HEAD, POST, OPTIONS",
           "Access-Control-Allow-Headers":
-            "X-Api-Key, X-Proxy-Key, Authorization, Content-Type, Range, If-Range, Depth, Destination, Overwrite, If-Modified-Since, Lock-Token, Timeout",
+            "X-Api-Key, X-Proxy-Key, Authorization, Content-Type, Range, If-Range",
           "Access-Control-Max-Age": "86400",
         },
       });
