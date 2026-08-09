@@ -14,6 +14,7 @@ ENV CONFIG_PATH="/data" \
     BACKEND_URL="http://localhost:8080" \
     PUID=1000 \
     PGID=1000 \
+    SECURE_COOKIES=true \
     TUNNEL_TOKEN=""
 
 RUN mkdir -p /data /sys3 && chmod -R 777 /data /sys3
