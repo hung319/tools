@@ -1,0 +1,292 @@
+# =============================================================================
+# CLIProxyAPI + Dashboard — Docker Compose optimized for Coolify v4
+# =============================================================================
+# Based on: https://github.com/itsmylife44/cliproxyapi-dashboard
+#           (infrastructure/docker-compose.yml)
+#
+# Key differences vs the upstream file (and why):
+#   1. Caddy REMOVED            -> Coolify's built-in proxy (Traefik) owns ports
+#                                  80/443 + Let's Encrypt TLS. Domains are
+#                                  assigned per service in the Coolify UI.
+#   2. Custom networks REMOVED  -> Coolify docs explicitly warn: custom networks
+#                                  cause intermittent 504/timeout outages
+#                                  (coolify/issues#4483, #6215, #6153). Coolify
+#                                  auto-creates one isolated network per stack;
+#                                  inter-service DNS by service name still works.
+#   3. env_file REMOVED         -> Every value uses ${VAR} interpolation.
+#                                  Coolify auto-detects them and shows them per
+#                                  service in the UI. Fill them there.
+#   4. config.yaml INLINE       -> Created automatically by Coolify from the
+#                                  `content:` block below — no host file needed.
+#   5. Port 8317 NOT published  -> route the API via a Coolify domain:
+#                                  https://api.example.com:8317
+#   6. Perplexity sidecar OMITTED (no prebuilt image — manual build steps in
+#                                  README-coolify.md).
+#   7. Dashboard /opt/cliproxyapi/infrastructure mount REMOVED -> the
+#      in-dashboard "Update" button falls back to `docker run`; prefer
+#      updating via Coolify instead.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — dashboard database (internal only: no ports, no domain)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cliproxyapi-postgres
+    restart: unless-stopped
+    # Resource limits (calibrated from real usage: ~29MiB actual)
+    cpus: 0.5
+    mem_limit: 256m
+    mem_reservation: 64m
+    environment:
+      POSTGRES_DB: cliproxyapi
+      POSTGRES_USER: cliproxyapi
+      # Only used on FIRST volume creation. Changing it later does NOT rotate
+      # the DB password. Reset = delete the volume in Coolify (destroys data).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (openssl rand -hex 32)}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cliproxyapi -d cliproxyapi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # CLIProxyAPI — the AI proxy server.
+  #   Main API: port 8317 -> expose via a Coolify domain (https://api.example.com:8317)
+  #   OAuth   : ports below are published on the host. Coolify's proxy does NOT
+  #             route them; use http://SERVER_IP:<port> as the provider
+  #             callback URL in the dashboard (or add extra domains per port).
+  # ---------------------------------------------------------------------------
+  cliproxyapi:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cliproxyapi
+    restart: unless-stopped
+    # Resource limits (calibrated from real usage: ~25MiB actual)
+    cpus: 1.0
+    mem_limit: 256m
+    mem_reservation: 64m
+    environment:
+      # Must equal the dashboard service's MANAGEMENT_API_KEY
+      MANAGEMENT_PASSWORD: ${MANAGEMENT_API_KEY:?set MANAGEMENT_API_KEY (openssl rand -hex 32)}
+      DEPLOY: production
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Minimal config.yaml — created by Coolify from this inline block.
+      # `port: 8317` is required; OAuth URLs fail if it is unset.
+      - type: bind
+        source: ./config.yaml
+        target: /CLIProxyAPI/config.yaml
+        content: |
+          host: ""
+          port: 8317
+          tls:
+            enable: false
+            cert: ""
+            key: ""
+          remote-management:
+            allow-remote: true
+            secret-key: ""
+            disable-control-panel: true
+            panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+          auth-dir: "/root/.cli-proxy-api"
+          api-keys: []
+          debug: false
+          pprof:
+            enable: false
+            addr: "127.0.0.1:8316"
+          logging-to-file: false
+          logs-max-total-size-mb: 0
+          error-logs-max-files: 10
+          commercial-mode: false
+          usage-statistics-enabled: true
+          proxy-url: ""
+          force-model-prefix: false
+          request-retry: 3
+          max-retry-interval: 30
+          quota-exceeded:
+            switch-project: true
+            switch-preview-model: true
+          routing:
+            strategy: "round-robin"
+          ws-auth: true
+      - cliproxyapi_auths:/root/.cli-proxy-api
+      - cliproxyapi_logs:/CLIProxyAPI/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8317"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Docker Socket Proxy — restricted Docker API for the dashboard's container
+  # management (status / restart / update). Host socket is mounted read-only.
+  # ---------------------------------------------------------------------------
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: cliproxyapi-docker-proxy
+    restart: unless-stopped
+    # Resource limits (calibrated from real usage: ~23MiB actual)
+    cpus: 0.25
+    mem_limit: 128m
+    mem_reservation: 32m
+    environment:
+      # Allow container/image management + pull/restart/create operations
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+      # Allow network inspection + connect (required for container recreation after updates)
+      NETWORKS: 1
+      # Block dangerous operations
+      VOLUMES: 0
+      EXEC: 0
+      SERVICES: 0
+      SWARM: 0
+      NODES: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      SECRETS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      TASKS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2375/_ping || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Dashboard — Next.js web UI. Port 3000 -> expose via a Coolify domain:
+  #   https://dashboard.example.com:3000
+  # ---------------------------------------------------------------------------
+  dashboard:
+    image: ghcr.io/itsmylife44/cliproxyapi-dashboard/dashboard:latest
+    container_name: cliproxyapi-dashboard
+    restart: unless-stopped
+    # Resource limits (calibrated from real usage: ~98MiB actual, spiky CPU)
+    cpus: 1.0
+    mem_limit: 512m
+    mem_reservation: 128m
+    environment:
+      DATABASE_URL: postgresql://cliproxyapi:${POSTGRES_PASSWORD:?}@postgres:5432/cliproxyapi
+      CLIPROXYAPI_MANAGEMENT_URL: http://cliproxyapi:8317/v0/management
+      MANAGEMENT_API_KEY: ${MANAGEMENT_API_KEY:?}
+      COLLECTOR_API_KEY: ${COLLECTOR_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (openssl rand -base64 32)}
+      NODE_ENV: production
+      # Public base URLs (used for opencode config generation, quota alerts,
+      # origin validation). Optional but strongly recommended.
+      API_URL: ${API_URL:-}
+      DASHBOARD_URL: ${DASHBOARD_URL:-}
+      DOCKER_HOST: tcp://docker-proxy:2375
+      GITHUB_REPO: ${GITHUB_REPO:-itsmylife44/cliproxyapi-dashboard}
+      ALLOW_LOCAL_PROVIDER_URLS: ${ALLOW_LOCAL_PROVIDER_URLS:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # AES-256-GCM key for encrypting custom provider API keys (64 hex chars)
+      PROVIDER_ENCRYPTION_KEY: ${PROVIDER_ENCRYPTION_KEY:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - backup_data:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cliproxyapi:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 40s  # Allow time for DB init + Next.js startup
+
+  # ---------------------------------------------------------------------------
+  # Usage collection cron — POSTs usage stats to the dashboard every 5 minutes
+  # ---------------------------------------------------------------------------
+  usage-collector:
+    image: alpine:3.19
+    container_name: cliproxyapi-usage-collector
+    restart: unless-stopped
+    # Resource limits (very lightweight - just cron + curl calls)
+    cpus: 0.1
+    mem_limit: 64m
+    mem_reservation: 16m
+    environment:
+      COLLECTOR_API_KEY: ${COLLECTOR_API_KEY:-}
+      TZ: ${TZ:-UTC}
+    command: >
+      sh -c "
+        apk add --no-cache curl dcron &&
+        echo '*/5 * * * * curl -sf -X POST http://dashboard:3000/api/usage/collect -H \"Authorization: Bearer $$COLLECTOR_API_KEY\" > /dev/null 2>&1' > /tmp/crontab &&
+        crontab /tmp/crontab &&
+        crond -f -d 8
+      "
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep crond > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Backup scheduler cron — ticks every 5 min; the dashboard endpoint decides
+  # whether a scheduled backup is due.
+  # ---------------------------------------------------------------------------
+  backup-scheduler:
+    image: alpine:3.19
+    container_name: cliproxyapi-backup-scheduler
+    restart: unless-stopped
+    cpus: 0.1
+    mem_limit: 64m
+    mem_reservation: 16m
+    environment:
+      BACKUP_SCHEDULER_KEY: ${BACKUP_SCHEDULER_KEY:-}
+      TZ: ${TZ:-UTC}
+    command: >
+      sh -c "
+        apk add --no-cache curl dcron &&
+        echo '*/5 * * * * curl -sf -X POST http://dashboard:3000/api/admin/backup/scheduled -H \"Authorization: Bearer $$BACKUP_SCHEDULER_KEY\" > /dev/null 2>&1' > /tmp/crontab &&
+        crontab /tmp/crontab &&
+        crond -f -d 8
+      "
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep crond > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# Named volumes — data persists across redeploys
+volumes:
+  # Database persistence
+  postgres_data:
+    driver: local
+
+  # CLIProxyAPI persistence
+  cliproxyapi_auths:
+    driver: local
+  cliproxyapi_logs:
+    driver: local
+
+  # Dashboard backup storage
+  backup_data:
+    driver: local
