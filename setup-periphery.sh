@@ -19,26 +19,26 @@ set -euo pipefail
 #   --uninstall             Same removal as --clean, then exit (no reinstall).
 #
 #   Download resilience:
+#     - Every fetch (version, binary, config) is proxy-first: the first
+#       reachable proxy in the list is used; if it fails, the same fetch
+#       falls back to direct GitHub automatically. No mode flags.
 #     - Binary download uses HTTP/1.1 + partial-download resume (-C -) with
 #       --retry-all-errors, so a dropped HTTP/2 stream over flaky transit
 #       (curl exit 92) retries and resumes instead of hanging/restarting.
-#     - If the chosen proxy fails, the download falls back to the other
-#       reachable proxies (speed-ranked by a 2MB ranged probe of the real
-#       binary), then direct GitHub (unless --github-mode always).
+#     - With multiple proxies listed they are speed-ranked by a 2MB ranged
+#       probe of the real binary (skipped for a single proxy).
 #     - Every binary download is integrity-gated: the result must be a valid
 #       ELF/Mach-O executable of plausible size, rejecting mirrors that
 #       return HTTP 200 with a challenge/suspension page instead of the file.
-#     - The config template falls back to the jsDelivr CDN if the primary
-#       route and all proxies fail (repo files <20MB, no prefix required).
+#     - The config template falls back to the jsDelivr CDN, then direct
+#       raw.githubusercontent.com, if the primary route fails (repo files
+#       <20MB, no prefix required).
 #
 # GitHub access routing (works in China AND internationally):
-#   --github-mode auto     (default) probe direct GitHub first; use it only if
-#                          it answers within 3s, otherwise fall back to the
-#                          first reachable proxy in the built-in list.
-#   --github-mode always   always download everything via a proxy.
-#   --github-mode never    direct GitHub only (original behavior).
-#   --config-url/--binary-url still override the resolved route.
-#   GITHUB_MODE env var can be used instead of the flag.
+#   Proxy-first with direct fallback: probe the proxy list at install time,
+#   use the first reachable proxy for every fetch; if a fetch fails through
+#   it (dead proxy, stalled stream, bad content), fall back to direct
+#   GitHub. --config-url/--binary-url still override the resolved route.
 #
 #   Version detection no longer uses api.github.com (most proxies refuse to
 #   relay it): it follows the releases/latest redirect, which works both
@@ -67,9 +67,6 @@ Options:
                                before installing fresh.
   --uninstall                  Remove old install and exit (no reinstall).
   --force-service-file         Recreate the service file even if it already exists.
-  --github-mode MODE           GitHub access strategy: auto (default) | always | never.
-                               auto: direct GitHub if fast (<3s), else first reachable proxy.
-                               always: always fetch via proxy. never: direct only.
   --config-url URL             Use a custom config URL.
   --binary-url URL             Use alternate binary source.
   -h, --help                   Show this help message.
@@ -93,39 +90,26 @@ BINARY_URL="https://github.com/moghtech/komodo/releases/download"
 INIT_SYSTEM=""
 
 # ── GitHub access routing ──
-GITHUB_MODE="${GITHUB_MODE:-auto}"   # auto | always | never
 CONFIG_URL_SET=false
 BINARY_URL_SET=false
 PROXY_BASE=""
 ORIG_BINARY_URL=""
+ORIG_CONFIG_URL=""
 REACHABLE_PROXIES=()   # every proxy that passed the reachability probe
-# Proxies verified (2026-08) to serve large (25MB+) release binaries AND
-# raw files byte-identical to GitHub (md5-verified against direct fetch).
-# gh-proxy.com and ghfast.top are the long-running primaries; the rest are
-# Tier-2 standbys (ghproxy.net supports HTTP Range -> resumable, gh.llkk.cc /
-# gh.zwy.one / ghproxy.cxkpro.top topped 2026 speed tests). All are probed at
-# install time and speed-ranked by a real 2MB ranged transfer of the actual
-# binary, so the fastest wins automatically.
-# Dead/risky mirrors intentionally NOT listed (as of 2026-08):
-#   gh.con.sh           alive but suspended - serves a 48-byte "suspent.txt"
-#                       notice for every path (would silently poison installs)
-#   github.moeyy.xyz    DNS dead; operator stopped service due to pollution
-#   mirror.ghproxy.com  DNS dead          ghps.cc / ghp.ci  DNS dead
-#   ghproxy.cn          returns HTML challenge page, not files (hash mismatch)
-#   hub.fastgit.xyz     JS redirect shell only, not wget/curl usable
-#   github.akams.cn     404 on prefix paths (web UI only)
-# If the list ever dies, add a backup here or pass --binary-url explicitly.
+# Proxy in use (2026-08): gh.bibica.net — Cloudflare Pages reverse proxy for
+# GitHub. Path-based, NOT prefix-based like the older mirrors:
+#   github.com/…                          → https://gh.bibica.net/…
+#   raw.githubusercontent.com/…           → https://gh.bibica.net/_raw/…
+#   api.github.com/…                      → https://gh.bibica.net/_api/…
+#   release-assets.githubusercontent.com/… → https://gh.bibica.net/_release-assets/…
+#   codeload.github.com/…                 → https://gh.bibica.net/_codeload/…
+# (how it's built: https://bibica.net/su-dung-cloudflare-pages-lam-reverse-proxy-cho-github-v2/)
+# Cloudflare edge → fast/stable from China. Verified byte-identical to direct
+# GitHub (sha256 match) for release binaries, HTTP Range supported (resume).
+# If it ever dies, add a backup mirror here (trailing-slash bases are treated
+# as prefix proxies, slash-less bases as path-based) or pass --binary-url.
 PROXY_LIST=(
-  "https://gh-proxy.com/"
-  "https://ghfast.top/"
-  "https://ghproxy.net/"
-  "https://gh.llkk.cc/"
-  "https://gh.zwy.one/"
-  "https://ghproxy.cxkpro.top/"
-  "https://cors.isteed.cc/"
-  "https://fastgit.cc/"
-  "https://gh.monlor.com/"
-  "https://cdn.crashmc.com/"
+  "https://gh.bibica.net"
 )
 # Small, version-independent canary used to probe reachability
 RAW_CANARY="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
@@ -143,19 +127,12 @@ while [[ $# -gt 0 ]]; do
     --clean)              CLEAN=true;           shift   ;;
     --uninstall)          UNINSTALL=true;       shift   ;;
     --force-service-file) FORCE_SERVICE=true;   shift   ;;
-    --github-mode)        GITHUB_MODE="$2";     shift 2 ;;
     --config-url)         CONFIG_URL="$2"; CONFIG_URL_SET=true; shift 2 ;;
     --binary-url)         BINARY_URL="$2"; BINARY_URL_SET=true; shift 2 ;;
     -h|--help)            usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
-
-# ── Validate routing mode ──
-case "$GITHUB_MODE" in
-  auto|always|never) ;;
-  *) echo "Error: unknown --github-mode '$GITHUB_MODE' (use auto|always|never)"; exit 1 ;;
-esac
 
 # ══════════════════════════════════════════════
 # GitHub access routing (direct vs proxy)
@@ -166,10 +143,30 @@ probe_ok() { # $1=url $2=max-time(s)
   [[ "$code" =~ ^[23] ]]
 }
 
+# Rewrite a GitHub URL through a proxy. Prefix proxies (trailing slash, e.g.
+# https://gh-proxy.com/) take the URL appended as-is; path-based proxies
+# (slash-less, e.g. https://gh.bibica.net) map each GitHub host to a path.
+rewrite_github_url() { # $1 = GitHub URL, $2 = proxy base (defaults to PROXY_BASE)
+  local url="$1" base="${2:-$PROXY_BASE}"
+  [[ -z "$base" ]] && { echo "$url"; return 0; }
+  case "$base" in
+    */) echo "${base}${url}" ;;  # prefix-style proxy
+    *)  case "$url" in
+          https://raw.githubusercontent.com/*)
+            echo "${base}/_raw/${url#https://raw.githubusercontent.com/}" ;;
+          https://api.github.com/*)
+            echo "${base}/_api/${url#https://api.github.com/}" ;;
+          https://github.com/*)
+            echo "${base}/${url#https://github.com/}" ;;
+          *) echo "${base}/${url#https://}" ;;
+        esac ;;
+  esac
+}
+
 choose_proxy() {
   local p
   for p in "${PROXY_LIST[@]}"; do
-    if probe_ok "${p}${RAW_CANARY}" 8; then
+    if probe_ok "$(rewrite_github_url "$RAW_CANARY" "$p")" 8; then
       REACHABLE_PROXIES+=("$p")
       if [[ -z "$PROXY_BASE" ]]; then
         PROXY_BASE="$p"
@@ -183,50 +180,22 @@ choose_proxy() {
 }
 
 select_github_route() {
-  case "$GITHUB_MODE" in
-    never)
-      echo "github mode: never (direct GitHub only)"
-      ;;
-    always)
-      echo "github mode: always (proxy only)"
-      choose_proxy || {
-        echo "Error: no GitHub proxy reachable."
-        echo "  Fix network, or use GITHUB_MODE=never, or pass --config-url/--binary-url manually."
-        exit 1
-      }
-      ;;
-    auto)
-      if probe_ok "$RAW_CANARY" 3; then
-        echo "github mode: auto → direct GitHub reachable"
-        # Probe proxies anyway so the download step can fall back to them
-        # if the direct transfer of the real binary fails mid-stream (a
-        # small canary passing doesn't guarantee a 25MB transfer does).
-        for p in "${PROXY_LIST[@]}"; do
-          if probe_ok "${p}${RAW_CANARY}" 8; then
-            REACHABLE_PROXIES+=("$p")
-          else
-            echo "→ proxy unreachable: $p"
-          fi
-        done
-      else
-        echo "github mode: auto → direct GitHub slow/unreachable, trying proxies"
-        choose_proxy || {
-          echo "Error: no GitHub proxy reachable either."
-          echo "  Pass -v + --config-url + --binary-url manually, or fix network."
-          exit 1
-        }
-      fi
-      ;;
-  esac
+  # Proxy-first: use the first reachable proxy as the primary route; every
+  # fetch (version, binary, config) falls back to direct GitHub automatically
+  # if the proxy fails. Proxies that don't answer the canary are skipped.
+  choose_proxy || {
+    echo "→ no GitHub proxy reachable — falling back to direct GitHub"
+  }
 
-  # Keep the un-rewritten binary base so the download step can build
-  # fallback candidates (other proxies / direct) if the chosen proxy fails.
+  # Keep the un-rewritten bases so the download/config steps can build
+  # fallback candidates (other proxies / direct) if the chosen route fails.
   ORIG_BINARY_URL="$BINARY_URL"
+  ORIG_CONFIG_URL="$CONFIG_URL"
 
   # Rewrite the download targets to go through the proxy (unless overridden)
   if [[ -n "$PROXY_BASE" ]]; then
-    [[ "$CONFIG_URL_SET" == false ]] && CONFIG_URL="${PROXY_BASE}${CONFIG_URL}"
-    [[ "$BINARY_URL_SET" == false ]] && BINARY_URL="${PROXY_BASE}${BINARY_URL}"
+    [[ "$CONFIG_URL_SET" == false ]] && CONFIG_URL="$(rewrite_github_url "$CONFIG_URL")"
+    [[ "$BINARY_URL_SET" == false ]] && BINARY_URL="$(rewrite_github_url "$BINARY_URL")"
   fi
 }
 
@@ -243,14 +212,11 @@ if [[ -z "$VERSION" ]]; then
       | tr -d '\r' | head -1   # HTTP headers are CRLF — strip the trailing \r
   }
 
-  if [[ "$GITHUB_MODE" != "always" ]]; then
-    VERSION=$(fetch_latest_version "https://github.com/moghtech/komodo/releases/latest") || true
+  if [[ -n "$PROXY_BASE" ]]; then
+    VERSION=$(fetch_latest_version "$(rewrite_github_url "https://github.com/moghtech/komodo/releases/latest" "$PROXY_BASE")") || true
   fi
-  if [[ -z "$VERSION" && "$GITHUB_MODE" != "never" ]]; then
-    for p in "${PROXY_LIST[@]}"; do
-      VERSION=$(fetch_latest_version "${p}https://github.com/moghtech/komodo/releases/latest") || true
-      [[ -n "$VERSION" ]] && break
-    done
+  if [[ -z "$VERSION" ]]; then
+    VERSION=$(fetch_latest_version "https://github.com/moghtech/komodo/releases/latest") || true
   fi
   if [[ -z "$VERSION" ]]; then
     echo "Error: Failed to detect latest version (GitHub unreachable)."
@@ -786,7 +752,6 @@ echo " PERIPHERY INSTALLER "
 echo "====================="
 echo "init system: $INIT_SYSTEM"
 echo "version: $VERSION"
-echo "github mode: $GITHUB_MODE"
 echo "github route: ${PROXY_BASE:-direct}"
 echo "core address: ${CORE_ADDRESS:-(inbound)}"
 echo "connect as: $CONNECT_AS"
@@ -843,13 +808,12 @@ if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
 fi
 
 # Ordered candidate URLs: the primary route (chosen proxy, or direct when
-# mode is auto and GitHub answered the probe) first, then the reachable
-# proxies ranked by real throughput (a 2MB ranged probe of the actual
-# binary — on CN transit proxies that stall large transfers sink to the
-# bottom of the list), then direct GitHub (unless mode is 'always' or
-# direct is already the primary). If a flaky transit kills a stream
-# mid-transfer (curl exit 92), the next candidate takes over instead of
-# aborting the whole install.
+# no proxy is reachable) first, then the remaining reachable proxies ranked
+# by real throughput (a 2MB ranged probe of the actual binary — on CN
+# transit proxies that stall large transfers sink to the bottom of the
+# list; skipped when only one proxy is configured), then direct GitHub as
+# the final fallback. If a flaky transit kills a stream mid-transfer (curl
+# exit 92), the next candidate takes over instead of aborting the install.
 DIRECT_URL="${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}"
 DL_URLS=()
 if [[ -n "$PROXY_BASE" ]]; then
@@ -857,10 +821,10 @@ if [[ -n "$PROXY_BASE" ]]; then
 else
   DL_URLS+=("$DIRECT_URL")
 fi
-if [[ "$BINARY_URL_SET" != true && "${#REACHABLE_PROXIES[@]}" -gt 0 ]]; then
+if [[ "$BINARY_URL_SET" != true && "${#REACHABLE_PROXIES[@]}" -gt 1 ]]; then
   while read -r _ _ p; do
     [[ -z "$p" ]] && continue
-    url="${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}"
+    url="$(rewrite_github_url "${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" "$p")"
     # Skip candidates that duplicate the primary route (the first reachable
     # proxy may already be BINARY_URL, and direct may already be primary).
     [[ "$url" == "${DL_URLS[0]}" || "$url" == "$DIRECT_URL" ]] && continue
@@ -869,12 +833,12 @@ if [[ "$BINARY_URL_SET" != true && "${#REACHABLE_PROXIES[@]}" -gt 0 ]]; then
              t0=$(date +%s)
              bytes=$(curl -fsSL --http1.1 -r 0-2097151 --connect-timeout 5 --max-time 20 \
                     -o /dev/null -w '%{size_download}' \
-                    "${p}${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" 2>/dev/null || true)
+                    "$(rewrite_github_url "${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" "$p")" 2>/dev/null || true)
              echo "${bytes:-0} $(( $(date +%s) - t0 )) $p"
            done | sort -t' ' -k1,1 -rn)
 fi
-# Direct GitHub as last resort, unless mode forbids it or it is already primary.
-if [[ "$GITHUB_MODE" != "always" && "${DL_URLS[0]}" != "$DIRECT_URL" ]]; then
+# Direct GitHub as the final fallback (unless --binary-url overrode the source).
+if [[ "$BINARY_URL_SET" != true && "${DL_URLS[0]}" != "$DIRECT_URL" ]]; then
   DL_URLS+=("$DIRECT_URL")
 fi
 
@@ -907,9 +871,10 @@ for url in "${DL_URLS[@]}"; do
   # downloads so retries make progress instead of restarting ~25MB from
   # zero. One retry only, short max-time: a proxy that stalls large
   # transfers is abandoned quickly instead of burning 4x180s before the
-  # next (speed-ranked) candidate is tried.
-  if curl -fsSL --http1.1 -C - --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" \
-       --connect-timeout 10 --max-time 90 "$url" -o "$BIN_PATH" && verify_binary "$BIN_PATH"; then
+  # next (speed-ranked) candidate is tried. -S: surface curl's own error
+  # text (a stalled transfer with -s looks like a hang).
+  if curl -fSL --http1.1 -C - --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" \
+       --connect-timeout 10 --max-time 90 -S "$url" -o "$BIN_PATH" && verify_binary "$BIN_PATH"; then
     DL_OK=true
     break
   fi
@@ -955,6 +920,10 @@ else
     if [[ "$CONFIG_URL_SET" == false ]]; then
       echo "→ config fetch failed via $CONFIG_URL — trying jsDelivr CDN..."
       CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 30 "https://cdn.jsdelivr.net/gh/moghtech/komodo@main/config/periphery.config.toml" 2>/dev/null) || true
+      if [[ -z "$CONFIG_TEMPLATE" ]]; then
+        echo "→ jsDelivr failed too — trying direct raw.githubusercontent.com..."
+        CONFIG_TEMPLATE=$(curl -fsSL --http1.1 --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" --connect-timeout 10 --max-time 30 "$ORIG_CONFIG_URL" 2>/dev/null) || true
+      fi
     fi
   fi
   if [[ -z "$CONFIG_TEMPLATE" ]]; then
