@@ -718,6 +718,20 @@ if [[ "$USER_INSTALL" == true && "$INIT_SYSTEM" != "systemd" && "$INIT_SYSTEM" !
 fi
 
 # ── Load paths ──
+# $HOME is not guaranteed to exist: systemd transient units (systemd-run)
+# start with an empty environment, and cron/CI runners frequently strip it.
+# Under `set -u` a bare "$HOME" aborts the whole install, so resolve a
+# fallback before it is used anywhere below.
+if [[ -z "${HOME:-}" ]]; then
+  if [[ "$(id -u)" -eq 0 ]]; then
+    HOME="$(getent passwd 0 2>/dev/null | cut -d: -f6)"
+  else
+    HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+  fi
+  [[ -n "${HOME:-}" && -d "$HOME" ]] || HOME="/tmp"
+  export HOME
+  echo "Warning: \$HOME was unset — defaulting to $HOME"
+fi
 HOME_DIR="$HOME"
 SERVICE_DIR_PATH=$(svc_service_path)
 SERVICE_DIR=$(svc_service_dir)
@@ -997,7 +1011,45 @@ fi
 
 # ── Start & enable periphery ──
 echo "Starting Periphery..."
-svc_start
+svc_start || echo "Warning: failed to start Periphery (continuing to verification)"
+
+# ── Verify Periphery actually came up ──
+# `systemctl start` returns success once the unit is *spawned*, not once it is
+# healthy. A misconfigured config (e.g. a placeholder core_public_keys) makes
+# the daemon exit immediately, which previously surfaced as a silent
+# "Finished Periphery setup." with a dead agent behind it. `svc_start` itself
+# may also fail outright (unit was already running / restart race), so the
+# startup call is guarded too.
+svc_verify() {
+  [[ "$INIT_SYSTEM" == "systemd" ]] || return 0
+  local user_flag=""
+  [[ "$USER_INSTALL" == true ]] && user_flag=" --user"
+
+  local i state
+  for i in $(seq 1 10); do
+    state=$(systemctl${user_flag} is-active periphery 2>/dev/null || true)
+    if [[ "$state" == "active" ]]; then
+      echo "Periphery is running."
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo ""
+  echo "Error: periphery.service is '${state:-unknown}' after 10s — the agent is NOT running."
+  echo "Last log lines:"
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    journalctl${user_flag} -u periphery -n 20 --no-pager 2>/dev/null | sed 's/^/  /'
+  else
+    tail -n 20 "$EFFECTIVE_ROOT_DIR/periphery.log" 2>/dev/null | sed 's/^/  /'
+  fi
+  echo ""
+  echo "Common causes:"
+  echo "  - 'Invalid hardcoded public key' → core_public_keys/onboarding_key were not substituted"
+  echo "  - 'Periphery failed to validate Core public key' → stale ${EFFECTIVE_ROOT_DIR}/keys/core.pub"
+  return 1
+}
+svc_verify || exit 1
 
 echo "Enabling Periphery on boot..."
 svc_enable
