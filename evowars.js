@@ -1113,8 +1113,13 @@ var __spreadArray =
       //      can fire after 2 frames; sideways targets need 4+.
       smartTriggerEnabled: true,
       smartTriggerFrames: 2,
-      smartTriggerContactMs: 100,
-      smartTriggerContactPingScale: 0.3,
+      // Shorter projection window (was 100 ms) so closing targets do
+      // not get a free pass at the edge of the trigger range. With
+      // 100 ms the predictive check was letting the bot fire when the
+      // projected contact was 65+ px past the geometric radius,
+      // landing the swing past the target.
+      smartTriggerContactMs: 60,
+      smartTriggerContactPingScale: 0.2,
       smartTriggerTangentialRatio: 0.3,
       smartTriggerTangentialFrames: 4,
       smartTriggerOutOfRangeTimeout: 150,
@@ -1209,27 +1214,25 @@ var __spreadArray =
       // Values in between scale the insets linearly.
       heuristicInsetsMultiplier: 0,
 
-      // Closing lead bonus for smaller targets. When we are stronger
-      // than the enemy and closing on them, the bot should fire
-      // earlier because the swing can land well before the geometric
-      // contact — we are moving INTO the target, not skimming past.
-      // This is the offensive counterpart to the old heuristic insets
-      // and is safe to keep on in solo because the smart trigger's
-      // predictive check still rejects swings whose projected contact
-      // position falls outside the sword's reach.
-      smallerTargetClosingLeadScale: 0.5,
-      smallerTargetClosingLeadCap: 18,
+      // The two settings below are kept for backwards compatibility but
+      // default to zero. Adding extra pre-fire on top of the standard
+      // closingLeadPx made the bot over-fire: the closingLead already
+      // equals the right amount of lead for the swing time, and stacking
+      // a second lead on top would land the swing PAST the target.
+      smallerTargetClosingLeadScale: 0,
+      smallerTargetClosingLeadCap: 0,
 
-      // Solo mode auto-detection. When enabled, the bot counts the
-      // nearby enemies each frame; if exactly one is in range it
-      // switches to a faster, more aggressive profile (more pre-fire
-      // and one-frame smart trigger) so a 1v1 trades do not get
-      // stolen by the multi-frame debouncer.
+      // Solo mode auto-detection. Solo matches FFA's safety settings
+      // (2-frame debounce) because the predictive check was firing
+      // too early against closing targets. The pre-merge bot had no
+      // smart trigger at all and only relied on the closingLeadPx
+      // pre-fire; the 2-frame wait here adds back a small amount of
+      // safety without changing the trigger range.
       soloModeEnabled: true,
       soloModeEnemyCount: 1,
-      soloModePrefireBoost: -8,
-      soloModeClosingLeadBoost: 6,
-      soloModeSmartTriggerFrames: 1
+      soloModePrefireBoost: 0,
+      soloModeClosingLeadBoost: 0,
+      soloModeSmartTriggerFrames: 2
     };
 
     window._motionSnapshots = new Map();
