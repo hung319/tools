@@ -1153,12 +1153,12 @@ var __spreadArray =
 
       // Exact constants visible in the video frame.
       baseInset: 8,
-      strongerAttackerInsetPerLevel: 8, // raw video constant: gap * 4, then edm += edm
-      strongerAttackerInsetCap: 24,     // avoid excessively late swings vs much smaller targets
+      strongerAttackerInsetPerLevel: 4, // reduced from 8 — the smart trigger already validates hits
+      strongerAttackerInsetCap: 12,     // avoid excessively late swings vs much smaller targets
       rawVideoLevelInsetEnabled: false, // true restores the uncapped screenshot-inspired behavior
-      smallerAttackerInset: 10,
-      bothAbove36Inset: 10,
-      alignedFacingInsetMax: 5,
+      smallerAttackerInset: 4,
+      bothAbove36Inset: 4,
+      alignedFacingInsetMax: 3,
       angularMotionBonusPerDegree: 0.2,
       lowLevelBonusPivot: 42,
       lowLevelBonusPerLevel: 0.2,
@@ -1170,11 +1170,15 @@ var __spreadArray =
       triggerLeadMaxMs: 125,
 
       // The radial sum is an optimistic outer bound, not a guaranteed hit.
-      // Smaller targets retain a small approach allowance; equal or larger
-      // targets must penetrate the outer boundary before a swing is fired.
-      contactInsetVsSmallerTarget: 16,
-      contactInsetVsEqualTarget: 16,
-      contactInsetVsLargerTarget: 18,
+      // These insets are intentionally small — the smart trigger already
+      // adds multi-frame confirmation and predictive-geometry safety, so
+      // the heuristic only needs to shave a few pixels off the trigger
+      // window. Tighter values caused ghost flicks in the original
+      // visibleHeuristic mode and significantly raised the miss rate
+      // once they were merged into the main autohit path.
+      contactInsetVsSmallerTarget: 4,
+      contactInsetVsEqualTarget: 4,
+      contactInsetVsLargerTarget: 4,
       closingLeadScaleVsSmallerTarget: 0.08,
       closingLeadScaleVsEqualTarget: 0.0,
       closingLeadScaleVsLargerTarget: 0.0,
@@ -1182,10 +1186,10 @@ var __spreadArray =
       maxClosingLeadVsEqualTarget: 0,
       maxClosingLeadVsLargerTarget: 0,
 
-      // Hard upper bound for smaller targets. Positive prediction and angular
-      // bonuses may improve timing, but they must never move the trigger back
-      // to the optimistic outer-contact boundary where ghost flicks occur.
-      smallerTargetGuaranteedPenetrationInset: 26,
+      // Hard upper bound for smaller targets. Keeps the trigger from
+      // firing on a faint FOV graze; with the smart trigger's
+      // predictive-geometry check on top, 8 px is enough.
+      smallerTargetGuaranteedPenetrationInset: 8,
 
       // Long one-sword forms magnify even a small optimistic ratio error.
       // Keep the exact engine reach, but require a few extra pixels of actual
@@ -1193,7 +1197,7 @@ var __spreadArray =
       // every smaller-target matchup rather than singling out levels 35 or 36.
       smallerTargetLongReachReference: 650,
       smallerTargetLongReachExtraInsetScale: 0.035,
-      smallerTargetLongReachExtraInsetCap: 14
+      smallerTargetLongReachExtraInsetCap: 6
     };
 
     window._motionSnapshots = new Map();
