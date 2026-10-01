@@ -1197,7 +1197,39 @@ var __spreadArray =
       // every smaller-target matchup rather than singling out levels 35 or 36.
       smallerTargetLongReachReference: 650,
       smallerTargetLongReachExtraInsetScale: 0.035,
-      smallerTargetLongReachExtraInsetCap: 6
+      smallerTargetLongReachExtraInsetCap: 6,
+
+      // Master switch for the heuristic insets applied to the main trigger.
+      // 0 = off (the smart trigger alone provides safety — best for solo
+      //      and small-scale play where reaction time matters more than
+      //      avoiding ghost flicks).
+      // 1 = full strength (the original visibleHeuristic values — best
+      //      for FFA / chaotic rooms where accidental hits on bystanders
+      //      are common).
+      // Values in between scale the insets linearly.
+      heuristicInsetsMultiplier: 0,
+
+      // Closing lead bonus for smaller targets. When we are stronger
+      // than the enemy and closing on them, the bot should fire
+      // earlier because the swing can land well before the geometric
+      // contact — we are moving INTO the target, not skimming past.
+      // This is the offensive counterpart to the old heuristic insets
+      // and is safe to keep on in solo because the smart trigger's
+      // predictive check still rejects swings whose projected contact
+      // position falls outside the sword's reach.
+      smallerTargetClosingLeadScale: 0.5,
+      smallerTargetClosingLeadCap: 18,
+
+      // Solo mode auto-detection. When enabled, the bot counts the
+      // nearby enemies each frame; if exactly one is in range it
+      // switches to a faster, more aggressive profile (more pre-fire
+      // and one-frame smart trigger) so a 1v1 trades do not get
+      // stolen by the multi-frame debouncer.
+      soloModeEnabled: true,
+      soloModeEnemyCount: 1,
+      soloModePrefireBoost: -8,
+      soloModeClosingLeadBoost: 6,
+      soloModeSmartTriggerFrames: 1
     };
 
     window._motionSnapshots = new Map();
@@ -3158,8 +3190,15 @@ var __spreadArray =
         return { shouldFire: false, reason: "not-in-range", aimDx: null, aimDy: null, frameCount: 0 };
       }
 
-      // Check 1: multi-frame confirmation.
-      var requiredFrames = tuning.smartTriggerFrames || 2;
+      // Check 1: multi-frame confirmation. Solo mode (1 nearby enemy)
+      // drops to 1 frame so a 1v1 trade is not lost on the debouncer;
+      // FFA keeps the normal 2-frame minimum to avoid accidental fires.
+      var isSolo = !!window._soloModeActive;
+      var requiredFrames = isSolo
+        ? (tuning.soloModeSmartTriggerFrames !== undefined
+            ? tuning.soloModeSmartTriggerFrames
+            : 1)
+        : (tuning.smartTriggerFrames || 2);
       if (data.count < requiredFrames) {
         return {
           shouldFire: false,
@@ -3336,6 +3375,32 @@ var __spreadArray =
         : { distance: mySword.distance, source: "fallback-table" };
       var myWeaponReach = myWeaponReachInfo.distance;
 
+      // Solo mode detection. Count how many *other* players are currently
+      // tracked as nearby. If exactly one (plus the team-mode check handled
+      // later), the bot switches to a faster, more aggressive profile so a
+      // 1v1 trade is not lost waiting for the multi-frame debouncer.
+      // The flag is also exposed on `window._soloModeActive` for the smart
+      // trigger to read.
+      var nearbyEnemyCount = 0;
+      if (window.closePlayerUIDS) {
+        window.closePlayerUIDS.forEach(function (uid) {
+          if (!window.modData.myInst) return;
+          var op = window.runtime && window.runtime.getObjectByUID(uid);
+          if (!op || op === window.modData.myInst) return;
+          // Skip teammates in team mode so the count is real enemies.
+          if (window.modData.gameMode === 1
+              && op.instance_vars
+              && op.instance_vars[36] === window.modData.myInst.instance_vars[36]) {
+            return;
+          }
+          nearbyEnemyCount++;
+        });
+      }
+      var soloCount = (window.netTuning.soloModeEnemyCount === undefined)
+        ? 1 : window.netTuning.soloModeEnemyCount;
+      window._soloModeActive = (window.netTuning.soloModeEnabled !== false)
+        && nearbyEnemyCount === soloCount;
+
       var playerUidsToDelete = [];
       window.closePlayerUIDS.forEach(function (playerUID) {
           if (!window.modData.myInst) return;
@@ -3454,21 +3519,40 @@ var __spreadArray =
                 window.netTuning.closingLeadCap || 40,
                 radialClosingSpeed * (preFireMs / 1000) * (window.netTuning.closingLeadScale || 0.5)
               );
+              // Smaller-target closing lead bonus. When we are stronger
+              // than the enemy and moving toward them, the swing is going
+              // to land well before the geometric contact, so we do not
+              // need to wait for the target to fully enter the sword.
+              // Capped so a supersonic fake-target cannot make the bot
+              // fire across the whole map.
+              if (belsoszint > enemyLevel) {
+                var smallerTargetLeadBonus = Math.min(
+                  window.netTuning.smallerTargetClosingLeadCap || 18,
+                  radialClosingSpeed * (preFireMs / 1000)
+                    * (window.netTuning.smallerTargetClosingLeadScale || 0.5)
+                );
+                closingLeadPx = Math.min(
+                  (window.netTuning.closingLeadCap || 40) + (window.netTuning.smallerTargetClosingLeadCap || 18),
+                  closingLeadPx + smallerTargetLeadBonus
+                );
+              }
 
               // Dynamic pre-fire. Base inset (reach-scaled) minus time-based
               // closing lead. Negative = fire before geometric contact.
               //
-              // Heuristic-style insets are baked in here (no A/B toggle). The
-              // old visibleHeuristic mode was useful but redundant with the
-              // smart trigger — its predictive aim, time-based pre-fire, and
-              // closing lead are now applied unconditionally so the autohit
-              // always behaves like the "ON" variant of the old heuristic.
-              //   1. Level-based inset: stronger attacker (higher level) is
-              //      harder to whiff on, so a slightly tighter trigger is OK.
-              //   2. Contact inset by level relation: small/large/equal.
-              //   3. Long-reach extra inset for short weapons vs smaller
-              //      targets, so we do not fire while the sword is still
-              //      travelling across a large empty distance.
+              // The heuristic-style insets (level-relation, contact, long-
+              // reach extra) are computed but their effect is scaled by
+              // netTuning.heuristicInsetsMultiplier. The default of 0 keeps
+              // the bot aggressive — the smart trigger's predictive check
+              // already provides safety. Bump the multiplier back to 1 for
+              // FFA / chaotic rooms where accidental contact with bystanders
+              // is common.
+              //
+              // Closing lead is split into a base term (all targets) and
+              // a smaller-target bonus. The bonus fires earlier when we
+              // are stronger than the enemy and moving toward them — the
+              // swing is going to land, so we do not need to wait for the
+              // target to fully enter the sword.
               var ht = window.visibleHeuristicTuning || {};
               var targetRelation = belsoszint > enemyLevel ? "smaller"
                 : (belsoszint < enemyLevel ? "larger" : "equal");
@@ -3477,43 +3561,57 @@ var __spreadArray =
               if (belsoszint > enemyLevel) {
                 var diff = belsoszint - enemyLevel;
                 heuristicLevelInset = Math.min(
-                  ht.strongerAttackerInsetCap || 24,
-                  diff * (ht.strongerAttackerInsetPerLevel || 8)
+                  ht.strongerAttackerInsetCap || 12,
+                  diff * (ht.strongerAttackerInsetPerLevel || 4)
                 );
               } else if (belsoszint < enemyLevel) {
-                heuristicLevelInset = ht.smallerAttackerInset || 10;
+                heuristicLevelInset = ht.smallerAttackerInset || 4;
               }
 
               var heuristicContactInset = targetRelation === "smaller"
-                ? (ht.contactInsetVsSmallerTarget || 16)
+                ? (ht.contactInsetVsSmallerTarget || 4)
                 : (targetRelation === "larger"
-                    ? (ht.contactInsetVsLargerTarget || 18)
-                    : (ht.contactInsetVsEqualTarget || 16));
+                    ? (ht.contactInsetVsLargerTarget || 4)
+                    : (ht.contactInsetVsEqualTarget || 4));
 
               var smallerTargetLongReachExtraInset = 0;
               if (targetRelation === "smaller") {
                 var refReachHeur = ht.smallerTargetLongReachReference || 650;
                 smallerTargetLongReachExtraInset = Math.min(
-                  ht.smallerTargetLongReachExtraInsetCap || 14,
+                  ht.smallerTargetLongReachExtraInsetCap || 6,
                   Math.max(0, myWeaponReach - refReachHeur)
                     * (ht.smallerTargetLongReachExtraInsetScale || 0.035)
                 );
               }
 
-              // Positive values — added to dynamicInset, tightening the trigger.
-              var totalHeuristicInsets = heuristicLevelInset
+              // Apply the master multiplier so users can switch between
+              // "aggressive" (0) and "FFA-safe" (1) with a single knob.
+              var heuristicMul = (window.netTuning.heuristicInsetsMultiplier === undefined)
+                ? 0 : window.netTuning.heuristicInsetsMultiplier;
+              var totalHeuristicInsets = (heuristicLevelInset
                 + heuristicContactInset
-                + smallerTargetLongReachExtraInset;
+                + smallerTargetLongReachExtraInset) * heuristicMul;
+
+              // Solo mode boost. Detected at the top of AllLoop; here we
+              // only consume the cached flag. In solo we want the bot to
+              // commit to the swing as soon as the geometry check passes.
+              if (window._soloModeActive && window.netTuning.soloModeEnabled !== false) {
+                var soloBoost = window.netTuning.soloModePrefireBoost || -8;
+                var soloClosingBoost = Math.min(20,
+                  radialClosingSpeed * (preFireMs / 1000)
+                    * (window.netTuning.soloModeClosingLeadBoost || 6) / 10
+                );
+                totalHeuristicInsets = totalHeuristicInsets + soloBoost - soloClosingBoost;
+              }
 
               var dynamicInset = scaledInset - closingLeadPx + totalHeuristicInsets;
               var usableHitRadius = Math.max(1, totalHitRadius - dynamicInset);
 
-              // Smaller-target range ceiling. Caps the trigger so the autohit
-              // does not fire until the smaller target is actually inside the
-              // guaranteed-penetration zone. Without this, a long sword with
-              // a small target can trigger while the sword is still travelling.
-              if (targetRelation === "smaller") {
-                var guaranteedInset = ht.smallerTargetGuaranteedPenetrationInset || 26;
+              // Smaller-target range ceiling. Only applied when the
+              // heuristic multiplier is non-zero — at 0 the ceiling just
+              // duplicates safety the smart trigger already provides.
+              if (targetRelation === "smaller" && heuristicMul > 0) {
+                var guaranteedInset = ht.smallerTargetGuaranteedPenetrationInset || 8;
                 var smallerTargetCeiling = Math.max(1,
                   totalHitRadius - guaranteedInset - smallerTargetLongReachExtraInset
                 );
