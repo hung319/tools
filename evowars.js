@@ -1007,33 +1007,42 @@ var __spreadArray =
     var INDEX_ANGLE_VAR = 15;
 
     window.netTuning = {
-      // Multiplier on the level-based body radius. >1.0 makes the bot think
-      // the enemy is bigger (fires earlier), <1.0 makes it think smaller.
+      // Multiplier on the level-based body radius. Kept at 1.0 now: any value
+      // >1 inflates the assumed hitbox, so the trigger fires while the target
+      // is still outside its true body radius and the server rejects the hit
+      // (the "đánh trúng nhưng địch không chết" symptom). Raise slightly only
+      // if you find the bot is consistently firing a hair too late.
       targetRadiusScale: 1.0,
 
-      // Fixed pixel offset added to the body radius after scaling. 0 keeps
-      // the trigger conservative — combined with a moderate pre-fire offset
-      // below it gives a balanced "fires slightly early but not early
-      // enough to whiff" behaviour. Bump to 5–10 if you still see late hits
-      // against small or fast targets.
+      // Fixed pixel offset added to the body radius after scaling. Set to 0
+      // for the same reason — a positive padding also pushes the trigger past
+      // the real contact point. Use 2-3 only if late hits are a problem.
       targetRadiusPadding: 0,
 
       // Pre-fire offset. Negative = fire before perfect geometric contact.
-      // -8 px compensates for the swing travel time vs the strict
-      // centre-distance trigger. Going more negative (-12, -15) starts
-      // landing hits before the target is in range and the swing passes
-      // them — use those only if your target keeps slipping out at the
-      // last frame.
-      currentDistanceInset: -8,
+      // Kept small (-4 px): the old -12 px (which the reach-aware scaling then
+      // multiplied up to ~-30 px on short swords) pushed usableHitRadius PAST
+      // the real weapon reach, so the bot swung before the enemy was actually
+      // in range — the server rejected the hit while the local animation still
+      // played, which read as "đánh trúng nhưng địch không chết". The closing
+      // lead below already compensates for target motion; the base inset only
+      // needs to cover a couple of frames of latency.
+      currentDistanceInset: -4,
 
       // Velocity-based aim lead for non-heuristic mode. Uses the per-player
       // motion snapshots to push the click point toward the target's predicted
       // position by the time the swing actually connects. The lead window is
       // bounded by aimLeadMaxMs so fast swing speeds cannot over-aim.
+      //
+      // Bumped from 65/180 to 80/240: against a moving target the aim was
+      // landing on where the enemy WAS at click time, not where it would be
+      // when the weapon reached the contact point, so the swing consistently
+      // trailed the target and whiffed. The longer window matches the actual
+      // weapon travel time much better.
       aimLeadEnabled: true,
-      aimLeadBaseMs: 40,
-      aimLeadPingScale: 0.4,
-      aimLeadMaxMs: 130,
+      aimLeadBaseMs: 80,
+      aimLeadPingScale: 0.7,
+      aimLeadMaxMs: 240,
 
       // Swing angle offset (degrees) added to atan2(targetDirection) before
       // the click is sent. The per-character table at the top of the file
@@ -1045,6 +1054,72 @@ var __spreadArray =
       // Use window.swingProbe(deg) to log the active value before/after.
       swingDegreesOverride: null,
       swingDegreesOffset: 0,
+
+      // Manual pin for the instance-variable index that stores the character
+      // facing angle. The scout auto-detects it, but if it ever locks onto the
+      // wrong slot the character rotates to the wrong heading and every swing
+      // misses. Set this to force a specific index and bypass the scout, e.g.
+      //   netTuning.angleIndexOverride = 15
+      // Leave null to use the scout / built-in fallback.
+      angleIndexOverride: null,
+
+      // Continuous pre-aim (auto xoay người). The game smoothly interpolates
+      // the character heading toward the last mouse position, so a single
+      // mousemove fired at the same instant as the swing leaves the character
+      // mid-rotation and the hit only lands when the player was ALREADY facing
+      // the target (the "chỉ trúng khi đối mặt" symptom). With this enabled the
+      // bot re-aims every frame, so the character is already facing the swing
+      // direction by the time the cooldown expires.
+      preAimEnabled: true,
+
+      // Master switch for the synthetic mousemove. DEFAULT OFF: this game uses
+      // the mouse POSITION as the character's movement target, so pointing the
+      // cursor at the enemy made the character walk toward it ("tự động di
+      // chuyển tới target"). The server authoritative hit uses the angle in the
+      // outgoing "ps" packet, not the local mouse, so disabling the synthetic
+      // move does not affect accuracy. Set to true only if a build needs the
+      // local cursor aimed for the swing to register.
+      aimMouseEnabled: false,
+
+      // When true, fireCanvasAttack also writes the facing value into the
+      // angle instance variable. DEFAULT OFF: on this build that slot doubles
+      // as the movement heading, so writing the target direction made the
+      // character walk toward the enemy after each swing. The sprite angle
+      // (myInst.angle) is still written for the visual turn.
+      writeAngleInstanceVar: false,
+      // When true the pre-aim direction matches the packet angle exactly
+      // (target direction + per-level swing offset). When false the character
+      // is aimed STRAIGHT at the target and the swing offset is kept only in
+      // the packet.
+      //
+      // Default is false: the game resolves the swing from the character's
+      // facing, so the character must point at the target for the hit to land
+      // — carrying the swing offset into the heading rotated the character away
+      // from the target, which is exactly why hits only connected when the
+      // player was already facing the enemy. Flip to true only if the character
+      // visibly faces the wrong way.
+      preAimUseSwingOffset: false,
+
+      // When true the pre-aim also writes the facing value into the angle
+      // instance variable every frame. LEFT OFF: on this build that slot also
+      // acts as the movement heading, so writing the target direction each
+      // frame made the character walk toward the enemy. Only enable if a future
+      // build separates facing from movement and pre-aim rotation stops working
+      // through the mouse alone.
+      preAimWriteAngleVar: false,
+
+      // When true the pre-aim also dispatches a synthetic mousemove toward the
+      // target each frame. If the character still drifts toward the enemy after
+      // preAimWriteAngleVar is off, the game is using the mouse position for
+      // movement too — set this to false to keep the mouse still between swings.
+      preAimMouseEnabled: true,
+
+      // Spawn-protection shield. The bubble instance name and the proximity
+      // radius used to decide a player is still protected. Widen the radius if
+      // the bot still swings at shielded enemies (the bubble can lag the player
+      // by a frame).
+      shieldTypeName: "t109",
+      shieldCheckRadius: 45,
 
       // Target selection within the trigger range.
       //   'closest'       = nearest enemy in range (intuitive FFA behaviour)
@@ -1074,24 +1149,61 @@ var __spreadArray =
       reachPrefireReference: 250,
       reachPrefireMin: 50,
 
+      // Trigger-only reach safety margin (see AllLoop). 0.97 shrinks the
+      // weapon reach used by the TRIGGER by 3% so the bot no longer fires at
+      // the absolute edge of the measured range — the polygon-derived reach
+      // can be a few px optimistic, and the 150° swing arc means the range
+      // edge (not the direction) is where misses happen. The overlay still
+      // draws the true reach. Lower it further (0.94-0.95) if edge misses
+      // persist; set to 1.0 to restore the exact measured reach.
+      triggerReachSafetyScale: 0.97,
+
       // Body-radius bonus for lower-level targets. A small bonus is added
       // to totalHitRadius so the trigger has a safety margin against smaller
       // enemies that are easier to hit dead-on.
       //   level diff 1  -> +1.5 px
       //   level diff 5  -> +7.5 px
-      //   level diff 8+ -> +12 px (cap)
+      //   level diff 10 -> +15 px (cap)
+      // (Reduced from 2.5/18: the larger bonus made the bot open fire on
+      // smaller enemies while they were still outside their real body radius,
+      // so the swings landed visually but the server counted no damage.)
       smallerTargetBodyBonusPerLevel: 1.5,
-      smallerTargetBodyBonusCap: 12,
+      smallerTargetBodyBonusCap: 15,
 
       // Time-based closing lead. The pre-fire window scales with ping so
       // higher-latency connections get a proportionally larger lead.
       //   preFireMs = min(maxPreFireMs, basePreFireMs + ping * pingScale)
       // closingLeadPx = min(cap, radialClosingSpeed * preFireMs/1000 * scale)
-      preFireBaseMs: 35,
-      preFirePingScale: 0.5,
-      preFireMaxMs: 120,
+      //
+      // The scale/cap were reduced (0.75/70 -> 0.5/45): the closing lead is
+      // only valid while the target actually keeps closing, so an over-large
+      // value made the bot fire well before contact whenever the enemy was
+      // merely moving toward it — again producing swings that visually landed
+      // but dealt no damage.
+      preFireBaseMs: 50,
+      preFirePingScale: 0.7,
+      preFireMaxMs: 180,
       closingLeadScale: 0.5,
-      closingLeadCap: 40,
+      closingLeadCap: 45,
+
+      // Receding lead (CHASE FIX). When the target is running AWAY the bot must
+      // fire while the target is still closer than the geometric edge, so the
+      // swing lands before the target escapes. This shrinks the usable trigger
+      // radius by (recedingSpeed * contactTime * recedingLeadScale), capped at
+      // recedingLeadCap. Higher scale = fire sooner (better vs fast runners,
+      // slightly more early for slow ones). Set recedingLeadEnabled=false to
+      // restore the old edge-only behaviour.
+      recedingLeadEnabled: true,
+      recedingLeadScale: 1.0,
+      recedingLeadCap: 90,
+      // Never shrink the usable radius below this fraction of its unfired
+      // value, so a very fast runner cannot make the bot refuse to swing.
+      recedingLeadMaxFraction: 0.5,
+      // Extra projection time (multiplier on the smart trigger's contact time)
+      // when the target is receding. >1 makes the aim lead the flee direction
+      // further and makes the geometry check stricter (fires closer). 1.0
+      // disables this part.
+      recedingContactMultiplier: 1.25,
 
       // Smart trigger — adds an extra layer on top of the geometry check so
       // a swing only fires when it is actually going to connect. Three
@@ -1101,34 +1213,116 @@ var __spreadArray =
       //      the trigger zone for at least smartTriggerFrames consecutive
       //      frames. This debounces single-frame false positives caused
       //      by ping spikes, sprite rounding, or tangential "graze" frames.
+      //      (Tuned down from 2 to 1: the 2-frame debouncer was rejecting
+      //      fast single-frame contacts that the pre-fire alone would
+      //      have connected.)
       //
       //   2. Predictive geometry. The target is projected to where it
       //      will be at contact time (smartTriggerContactMs from now,
       //      adjusted for ping). If the projected position is already
       //      outside the reach, the swing would miss — reject.
+      //      (Bumped from 60 ms to 100 ms so the projection actually
+      //      matches the swing travel time — the old 60 ms window was
+      //      approving shots whose projected contact was 65+ px past
+      //      the geometric radius, then the swing arrived late.)
       //
       //   3. Tangential motion guard. If the target is moving mostly
       //      perpendicular to the attack line (low closing/total speed
       //      ratio), require more frames before firing. Head-on targets
       //      can fire after 2 frames; sideways targets need 4+.
+      //      (Relaxed from 0.30 / 4 frames to 0.15 / 2 frames: a target
+      //      skimming the edge of the trigger zone was rejected even
+      //      though the swing geometry is forgiving and the contact was
+      //      still a hit.)
       smartTriggerEnabled: true,
-      smartTriggerFrames: 2,
-      // Shorter projection window (was 100 ms) so closing targets do
-      // not get a free pass at the edge of the trigger range. With
-      // 100 ms the predictive check was letting the bot fire when the
-      // projected contact was 65+ px past the geometric radius,
-      // landing the swing past the target.
-      smartTriggerContactMs: 60,
-      smartTriggerContactPingScale: 0.2,
-      smartTriggerTangentialRatio: 0.3,
-      smartTriggerTangentialFrames: 4,
+      smartTriggerFrames: 1,
+      // Longer projection window (was 60 ms) so the predictive check
+      // matches the actual swing travel time. With 60 ms the predictive
+      // check was letting the bot fire when the projected contact was
+      // 65+ px past the geometric radius, landing the swing past the
+      // target.
+      smartTriggerContactMs: 100,
+      smartTriggerContactPingScale: 0.4,
+      smartTriggerTangentialRatio: 0.15,
+      smartTriggerTangentialFrames: 2,
       smartTriggerOutOfRangeTimeout: 150,
       smartTriggerMaxTracked: 200,
 
       // When true, the smart trigger exposes the predicted aim vector
       // back to executeAttack() so the click leads the target to its
       // expected contact position. Disable for legacy current-position aim.
-      smartTriggerUsePredictedAim: true
+      smartTriggerUsePredictedAim: true,
+
+      // ======================================================
+      // PREDICTIVE TRIGGER — fire BEFORE the target enters the
+      // geometric attack range
+      //
+      // DISABLED BY DEFAULT. Enabling this makes the bot swing while
+      // the target is still up to `predictiveExtensionCap` pixels
+      // OUTSIDE the attack range, which is exactly the "đánh khi địch
+      // chưa vào FOV" behaviour: the client plays the swing animation
+      // but the target is not actually in reach yet, so the server
+      // rejects the hit and no damage is dealt. Only turn it back on
+      // if the game is provably lagging behind the server in a way
+      // that a pre-emptive swing compensates for.
+      // ======================================================
+      predictiveTriggerEnabled: false,
+      // Cap on how far past usableHitRadius the bot will consider
+      // a target. 100 px covers the fastest realistic targets
+      // (1000+ px/s, 100ms swing travel) without letting a
+      // supersonic fake-target make the bot fire across the map.
+      predictiveExtensionCap: 100,
+      // Tangential guard for predictive triggers. Higher than
+      // the normal smart trigger ratio (0.15) because the
+      // predictive path skips the multi-frame debouncer, so the
+      // tangential check has to be the primary safety against
+      // "target was passing by" false fires.
+      predictiveTangentialRatio: 0.25,
+      // Minimum closing speed (px/s) for the predictive path to
+      // activate. Static targets (closing=0) and slowly-drifting
+      // targets are kept on the normal trigger so the predictive
+      // path only fires when there is clear closing motion.
+      predictiveMinClosingSpeed: 80,
+
+      // ======================================================
+      // SMALL-TARGET / FAST-TARGET OPTIMISATIONS
+      //
+      // The base trigger is tuned for equal-or-larger enemies in FFA.
+      // Against smaller or fast tangential targets it produced ghost
+      // misses because:
+      //   1. The 2-frame debouncer dropped fast single-frame contacts
+      //   2. The 4-frame tangential guard rejected passing-by targets
+      //   3. The 8 px body-radius bonus was too small for level 0-2
+      //      enemies (their body is only 40 px)
+      //   4. The 130 ms aim lead was too short for closing 800+ px/s
+      //
+      // The following overrides apply ONLY when the local player is
+      // higher level than the target (smallTargetLevelDiffMin ≤ diff)
+      // or when the target's tangential speed crosses the fast-target
+      // threshold. The base FFA / equal-level behaviour is unchanged
+      // when these switches are disabled.
+      // ======================================================
+      smallTargetEnabled: true,             // master switch
+      smallTargetLevelDiffMin: 1,           // require at least this diff to apply
+
+      // Smart trigger overrides for smaller targets
+      smallTargetFrameCount: 1,             // was 2: skip multi-frame debouncer
+      smallTargetContactMs: 80,             // was 50: match the longer base projection
+      smallTargetTangentialRatio: 0.08,     // was 0.30: more permissive
+      smallTargetTangentialFrames: 2,       // was 4: less strict guard
+
+      // Trigger / lead overrides for smaller targets
+      smallTargetPreFireBoost: -6,          // ADD to dynamicInset (more early fire, in px)
+      smallTargetClosingLeadMultiplier: 1.2, // multiply closing lead
+      smallTargetAimLeadMultiplier: 1.4,     // multiply aim lead in executeAttack
+      smallTargetBodyRadiusScale: 1.04,     // 4% bigger effective body radius (safety)
+
+      // Passing-by / fast tangential targets
+      fastTargetSpeedThreshold: 650,        // px/s — when to consider a target "fast"
+      fastTargetLeadMultiplier: 1.3,        // multiply aim lead for fast targets
+      fastTargetTangentialRatio: 0.10,      // was 0.30: more permissive
+      fastTargetTangentialFrames: 2,        // was 4: less strict guard
+      fastTargetFrameCount: 1               // was 2: skip debouncer for fast targets
     };
 
     // ======================================================
@@ -1158,10 +1352,10 @@ var __spreadArray =
 
       // Exact constants visible in the video frame.
       baseInset: 8,
-      strongerAttackerInsetPerLevel: 4, // reduced from 8 — the smart trigger already validates hits
-      strongerAttackerInsetCap: 12,     // avoid excessively late swings vs much smaller targets
+      strongerAttackerInsetPerLevel: 6, // reduced from 8 — the smart trigger already validates hits
+      strongerAttackerInsetCap: 16,     // avoid excessively late swings vs much smaller targets
       rawVideoLevelInsetEnabled: false, // true restores the uncapped screenshot-inspired behavior
-      smallerAttackerInset: 4,
+      smallerAttackerInset: 6,
       bothAbove36Inset: 4,
       alignedFacingInsetMax: 3,
       angularMotionBonusPerDegree: 0.2,
@@ -1181,9 +1375,13 @@ var __spreadArray =
       // window. Tighter values caused ghost flicks in the original
       // visibleHeuristic mode and significantly raised the miss rate
       // once they were merged into the main autohit path.
-      contactInsetVsSmallerTarget: 4,
-      contactInsetVsEqualTarget: 4,
-      contactInsetVsLargerTarget: 4,
+      // (Bumped from 4 to 7-8 px so the heuristic adds meaningful
+      // pre-fire margin in FFA rooms where the smart trigger's
+      // 100 ms projection alone was still firing slightly too late
+      // against closing targets.)
+      contactInsetVsSmallerTarget: 7,
+      contactInsetVsEqualTarget: 6,
+      contactInsetVsLargerTarget: 6,
       closingLeadScaleVsSmallerTarget: 0.08,
       closingLeadScaleVsEqualTarget: 0.0,
       closingLeadScaleVsLargerTarget: 0.0,
@@ -1194,7 +1392,11 @@ var __spreadArray =
       // Hard upper bound for smaller targets. Keeps the trigger from
       // firing on a faint FOV graze; with the smart trigger's
       // predictive-geometry check on top, 8 px is enough.
-      smallerTargetGuaranteedPenetrationInset: 8,
+      // (Bumped from 8 to 12 px so the ceiling is high enough to
+      // include the longer pre-fire values from the relaxed smart
+      // trigger — at 8 px the ceiling was tighter than the actual
+      // trigger range and was clamping valid contacts.)
+      smallerTargetGuaranteedPenetrationInset: 12,
 
       // Long one-sword forms magnify even a small optimistic ratio error.
       // Keep the exact engine reach, but require a few extra pixels of actual
@@ -1212,7 +1414,12 @@ var __spreadArray =
       //      for FFA / chaotic rooms where accidental hits on bystanders
       //      are common).
       // Values in between scale the insets linearly.
-      heuristicInsetsMultiplier: 0,
+      // (Bumped from 0 to 0.5: the relaxed smart trigger was firing
+      // reliably but the trigger range itself was still slightly
+      // conservative — a half-strength heuristic adds back ~3-4 px of
+      // pre-fire margin in FFA without re-introducing the ghost-flick
+      // problem the original 1.0 multiplier had.)
+      heuristicInsetsMultiplier: 0.5,
 
       // The two settings below are kept for backwards compatibility but
       // default to zero. Adding extra pre-fire on top of the standard
@@ -1307,7 +1514,7 @@ var __spreadArray =
         var _finished = false;
         var _confirmed = { level: false, boost: false, angle: false };
         var _prevVars = null;
-        var _angleCandidates = {};   // idx → { count, last }
+        var _angleCandidates = {};   // idx → { count, last, min, max }
         var _boostCandidates = {};   // idx → toggle count
         var _levelCandidates = {};   // idx → confirmed increment count
         var _levelBlacklist  = {};   // idx → true (permanently disqualified)
@@ -1326,19 +1533,37 @@ var __spreadArray =
                 if (len === 0) return;
 
                 // ── ANGLE ────────────────────────────────────────────────
+                // The facing angle is a float that sweeps continuously as the
+                // character turns. We therefore require a candidate to (a)
+                // change frequently AND (b) actually sweep a meaningful range
+                // before we accept it. Without the range check a slow-drifting
+                // float (a timer, an interpolation) could be mistaken for the
+                // angle, in which case fireCanvasAttack would write the swing
+                // angle into the wrong instance var and the character would
+                // rotate to the wrong heading — the observed "auto xoay người"
+                // miss.
                 if (!_confirmed.angle) {
                     for (var i = 0; i < len; i++) {
                         var v = vars[i];
                         if (typeof v === 'number' && !Number.isInteger(v) && v > -7.0 && v < 7.0) {
-                            if (!_angleCandidates[i]) _angleCandidates[i] = { count: 0, last: v };
+                            if (!_angleCandidates[i]) {
+                                _angleCandidates[i] = { count: 0, last: v, min: v, max: v };
+                            }
                             if (Math.abs(v - _angleCandidates[i].last) > 0.001) {
-                                _angleCandidates[i].count++;
-                                _angleCandidates[i].last = v;
-                                if (_angleCandidates[i].count >= 15) {
+                                var cand = _angleCandidates[i];
+                                cand.count++;
+                                cand.last = v;
+                                if (v < cand.min) cand.min = v;
+                                if (v > cand.max) cand.max = v;
+                                // Require a sweep of at least ~1.4 rad (~80°).
+                                // A real facing angle easily exceeds this while
+                                // the player moves; a noisy counter does not.
+                                if (cand.count >= 15 && (cand.max - cand.min) >= 1.4) {
                                     window.dynamicIndices.angle = i;
                                     INDEX_ANGLE_VAR = i;
                                     _confirmed.angle = true;
-                                    console.log('[AutoHit Scout] Angle index confirmed:', i);
+                                    console.log('[AutoHit Scout] Angle index confirmed:', i,
+                                        '(sweep ' + (cand.max - cand.min).toFixed(2) + ' rad)');
                                 }
                             }
                         }
@@ -1571,6 +1796,41 @@ var __spreadArray =
         "offset", (window.netTuning.swingDegreesOffset || 0) + "°",
         "override", (window.netTuning.swingDegreesOverride === null ? "null" : window.netTuning.swingDegreesOverride + "°"));
       return effective;
+    };
+
+    // Console helper: inspect the character-rotation plumbing. Prints which
+    // instance-var index currently stores the facing angle, its live value,
+    // and the swing angle offset that will be applied to the next click.
+    // Call this when the character visibly turns the wrong way — a wrong
+    // angle index or offset is the classic cause of "auto xoay người" misses.
+    window.inspectAimGeometry = function () {
+      var me = window.modData && window.modData.myInst;
+      var idx = resolveAngleVarIndex();
+      var liveAngle = (me && me.instance_vars) ? me.instance_vars[idx] : undefined;
+      var level = me ? window.getLevelFromInst(me) : 0;
+      var tableDeg = 130;
+      var s = window.swordLevelTable[level];
+      if (s && s.degrees !== undefined) tableDeg = s.degrees;
+      var hasOverride = window.netTuning &&
+        window.netTuning.swingDegreesOverride !== null &&
+        window.netTuning.swingDegreesOverride !== undefined;
+      var swingDeg = hasOverride
+        ? Number(window.netTuning.swingDegreesOverride)
+        : tableDeg + (Number(window.netTuning.swingDegreesOffset) || 0);
+      var overrideIdx = window.netTuning ? window.netTuning.angleIndexOverride : null;
+      var report = {
+        angleVarIndex: idx,
+        angleIndexOverride: (overrideIdx === undefined ? null : overrideIdx),
+        scoutAngleIndex: window.dynamicIndices ? window.dynamicIndices.angle : undefined,
+        compiledFallbackIndex: INDEX_ANGLE_VAR,
+        liveAngleValue: (typeof liveAngle === "number") ? Math.round(liveAngle * 1000) / 1000 : liveAngle,
+        myLevel: level,
+        swingDegrees: Math.round(swingDeg * 10) / 10,
+        instanceAngle: (me && typeof me.angle !== "undefined") ? Math.round(me.angle * 1000) / 1000 : undefined
+      };
+      console.log("[AutoHit] inspectAimGeometry");
+      console.table([report]);
+      return report;
     };
 
     // Live autohit diagnostic. Call from the console to see exactly what the
@@ -2276,6 +2536,19 @@ var __spreadArray =
         var p = players[i];
         if (!p || p === myInst || p.uid === myUid) continue;
 
+        // Skip instances without a valid player state, and dead players. A
+        // dead player's instance can linger with stale coordinates and a
+        // tombstone sprite, which the overlay drew as a stray tall "pillar"
+        // box (and the missing respawn read as an empty overlay). hp/maxHp are
+        // the same slots the HP bar below reads.
+        if (!p.instance_vars || p.instance_vars.length < 20) continue;
+        var hpCheck = Number(p.instance_vars[7]);
+        var maxHpCheck = Number(p.instance_vars[8]);
+        if (Number.isFinite(hpCheck) && Number.isFinite(maxHpCheck)
+            && maxHpCheck > 0 && hpCheck <= 0) {
+          continue;
+        }
+
         var dx = p.x - myInst.x;
         var dy = p.y - myInst.y;
         var distance = Math.sqrt(dx * dx + dy * dy);
@@ -2310,10 +2583,17 @@ var __spreadArray =
           continue;
         }
 
+        var bodyRadius = calculateTargetRadius(enemyLevel);
         var spriteW = Math.abs(Number(p.width) || 0);
         var spriteH = Math.abs(Number(p.height) || 0);
-        if (spriteW === 0) spriteW = calculateTargetRadius(enemyLevel) * 2.6;
-        if (spriteH === 0) spriteH = calculateTargetRadius(enemyLevel) * 2.6;
+        // Clamp the box to a sane multiple of the body radius. Raw sprite
+        // width/height can be transient or wrong and produced tall, thin
+        // "pillar" boxes; anything outside [body, 7x body] falls back to the
+        // stable body-derived square.
+        var minBoxDim = bodyRadius * 1.0;
+        var maxBoxDim = bodyRadius * 7;
+        if (!(spriteW >= minBoxDim && spriteW <= maxBoxDim)) spriteW = bodyRadius * 2.6;
+        if (!(spriteH >= minBoxDim && spriteH <= maxBoxDim)) spriteH = bodyRadius * 2.6;
 
         var cx = bounds.left + (p.x - layer.viewLeft) * scaleX;
         var cy = bounds.top  + (p.y - layer.viewTop)  * scaleY;
@@ -3056,52 +3336,181 @@ var __spreadArray =
 
         // Non-heuristic mode: aim lead from per-player motion snapshots.
         if (window.netTuning && window.netTuning.aimLeadEnabled && window._motionSnapshots) {
-          var mySnap = window._motionSnapshots.get(window.modData.myInst.uid);
-          var tgtSnap = window._motionSnapshots.get(targetInst.uid);
-          if (mySnap && tgtSnap) {
-            var relVx = (tgtSnap.vx || 0) - (mySnap.vx || 0);
-            var relVy = (tgtSnap.vy || 0) - (mySnap.vy || 0);
-            var measuredPing = Number(window.smoothedPing || window.ping || 0);
-            var leadMs = Math.min(
-              window.netTuning.aimLeadMaxMs || 120,
-              (window.netTuning.aimLeadBaseMs || 35)
-                + measuredPing * (window.netTuning.aimLeadPingScale || 0.4)
-            );
-            var leadSec = leadMs / 1000;
-            dx += relVx * leadSec;
-            dy += relVy * leadSec;
+          var rel = getRelativeVelocity(window.modData.myInst, targetInst);
+          var relVx = rel.vx;
+          var relVy = rel.vy;
+          var measuredPing = Number(window.smoothedPing || window.ping || 0);
+          var leadMs = Math.min(
+            window.netTuning.aimLeadMaxMs || 240,
+            (window.netTuning.aimLeadBaseMs || 80)
+              + measuredPing * (window.netTuning.aimLeadPingScale || 0.7)
+          );
+          var leadSec = leadMs / 1000;
+
+          // Apply the small-target / fast-target lead multipliers so
+          // single-frame contacts and passing-by targets get enough
+          // lead to land the swing. The base lead was tuned for the
+          // 2-frame debouncer case; with the relaxed trigger these
+          // multipliers (1.3-1.4×) restore the equivalent lead time
+          // without bumping the global aimLeadMaxMs (which would
+          // over-lead equal / larger targets).
+          //
+          // The base multiplier was raised from 1.0 to 1.25 for ALL
+          // moving targets: the swing was consistently landing behind a
+          // target that kept moving during the weapon travel time, so the
+          // default lead needs to be slightly stronger than the geometric
+          // minimum even when neither of the small/fast overrides applies.
+          var leadMultiplier = 1.25;
+          if (rel.speed > (window.netTuning.fastTargetSpeedThreshold || 650)
+              && window.netTuning.fastTargetLeadMultiplier) {
+            leadMultiplier *= window.netTuning.fastTargetLeadMultiplier;
           }
+          if (out && typeof out.enemyLevel === "number"
+              && typeof out.myLevel === "number"
+              && (out.myLevel - out.enemyLevel) > 0
+              && window.netTuning.smallTargetEnabled !== false
+              && (out.myLevel - out.enemyLevel) >= (window.netTuning.smallTargetLevelDiffMin || 1)
+              && window.netTuning.smallTargetAimLeadMultiplier) {
+            leadMultiplier *= window.netTuning.smallTargetAimLeadMultiplier;
+          }
+
+          dx += relVx * leadSec * leadMultiplier;
+          dy += relVy * leadSec * leadMultiplier;
         }
       }
+      // Two distinct angles:
+      //   targetDirRad  — the direction straight from the player to the
+      //                   (lead-adjusted) target. This is the heading the
+      //                   character must FACE for the swing to connect.
+      //   swingAngleRad — targetDirRad plus the per-character swing offset,
+      //                   which is what the outgoing packet expects.
+      var targetDirRad = Math.atan2(dy, dx);
       var swingDeg = getSword(out.myLevel).degrees || 130;
-      var adjustedAngleRad = Math.atan2(dy, dx) + (swingDeg * Math.PI / 180);
+      var swingAngleRad = targetDirRad + (swingDeg * Math.PI / 180);
 
-      fireCanvasAttack(adjustedAngleRad);
+      fireCanvasAttack(swingAngleRad, targetDirRad);
     }
 
-    // Fires the attack: injects angle into engine memory, plays visual, sends network packet
-    function fireCanvasAttack(angleRad) {
+    // Relative-velocity helpers shared by the aim lead, the smart trigger and
+    // the predictive trigger so all three use the exact same target-motion
+    // estimate. Returns { vx, vy, speed } in px/s.
+    function getRelativeVelocity(myInst, targetInst) {
+      var mySnap = window._motionSnapshots && window._motionSnapshots.get(myInst.uid);
+      var tgtSnap = window._motionSnapshots && window._motionSnapshots.get(targetInst.uid);
+      var vx = (tgtSnap ? tgtSnap.vx : 0) - (mySnap ? mySnap.vx : 0);
+      var vy = (tgtSnap ? tgtSnap.vy : 0) - (mySnap ? mySnap.vy : 0);
+      return { vx: vx, vy: vy, speed: Math.hypot(vx, vy) };
+    }
+
+    // Resolves which instance-variable slot holds the character facing angle,
+    // honouring the manual override first, then the scout-detected index, and
+    // finally the compiled-in fallback.
+    function resolveAngleVarIndex() {
+      var tuning = window.netTuning || {};
+      if (tuning.angleIndexOverride !== null && tuning.angleIndexOverride !== undefined) {
+        var forced = Number(tuning.angleIndexOverride);
+        if (Number.isFinite(forced) && forced >= 0) return forced;
+      }
+      if (window.dynamicIndices && typeof window.dynamicIndices.angle === "number") {
+        return window.dynamicIndices.angle;
+      }
+      return INDEX_ANGLE_VAR;
+    }
+
+    // Dispatches a synthetic mousemove whose direction is `angleRad`, measured
+    // from the canvas centre (screen space, y-down). The game smoothly
+    // interpolates the character heading toward this point, so the caller can
+    // invoke it every frame to keep the character pre-rotated toward the next
+    // target. clientX/clientY MUST be CSS pixels (canvas rect), never the
+    // internal pixel buffer.
+    function dispatchAimMouse(angleRad) {
+      // The game treats the cursor position as the character's movement target,
+      // so synthetic mousemoves make the character walk. Disabled unless the
+      // user explicitly opts in (see netTuning.aimMouseEnabled).
+      if (!window.netTuning || window.netTuning.aimMouseEnabled !== true) return;
+      var canvas = window.runtime && window.runtime.canvas;
+      if (!canvas) return;
+      var bounds = canvas.getBoundingClientRect();
+      if (!bounds || bounds.width === 0 || bounds.height === 0) return;
+      var offsetRadius = Math.max(120, Math.min(bounds.width, bounds.height) * 0.4);
+      var clickX = bounds.left + bounds.width * 0.5 + Math.cos(angleRad) * offsetRadius;
+      var clickY = bounds.top + bounds.height * 0.5 + Math.sin(angleRad) * offsetRadius;
+      canvas.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: clickX,
+        clientY: clickY
+      }));
+    }
+
+    // Spawn-protection ("shield") detection. The game pins a shield/bubble
+    // instance to any player that is still protected. The bubble is a separate
+    // instance whose centre tracks the player, so a flat 5 px tolerance missed
+    // it whenever it lagged a frame behind — which is why the bot kept swinging
+    // at protected enemies. We match by proximity with a radius that is
+    // generous enough to survive that lag but still well below the distance
+    // between two different players.
+    function isPlayerShielded(playerInst) {
+      if (!playerInst || !window.runtime || !window.runtime.types_by_index) return false;
+      var tuning = window.netTuning || {};
+      var shieldName = tuning.shieldTypeName || "t109";
+      var tolerance = tuning.shieldCheckRadius || 45;
+      var px = playerInst.x;
+      var py = playerInst.y;
+      var types = window.runtime.types_by_index;
+      for (var i = 0; i < types.length; i++) {
+        var t = types[i];
+        if (t && t.name === shieldName && t.instances) {
+          for (var j = 0; j < t.instances.length; j++) {
+            var b = t.instances[j];
+            if (!b) continue;
+            var bdx = b.x - px;
+            var bdy = b.y - py;
+            if (Math.sqrt(bdx * bdx + bdy * bdy) <= tolerance) return true;
+          }
+          break;
+        }
+      }
+      return false;
+    }
+
+    // Fires the attack. `swingAngleRad` is the angle the network packet
+    // expects (target direction + per-character swing offset). `faceAngleRad`
+    // is the heading the character should actually turn to — normally the raw
+    // direction to the target, because the game resolves the swing from where
+    // the character is facing. When omitted it falls back to swingAngleRad.
+    function fireCanvasAttack(swingAngleRad, faceAngleRad) {
       var myInst = window.modData.myInst;
       var canvas = window.runtime && window.runtime.canvas;
       if (!canvas || !myInst) return;
 
-      // write angle so character turns manually
-      if (myInst.instance_vars && myInst.instance_vars[INDEX_ANGLE_VAR] !== undefined) {
-        myInst.instance_vars[INDEX_ANGLE_VAR] = angleRad;
-      }
-      if (typeof myInst.angle !== 'undefined') myInst.angle = angleRad;
+      var faceAngle = (typeof faceAngleRad === "number") ? faceAngleRad : swingAngleRad;
 
-      // we don't send mnouse down packet
-      // Send the packet first; visual mouse movement is secondary.
+      // Aim the character FIRST so the local heading is already correct when
+      // the swing resolves — the game interpolates the heading over several
+      // frames, so this has to precede the packet, not follow it.
+      dispatchAimMouse(faceAngle);
+
+      // Turn the character's sprite (visual only — setting the sprite angle
+      // does not move the character).
+      if (typeof myInst.angle !== 'undefined') myInst.angle = faceAngle;
+
+      // The angle instance variable is NOT written by default: on this build
+      // that slot doubles as the movement heading, so writing the target
+      // direction made the character walk toward the enemy after every swing
+      // (most visible while waiting for the cooldown). Opt in explicitly.
+      if (window.netTuning && window.netTuning.writeAngleInstanceVar === true) {
+        var angleVarIndex = resolveAngleVarIndex();
+        if (myInst.instance_vars && myInst.instance_vars[angleVarIndex] !== undefined) {
+          myInst.instance_vars[angleVarIndex] = faceAngle;
+        }
+      }
+
+      // Send the packet with the swing-offset angle the server expects; the
+      // visual/facing heading above is intentionally different.
       if (window.queueWasmClick) {
-        var angleDeg = Math.round(((angleRad * 180 / Math.PI) % 360 + 360) % 360);
+        var angleDeg = Math.round(((swingAngleRad * 180 / Math.PI) % 360 + 360) % 360);
         window.queueWasmClick(angleDeg);
       }
-
-      var bounds = canvas.getBoundingClientRect();
-      var clickX = bounds.left + canvas.width * 0.5 + Math.cos(angleRad) * 300;
-      var clickY = bounds.top + canvas.height * 0.5 + Math.sin(angleRad) * 300;
-      canvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: clickX, clientY: clickY }));
     }
 
     var minDistanceForNearby = 3000;
@@ -3156,7 +3565,7 @@ var __spreadArray =
     //   aimDx, aimDy: predicted aim vector at contact time (so the click
     //                 leads the target to where the swing will land)
     //   frameCount: how many consecutive in-range frames the target has
-    function evaluateSmartTrigger(myInst, targetInst, totalHitRadius, radialClosingSpeed) {
+    function evaluateSmartTrigger(myInst, targetInst, totalHitRadius, radialClosingSpeed, levelDiff) {
       var tuning = window.netTuning || {};
       if (tuning.smartTriggerEnabled === false) {
         return { shouldFire: true, reason: "disabled", aimDx: null, aimDy: null, frameCount: 0 };
@@ -3169,6 +3578,15 @@ var __spreadArray =
       var dy = targetInst.y - myInst.y;
       var dist = Math.hypot(dx, dy);
       var inRange = dist <= totalHitRadius;
+
+      // Determine the per-target parameter set. The base trigger was
+      // tuned for equal-level FFA; smaller or fast targets need a
+      // relaxed gate so single-frame contacts and passing-by shots
+      // are not lost. All overrides are gated behind tuning flags so
+      // disabling them restores the legacy behaviour.
+      var ld = (typeof levelDiff === "number") ? levelDiff : 0;
+      var isSmallTarget = !!tuning.smallTargetEnabled
+        && ld >= (tuning.smallTargetLevelDiffMin || 1);
 
       // Update per-target frame counter. Out-of-range entries decay after
       // a short grace window so a brief dip (ping spike, sprite rounding)
@@ -3195,13 +3613,26 @@ var __spreadArray =
 
       // Check 1: multi-frame confirmation. Solo mode (1 nearby enemy)
       // drops to 1 frame so a 1v1 trade is not lost on the debouncer;
-      // FFA keeps the normal 2-frame minimum to avoid accidental fires.
+      // small targets and fast tangential targets also drop to 1 frame
+      // because the missed-contact cost is much smaller than the cost
+      // of a whiffed swing. FFA / equal-level behaviour is unchanged.
+      //
+      // Lowered from 2 to 1 for the default FFA path as well: the
+      // predictive-geometry check below already rejects shots that will
+      // not connect, so the extra frame of debouncing was only adding
+      // latency and letting fast targets leave the trigger zone before
+      // the swing fired.
       var isSolo = !!window._soloModeActive;
-      var requiredFrames = isSolo
-        ? (tuning.soloModeSmartTriggerFrames !== undefined
+      var requiredFrames;
+      if (isSolo) {
+        requiredFrames = (tuning.soloModeSmartTriggerFrames !== undefined
             ? tuning.soloModeSmartTriggerFrames
-            : 1)
-        : (tuning.smartTriggerFrames || 2);
+            : 1);
+      } else if (isSmallTarget) {
+        requiredFrames = tuning.smallTargetFrameCount || 1;
+      } else {
+        requiredFrames = tuning.smartTriggerFrames || 1;
+      }
       if (data.count < requiredFrames) {
         return {
           shouldFire: false,
@@ -3212,17 +3643,32 @@ var __spreadArray =
 
       // Check 2: predictive geometry. Project the target forward to where
       // it will be at contact time and confirm the projected position is
-      // still inside the trigger radius.
+      // still inside the trigger radius. Small targets use a tighter
+      // window (their body is small, so a longer projection can over-predict).
       var mySnap = window._motionSnapshots && window._motionSnapshots.get(myInst.uid);
       var tgtSnap = window._motionSnapshots && window._motionSnapshots.get(targetInst.uid);
       var relVx = (tgtSnap ? tgtSnap.vx : 0) - (mySnap ? mySnap.vx : 0);
       var relVy = (tgtSnap ? tgtSnap.vy : 0) - (mySnap ? mySnap.vy : 0);
 
       var ping = Number(window.smoothedPing || window.ping || 0);
-      var contactMs = Math.max(60,
-        (tuning.smartTriggerContactMs || 100)
-          + ping * (tuning.smartTriggerContactPingScale || 0.3)
+      var baseContactMs = isSmallTarget
+        ? (tuning.smallTargetContactMs || 50)
+        : (tuning.smartTriggerContactMs || 60);
+      var contactMs = Math.max(40,
+        baseContactMs
+          + ping * (tuning.smartTriggerContactPingScale || 0.2)
       );
+      // Chasing / receding targets need a longer projection: the sword has to
+      // intercept a target that is running away, so both the predicted aim and
+      // the geometry check must look further ahead. This makes the bot lead the
+      // flee direction more and reject the shot unless the target is still
+      // comfortably inside the reach at the (extended) contact time.
+      var radialSignedForProjection = dist > 0
+        ? -((dx * relVx + dy * relVy) / dist)
+        : 0;
+      if (radialSignedForProjection < 0 && tuning.recedingContactMultiplier) {
+        contactMs *= tuning.recedingContactMultiplier;
+      }
       var contactSec = contactMs / 1000;
 
       var projDx = dx + relVx * contactSec;
@@ -3240,11 +3686,35 @@ var __spreadArray =
       // Check 3: tangential motion guard. Targets moving perpendicular to
       // the attack line can graze the FOV for one or two frames and then
       // be gone — require more in-range frames before committing.
+      // Small targets and fast tangential targets use a much more permissive
+      // ratio (0.10/0.15 vs 0.30) and only 2 confirmation frames (vs 4)
+      // because the swing geometry is forgiving and missing the shot is
+      // the more common failure mode.
       var tangentialSpeed = Math.hypot(relVx, relVy);
+      var fastThreshold = tuning.fastTargetSpeedThreshold || 650;
+      var isFastTarget = tangentialSpeed > fastThreshold;
       if (tangentialSpeed > 50) {
-        var closingRatio = radialClosingSpeed / tangentialSpeed;
-        var threshold = tuning.smartTriggerTangentialRatio || 0.3;
-        var tangentialFrames = tuning.smartTriggerTangentialFrames || 4;
+        var closingRatio = radialClosingSpeed > 0
+          ? (radialClosingSpeed / tangentialSpeed)
+          : 0;
+        var threshold, tangentialFrames;
+        if (isSmallTarget) {
+          threshold = tuning.smallTargetTangentialRatio || 0.10;
+          tangentialFrames = tuning.smallTargetTangentialFrames || 2;
+        } else if (isFastTarget) {
+          threshold = tuning.fastTargetTangentialRatio || 0.15;
+          tangentialFrames = tuning.fastTargetTangentialFrames || 2;
+        } else {
+          threshold = tuning.smartTriggerTangentialRatio || 0.3;
+          tangentialFrames = tuning.smartTriggerTangentialFrames || 4;
+        }
+        // Receding target (chasing): the window to connect is short, so do not
+        // add the extra tangential confirmation frames. Firing a frame late on
+        // a fleeing target is far more costly than the occasional graze.
+        var radialSignedGuard = dist > 0
+          ? -((dx * relVx + dy * relVy) / dist)
+          : 0;
+        if (radialSignedGuard < 0) tangentialFrames = 1;
         if (closingRatio < threshold && data.count < tangentialFrames) {
           return {
             shouldFire: false,
@@ -3256,7 +3726,7 @@ var __spreadArray =
 
       return {
         shouldFire: true,
-        reason: "ok",
+        reason: isSmallTarget ? "ok-small" : (isFastTarget ? "ok-fast" : "ok"),
         aimDx: tuning.smartTriggerUsePredictedAim !== false ? projDx : dx,
         aimDy: tuning.smartTriggerUsePredictedAim !== false ? projDy : dy,
         frameCount: data.count,
@@ -3331,22 +3801,11 @@ var __spreadArray =
           }
       }
 
-      // Spawn protection check — t109 bubble pinned to our character means we cannot attack
-      if (window.modData.myInst && window.runtime && window.runtime.types_by_index) {
-          var myX = window.modData.myInst.x;
-          var myY = window.modData.myInst.y;
-          for (var ti = 0; ti < window.runtime.types_by_index.length; ti++) {
-              var t109type = window.runtime.types_by_index[ti];
-              if (t109type && t109type.name === 't109' && t109type.instances) {
-                  for (var bi = 0; bi < t109type.instances.length; bi++) {
-                      var bubble = t109type.instances[bi];
-                      if (Math.abs(bubble.x - myX) < 5 && Math.abs(bubble.y - myY) < 5) {
-                          return;
-                      }
-                  }
-                  break;
-              }
-          }
+      // Spawn protection check — a shield bubble pinned to our character means
+      // we cannot attack yet. Uses the shared isPlayerShielded() so the local
+      // and per-enemy logic agree (and so the widened proximity radius applies).
+      if (window.modData.myInst && isPlayerShielded(window.modData.myInst)) {
+          return;
       }
 
       var minDistance = Infinity;
@@ -3376,7 +3835,17 @@ var __spreadArray =
       var myWeaponReachInfo = window.modData.myInst
         ? getWeaponReachForPlayer(window.modData.myInst, belsoszint)
         : { distance: mySword.distance, source: "fallback-table" };
-      var myWeaponReach = myWeaponReachInfo.distance;
+      // Trigger-only reach safety margin. The live reach is measured from the
+      // farthest collision-polygon vertex, which slightly OVER-estimates the
+      // effective damaging reach for some weapons (decorative rear tips), so
+      // the bot ended up firing at the very edge of the range. With the 150°
+      // swing arc being very forgiving in DIRECTION, the edge of the RANGE is
+      // where misses concentrate (most visible while chasing). Shrinking the
+      // trigger reach by a small factor fires a touch earlier/safer without
+      // touching the overlay (which keeps showing the true reach).
+      var triggerReachScale = (window.netTuning.triggerReachSafetyScale === undefined)
+        ? 1 : window.netTuning.triggerReachSafetyScale;
+      var myWeaponReach = myWeaponReachInfo.distance * triggerReachScale;
 
       // Solo mode detection. Count how many *other* players are currently
       // tracked as nearby. If exactly one (plus the team-mode check handled
@@ -3412,26 +3881,11 @@ var __spreadArray =
               playerUidsToDelete.push(playerUID);
               return;
           }
-          // spawn
-          var isProtected = false;
-          var types = window.runtime.types_by_index;
-          for (var _t = 0; _t < types.length; _t++) {
-              // bubble object in c2
-              if (types[_t] && types[_t].name === "t109" && types[_t].instances) {
-                  var bubbles = types[_t].instances;
-                  //see all active bubble
-                  for (var _b = 0; _b < bubbles.length; _b++) {
-                      // coordinate check
-                      if (Math.abs(bubbles[_b].x - otherPlayer.x) < 5 && Math.abs(bubbles[_b].y - otherPlayer.y) < 5) {
-                          isProtected = true;
-                          break;
-                      }
-                  }
-                  break; // found it
-              }
-          }
-
-          if (isProtected) {
+          // Spawn protection: skip any enemy that is still shielded. Without
+          // this the bot wasted its swing (and its cooldown) on a protected
+          // target that could not be damaged. Widened proximity check inside
+          // isPlayerShielded() catches the bubble even when it lags a frame.
+          if (isPlayerShielded(otherPlayer)) {
               return; // don't hit bubble
           }
           var out = processPlayer(window.modData.myInst, otherPlayer);
@@ -3472,8 +3926,22 @@ var __spreadArray =
                   )
                 : 0;
 
+              // Small-target body-radius scale. The base body radius scales
+              // linearly with level, so a level 0 enemy (40 px) is a much
+              // smaller hitbox than a level 20 enemy (134 px). We add a small
+              // multiplier so the trigger has more safety margin against the
+              // genuinely small targets (level ≤ 3). Only applies when we
+              // are higher level than the target.
+              var bodyRadiusScaleMul = 1;
+              if (levelDiff > 0
+                  && window.netTuning.smallTargetEnabled !== false
+                  && levelDiff >= (window.netTuning.smallTargetLevelDiffMin || 1)
+                  && window.netTuning.smallTargetBodyRadiusScale) {
+                bodyRadiusScaleMul = window.netTuning.smallTargetBodyRadiusScale;
+              }
+
               var totalHitRadius = myWeaponReach
-                + calculateTargetRadius(enemyLevel) * window.netTuning.targetRadiusScale
+                + calculateTargetRadius(enemyLevel) * window.netTuning.targetRadiusScale * bodyRadiusScaleMul
                 + (window.netTuning.targetRadiusPadding || 0)
                 + bodyRadiusBonus;
 
@@ -3482,15 +3950,16 @@ var __spreadArray =
               // or receding targets. out.dx/out.dy are added to processPlayer's
               // return object specifically for this lookup.
               var radialClosingSpeed = 0;
+              var radialSignedSpeed = 0;
               if (window._motionSnapshots && out.distance > 0 && typeof out.dx === "number") {
                 var mySnapTmp = window._motionSnapshots.get(window.modData.myInst.uid);
                 var tgtSnapTmp = window._motionSnapshots.get(otherPlayer.uid);
                 if (mySnapTmp && tgtSnapTmp) {
                   var relVx = (tgtSnapTmp.vx || 0) - (mySnapTmp.vx || 0);
                   var relVy = (tgtSnapTmp.vy || 0) - (mySnapTmp.vy || 0);
-                  radialClosingSpeed = Math.max(0,
-                    -((out.dx * relVx + out.dy * relVy) / out.distance)
-                  );
+                  // Signed: positive = target approaching, negative = receding.
+                  radialSignedSpeed = -((out.dx * relVx + out.dy * relVy) / out.distance);
+                  radialClosingSpeed = Math.max(0, radialSignedSpeed);
                 }
               }
 
@@ -3529,13 +3998,17 @@ var __spreadArray =
               // Capped so a supersonic fake-target cannot make the bot
               // fire across the whole map.
               if (belsoszint > enemyLevel) {
+                // Apply the small-target closing-lead multiplier (1.6× by
+                // default) so smaller enemies get a proportionally larger
+                // lead than the base closingLeadPx provides.
+                var stLeadMul = window.netTuning.smallTargetClosingLeadMultiplier || 1;
                 var smallerTargetLeadBonus = Math.min(
-                  window.netTuning.smallerTargetClosingLeadCap || 18,
+                  (window.netTuning.smallerTargetClosingLeadCap || 18) * stLeadMul,
                   radialClosingSpeed * (preFireMs / 1000)
-                    * (window.netTuning.smallerTargetClosingLeadScale || 0.5)
+                    * (window.netTuning.smallerTargetClosingLeadScale || 0.5) * stLeadMul
                 );
                 closingLeadPx = Math.min(
-                  (window.netTuning.closingLeadCap || 40) + (window.netTuning.smallerTargetClosingLeadCap || 18),
+                  (window.netTuning.closingLeadCap || 40) + (window.netTuning.smallerTargetClosingLeadCap || 18) * stLeadMul,
                   closingLeadPx + smallerTargetLeadBonus
                 );
               }
@@ -3608,6 +4081,19 @@ var __spreadArray =
               }
 
               var dynamicInset = scaledInset - closingLeadPx + totalHeuristicInsets;
+
+              // Small-target pre-fire boost. Add an extra negative offset
+              // when we are higher level than the target so the trigger
+              // fires earlier — the small body radius (40-60 px at low
+              // levels) cannot absorb a late swing. Independent of the
+              // heuristic master switch because this fix is specifically
+              // for the small-target miss problem, not FFA ghost flicks.
+              if (levelDiff > 0
+                  && window.netTuning.smallTargetEnabled !== false
+                  && levelDiff >= (window.netTuning.smallTargetLevelDiffMin || 1)
+                  && window.netTuning.smallTargetPreFireBoost) {
+                dynamicInset += window.netTuning.smallTargetPreFireBoost;
+              }
               var usableHitRadius = Math.max(1, totalHitRadius - dynamicInset);
 
               // Smaller-target range ceiling. Only applied when the
@@ -3623,19 +4109,71 @@ var __spreadArray =
                 }
               }
 
-              if (out.distance <= usableHitRadius) {
-                  // Smart trigger — sits on top of the geometry check. The
-                  // legacy line "fire as soon as we're in range" causes a
-                  // lot of ghost hits when the target only grazes the FOV
-                  // for a single frame. The smart trigger instead requires
-                  // multi-frame confirmation, projects the target forward
-                  // to where it will be at contact time, and rejects
-                  // tangential "slip past" targets.
+              // Receding lead — the chase fix. When the target is running AWAY
+              // (radialSignedSpeed < 0) the swing has to land before the target
+              // leaves the reach, so the bot must fire while the target is
+              // still CLOSER than the geometric edge. Without this the trigger
+              // only ever fired at the edge of the reach and the target escaped
+              // during the swing travel, which is exactly why chasing produced
+              // the most misses. The reduction mirrors the same contact-time
+              // projection the smart trigger uses, so the predicted-geometry
+              // check still passes, and is bounded by recedingLeadCap.
+              var recedingSpeed = Math.max(0, -radialSignedSpeed);
+              if (recedingSpeed > 0 && window.netTuning.recedingLeadEnabled !== false) {
+                var leadContactMs = Math.max(40,
+                  (window.netTuning.smartTriggerContactMs || 100)
+                    + pingMs * (window.netTuning.smartTriggerContactPingScale || 0.4)
+                );
+                var recedingLead = Math.min(
+                  Math.min(window.netTuning.recedingLeadCap || 90,
+                    usableHitRadius * (window.netTuning.recedingLeadMaxFraction || 0.5)),
+                  recedingSpeed * (leadContactMs / 1000)
+                    * (window.netTuning.recedingLeadScale || 1.0)
+                );
+                usableHitRadius = Math.max(1, usableHitRadius - recedingLead);
+              }
+
+              // Determine eligibility. The target is eligible to fire
+              // when it is EITHER inside the strict attack range (the
+              // normal path) OR is closing fast enough that it will
+              // be inside the geometric range by the time the swing
+              // lands (the predictive path). The predictive path is
+              // what lets the bot hit fast-closing targets that would
+              // otherwise slip past before the swing connects.
+              var inRangeNow = out.distance <= usableHitRadius;
+              var predictiveExtensionPx = 0;
+              var predContactMs = 100;
+              if (!inRangeNow
+                  && window.netTuning.predictiveTriggerEnabled !== false
+                  && radialClosingSpeed >= (window.netTuning.predictiveMinClosingSpeed || 80)) {
+                  predContactMs = Math.max(40,
+                    (window.netTuning.smartTriggerContactMs || 100)
+                      + pingMs * (window.netTuning.smartTriggerContactPingScale || 0.4)
+                  );
+                  predictiveExtensionPx = Math.min(
+                    window.netTuning.predictiveExtensionCap || 100,
+                    radialClosingSpeed * (predContactMs / 1000)
+                  );
+              }
+              var inPredictiveRange = !inRangeNow
+                  && predictiveExtensionPx > 0
+                  && out.distance <= usableHitRadius + predictiveExtensionPx;
+
+              if (inRangeNow) {
+                  // NORMAL RANGE: full smart trigger.
+                  // The smart trigger requires multi-frame confirmation,
+                  // projects the target forward to where it will be at
+                  // contact time, and rejects tangential "slip past"
+                  // targets. The levelDiff parameter lets the trigger
+                  // relax its confirmation / tangential rules for
+                  // smaller targets so a single-frame contact with a
+                  // level 0 enemy is not lost to the debouncer.
                   var smart = evaluateSmartTrigger(
                     window.modData.myInst,
                     otherPlayer,
                     totalHitRadius,
-                    radialClosingSpeed
+                    radialClosingSpeed,
+                    levelDiff
                   );
                   if (!smart.shouldFire) {
                     out.smartTrigger = smart;
@@ -3649,28 +4187,97 @@ var __spreadArray =
                     out.aimDx = smart.aimDx;
                     out.aimDy = smart.aimDy;
                   }
+              } else if (inPredictiveRange) {
+                  // PREDICTIVE RANGE: target is outside usableHitRadius
+                  // but closing fast enough that it will be inside the
+                  // geometric range at contact time. Skip the multi-frame
+                  // debouncer (closing motion is its own confirmation
+                  // that the swing will land) and run the predictive
+                  // geometry + tangential safety checks directly. Uses
+                  // the same contact-time projection as the smart trigger
+                  // so the aim leads the target to where the swing will
+                  // actually connect.
+                  var mySnapPred = window._motionSnapshots && window._motionSnapshots.get(window.modData.myInst.uid);
+                  var tgtSnapPred = window._motionSnapshots && window._motionSnapshots.get(otherPlayer.uid);
+                  var relVxPred = (tgtSnapPred ? tgtSnapPred.vx : 0) - (mySnapPred ? mySnapPred.vx : 0);
+                  var relVyPred = (tgtSnapPred ? tgtSnapPred.vy : 0) - (mySnapPred ? mySnapPred.vy : 0);
+                  var predContactSec = predContactMs / 1000;
+                  var predProjDx = out.dx + relVxPred * predContactSec;
+                  var predProjDy = out.dy + relVyPred * predContactSec;
+                  var predProjDist = Math.hypot(predProjDx, predProjDy);
 
-                  var isBetterTarget = false;
-                  if (window.netTuning.targetSelection === "highest-level") {
-                      if (enemyLevel > maxTargetLevel) {
-                          isBetterTarget = true;
-                          maxTargetLevel = enemyLevel;
-                      }
-                  } else {
-                      // 'closest' (default): lower distance wins, ties broken by level.
-                      if (out.distance < bestTargetDist ||
-                          (out.distance === bestTargetDist && enemyLevel > maxTargetLevel)) {
-                          isBetterTarget = true;
-                          bestTargetDist = out.distance;
-                          maxTargetLevel = enemyLevel;
-                      }
+                  // Check 1: projected position must be inside the
+                  // geometric attack range. If the target will still
+                  // be outside at contact time, the swing would miss.
+                  if (predProjDist > totalHitRadius) {
+                    out.smartTrigger = {
+                      shouldFire: false,
+                      reason: "pred-proj " + Math.round(predProjDist) + ">" + Math.round(totalHitRadius),
+                      aimDx: null, aimDy: null, frameCount: 0
+                    };
+                    return;
                   }
-                  if (isBetterTarget) {
-                      bestTargetInst = otherPlayer;
-                      out.triggerRadius = usableHitRadius;
-                      out.currentDistanceOnly = true;
-                      bestTargetOut = out;
+
+                  // Check 2: tangential guard. Stricter than the normal
+                  // smart trigger (0.15) because we have no multi-frame
+                  // debouncer here — the tangential check is the only
+                  // "this is not just a passing-by target" filter.
+                  var predTangentSpeed = Math.hypot(relVxPred, relVyPred);
+                  if (predTangentSpeed > 50) {
+                    var predClosingRatio = radialClosingSpeed / predTangentSpeed;
+                    var predTangentialTh = window.netTuning.predictiveTangentialRatio || 0.25;
+                    if (predClosingRatio < predTangentialTh) {
+                      out.smartTrigger = {
+                        shouldFire: false,
+                        reason: "pred-tang " + Math.round(predClosingRatio * 100) + "% < " + Math.round(predTangentialTh * 100) + "%",
+                        aimDx: null, aimDy: null, frameCount: 0
+                      };
+                      return;
+                    }
                   }
+
+                  // Both safety checks passed. Fire with the predicted
+                  // aim so the click leads the target to where the swing
+                  // will land.
+                  out.aimDx = predProjDx;
+                  out.aimDy = predProjDy;
+                  out.predictiveTrigger = true;
+                  out.smartTrigger = {
+                    shouldFire: true,
+                    reason: "predictive",
+                    aimDx: predProjDx, aimDy: predProjDy, frameCount: 0
+                  };
+              } else {
+                  // Not in normal range and not closing fast enough for
+                  // the predictive path. Skip this target entirely.
+                  return;
+              }
+
+              // Target selection (common path for both branches). Runs
+              // for targets that survived either the normal smart trigger
+              // OR the predictive trigger — keeps the closest / highest-
+              // level winner logic in one place.
+              var isBetterTarget = false;
+              if (window.netTuning.targetSelection === "highest-level") {
+                  if (enemyLevel > maxTargetLevel) {
+                      isBetterTarget = true;
+                      maxTargetLevel = enemyLevel;
+                  }
+              } else {
+                  // 'closest' (default): lower distance wins, ties broken by level.
+                  if (out.distance < bestTargetDist ||
+                      (out.distance === bestTargetDist && enemyLevel > maxTargetLevel)) {
+                      isBetterTarget = true;
+                      bestTargetDist = out.distance;
+                      maxTargetLevel = enemyLevel;
+                  }
+              }
+              if (isBetterTarget) {
+                  bestTargetInst = otherPlayer;
+                  out.triggerRadius = usableHitRadius;
+                  out.currentDistanceOnly = true;
+                  out.enemyLevel = enemyLevel;
+                  bestTargetOut = out;
               }
           }
       });
@@ -3701,6 +4308,52 @@ var __spreadArray =
           window.predictedTargetUID = null;
           window.predictedTargetName = "";
           window.predictedTargetLevel = 0;
+      }
+
+      // Continuous pre-aim ("auto xoay người"). The game interpolates the
+      // character heading toward the mouse over several frames, so a single
+      // mousemove sent at the exact instant of the swing leaves the character
+      // mid-rotation — the swing then lands in whatever direction the player
+      // already faced. Re-aiming every frame keeps the character rotated
+      // toward the victim so the heading is already correct the moment the
+      // cooldown expires.
+      //
+      // IMPORTANT: only rotate toward a target that is actually attackable
+      // (bestTargetInst — it already passed the range / smart / predictive
+      // gate). Do NOT rotate toward a merely "closest" enemy that has not
+      // entered the attack FOV yet, otherwise the character visibly spins
+      // toward every player on screen without being able to swing at them.
+      if (window.autoHitEnabled
+          && window.netTuning && window.netTuning.preAimEnabled !== false
+          && window.modData.myInst) {
+        var preAimInst = bestTargetInst;
+        if (preAimInst) {
+          var paDx = preAimInst.x - window.modData.myInst.x;
+          var paDy = preAimInst.y - window.modData.myInst.y;
+          if (paDx !== 0 || paDy !== 0) {
+            var paBase = Math.atan2(paDy, paDx);
+            if (window.netTuning.preAimUseSwingOffset !== false) {
+              var paDeg = getSword(belsoszint).degrees || 130;
+              paBase += paDeg * Math.PI / 180;
+            }
+            if (window.netTuning.preAimMouseEnabled !== false) {
+              dispatchAimMouse(paBase);
+            }
+            // Deliberately do NOT write the instance-variable angle during
+            // pre-aim. On this build that slot doubles as the character's
+            // movement heading, so writing the target direction every frame
+            // made the character walk toward the enemy ("tự động di chuyển
+            // tới target"). Kept behind an opt-in flag in case a future build
+            // separates facing from movement again.
+            if (window.netTuning.preAimWriteAngleVar === true) {
+              var paVarIndex = resolveAngleVarIndex();
+              if (window.modData.myInst.instance_vars
+                  && window.modData.myInst.instance_vars[paVarIndex] !== undefined) {
+                window.modData.myInst.instance_vars[paVarIndex] = paBase;
+              }
+            }
+          }
+        }
       }
 
       if (bestTargetInst && bestTargetOut && isReadyToSwing) {
