@@ -1273,30 +1273,28 @@ var __spreadArray =
 
       // ======================================================
       // PREDICTIVE TRIGGER — fire BEFORE the target enters the
-      // geometric attack range (JUKE FIX — 2026-10)
+      // geometric attack range
       //
-      // ENABLED BY DEFAULT. Targets that "nhử" into the FOV often only
-      // have 1-2 frames inside the geometric attack range. By the time
-      // the trigger fires + the swing travels, the target has already
-      // left. The predictive path fires while the target is still
-      // approaching (outside the reach), so the swing lands during the
-      // actual contact window.
+      // DISABLED BY DEFAULT (2026-10, GIAT-LUI FIX). The predictive
+      // path fires while the target is still OUTSIDE the FOV, so the
+      // swing animation starts against an invisible target. In
+      // evowars.io the swing has a backstep windup that visibly
+      // pulls the character backward — the user sees the bot
+      // "giật lùi" (jerk back) for no apparent reason, and the
+      // prediction is often wrong because the target hasn't
+      // committed to a direction yet. Net result: more frequent
+      // fires, more obvious backstep, more misses.
       //
-      // Conservative limits prevent the previous "đánh khi địch chưa
-      // vào FOV" over-fire:
-      //   predictiveExtensionCap: 40 (was 100) — only fire when the
-      //     target will be inside the reach by contact time.
-      //   predictiveMinClosingSpeed: 200 (was 80) — only fire on
-      //     genuinely fast approach, not slow drift.
-      //   predictiveTangentialRatio: 0.35 (was 0.25) — ensure motion
-      //     is radial, not tangential.
-      //   predictiveContactMs: 60 (NEW) — short contact window so the
-      //     projection does not over-predict.
+      // The smart trigger (1 frame) + the no-velocity first-frame
+      // contact assumption already handle the juke case: a target
+      // that briefly enters the FOV (1-2 frames) still gets fired
+      // on the first in-range frame, even without velocity data.
+      // So the predictive path is not needed for the juke fix.
       //
-      // Set predictiveTriggerEnabled = false to restore the old
-      // "only fire when target is in range" behaviour.
+      // Re-enable from the console if you want to A/B test it:
+      //   netTuning.predictiveTriggerEnabled = true
       // ======================================================
-      predictiveTriggerEnabled: true,
+      predictiveTriggerEnabled: false,
       // Cap on how far past usableHitRadius the bot will consider
       // a target. 40 px covers a 1000 px/s target at 60 ms swing
       // travel without letting a supersonic fake-target make the
