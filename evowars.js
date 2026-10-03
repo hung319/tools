@@ -1034,15 +1034,15 @@ var __spreadArray =
       // position by the time the swing actually connects. The lead window is
       // bounded by aimLeadMaxMs so fast swing speeds cannot over-aim.
       //
-      // Bumped from 65/180 to 80/240: against a moving target the aim was
-      // landing on where the enemy WAS at click time, not where it would be
-      // when the weapon reached the contact point, so the swing consistently
-      // trailed the target and whiffed. The longer window matches the actual
-      // weapon travel time much better.
+      // CHASE FIX v2 (2026-10): base 80→100, max 240→280. The old base of 80
+      // left the click direction short by 1-2 px at 50 ms ping, which read as
+      // occasional "the sword grazed but didn't connect" misses while chasing.
+      // The max bump gives high-ping connections (250+ ms) enough headroom
+      // for fast targets without bumping the per-target multipliers.
       aimLeadEnabled: true,
-      aimLeadBaseMs: 80,
+      aimLeadBaseMs: 100,
       aimLeadPingScale: 0.7,
-      aimLeadMaxMs: 240,
+      aimLeadMaxMs: 280,
 
       // Swing angle offset (degrees) added to atan2(targetDirection) before
       // the click is sent. The per-character table at the top of the file
@@ -1186,24 +1186,42 @@ var __spreadArray =
       closingLeadScale: 0.5,
       closingLeadCap: 45,
 
-      // Receding lead (CHASE FIX). When the target is running AWAY the bot must
-      // fire while the target is still closer than the geometric edge, so the
-      // swing lands before the target escapes. This shrinks the usable trigger
-      // radius by (recedingSpeed * contactTime * recedingLeadScale), capped at
-      // recedingLeadCap. Higher scale = fire sooner (better vs fast runners,
-      // slightly more early for slow ones). Set recedingLeadEnabled=false to
-      // restore the old edge-only behaviour.
+      // Receding lead (CHASE FIX v2 — 2026-10). When the target is running
+      // AWAY the bot must fire while the target is still closer than the
+      // geometric edge, so the swing lands before the target escapes. This
+      // shrinks the usable trigger radius by (recedingSpeed * contactTime
+      // * recedingLeadScale), capped at recedingLeadCap.
+      //
+      // v2 bump (cap 90→150, scale 1.0→1.5, fraction 0.5→0.6, mult 1.25→1.4,
+      // extraMs 0→50): against a target running at 800+ px/s the old cap of
+      // 90 was too low — by the time the swing landed the target was 30-50
+      // px past the sword tip and the swing missed. The new cap covers a
+      // 150 ms contact window with a 50 % safety margin, which absorbs both
+      // the motion and a small juke at the same time. The maxFraction bump
+      // lets the lead shrink the trigger up to 60 % instead of 50 %, so a
+      // fast runner can no longer push the trigger below 40 % of the
+      // geometric reach.
+      //
+      // Set recedingLeadEnabled=false to restore the old edge-only behaviour.
       recedingLeadEnabled: true,
-      recedingLeadScale: 1.0,
-      recedingLeadCap: 90,
+      recedingLeadScale: 1.5,
+      recedingLeadCap: 150,
       // Never shrink the usable radius below this fraction of its unfired
       // value, so a very fast runner cannot make the bot refuse to swing.
-      recedingLeadMaxFraction: 0.5,
+      recedingLeadMaxFraction: 0.6,
       // Extra projection time (multiplier on the smart trigger's contact time)
       // when the target is receding. >1 makes the aim lead the flee direction
       // further and makes the geometry check stricter (fires closer). 1.0
       // disables this part.
-      recedingContactMultiplier: 1.25,
+      recedingContactMultiplier: 1.4,
+      // Extra ms added to the receding lead's contact-time estimate. Sums
+      // with smartTriggerContactMs + ping * smartTriggerContactPingScale
+      // before the receding lead is computed. Independent of
+      // recedingContactMultiplier (which extends the smart trigger
+      // projection) so the lead can be longer than the trigger's
+      // predictive-geometry check without breaking the trigger's safety
+      // guarantees.
+      recedingLeadExtraMs: 50,
 
       // Smart trigger — adds an extra layer on top of the geometry check so
       // a swing only fires when it is actually going to connect. Three
@@ -1255,34 +1273,54 @@ var __spreadArray =
 
       // ======================================================
       // PREDICTIVE TRIGGER — fire BEFORE the target enters the
-      // geometric attack range
+      // geometric attack range (JUKE FIX — 2026-10)
       //
-      // DISABLED BY DEFAULT. Enabling this makes the bot swing while
-      // the target is still up to `predictiveExtensionCap` pixels
-      // OUTSIDE the attack range, which is exactly the "đánh khi địch
-      // chưa vào FOV" behaviour: the client plays the swing animation
-      // but the target is not actually in reach yet, so the server
-      // rejects the hit and no damage is dealt. Only turn it back on
-      // if the game is provably lagging behind the server in a way
-      // that a pre-emptive swing compensates for.
+      // ENABLED BY DEFAULT. Targets that "nhử" into the FOV often only
+      // have 1-2 frames inside the geometric attack range. By the time
+      // the trigger fires + the swing travels, the target has already
+      // left. The predictive path fires while the target is still
+      // approaching (outside the reach), so the swing lands during the
+      // actual contact window.
+      //
+      // Conservative limits prevent the previous "đánh khi địch chưa
+      // vào FOV" over-fire:
+      //   predictiveExtensionCap: 40 (was 100) — only fire when the
+      //     target will be inside the reach by contact time.
+      //   predictiveMinClosingSpeed: 200 (was 80) — only fire on
+      //     genuinely fast approach, not slow drift.
+      //   predictiveTangentialRatio: 0.35 (was 0.25) — ensure motion
+      //     is radial, not tangential.
+      //   predictiveContactMs: 60 (NEW) — short contact window so the
+      //     projection does not over-predict.
+      //
+      // Set predictiveTriggerEnabled = false to restore the old
+      // "only fire when target is in range" behaviour.
       // ======================================================
-      predictiveTriggerEnabled: false,
+      predictiveTriggerEnabled: true,
       // Cap on how far past usableHitRadius the bot will consider
-      // a target. 100 px covers the fastest realistic targets
-      // (1000+ px/s, 100ms swing travel) without letting a
-      // supersonic fake-target make the bot fire across the map.
-      predictiveExtensionCap: 100,
-      // Tangential guard for predictive triggers. Higher than
-      // the normal smart trigger ratio (0.15) because the
-      // predictive path skips the multi-frame debouncer, so the
-      // tangential check has to be the primary safety against
-      // "target was passing by" false fires.
-      predictiveTangentialRatio: 0.25,
+      // a target. 40 px covers a 1000 px/s target at 60 ms swing
+      // travel without letting a supersonic fake-target make the
+      // bot fire across the map.
+      predictiveExtensionCap: 40,
+      // Tangential guard for predictive triggers. Higher than the
+      // normal smart trigger ratio (0.15) because the predictive
+      // path skips the multi-frame debouncer, so the tangential
+      // check has to be the primary safety against "target was
+      // passing by" false fires.
+      predictiveTangentialRatio: 0.35,
       // Minimum closing speed (px/s) for the predictive path to
       // activate. Static targets (closing=0) and slowly-drifting
       // targets are kept on the normal trigger so the predictive
       // path only fires when there is clear closing motion.
-      predictiveMinClosingSpeed: 80,
+      predictiveMinClosingSpeed: 200,
+      // Short contact window for the predictive path. The smart
+      // trigger uses smartTriggerContactMs (100 ms), which is fine
+      // for the normal range but over-predicts for the predictive
+      // path — a 100 ms projection would push the target too far
+      // past the geometric edge, leading to a "fire across the map"
+      // over-fire. 60 ms is a tighter window that still covers the
+      // swing travel but does not over-project.
+      predictiveContactMs: 60,
 
       // ======================================================
       // SMALL-TARGET / FAST-TARGET OPTIMISATIONS
@@ -1322,11 +1360,30 @@ var __spreadArray =
       fastTargetLeadMultiplier: 1.3,        // multiply aim lead for fast targets
       fastTargetTangentialRatio: 0.10,      // was 0.30: more permissive
       fastTargetTangentialFrames: 2,        // was 4: less strict guard
-      fastTargetFrameCount: 1               // was 2: skip debouncer for fast targets
+      fastTargetFrameCount: 1,              // was 2: skip debouncer for fast targets
+
+      // No-velocity assumption (JUKE FIX — 2026-10). When the motion
+      // snapshot has no reliable velocity data (target just appeared,
+      // or motion is too small to register), the smart trigger's
+      // predictive-geometry check computes projDist = dist. A target
+      // at the very edge of the FOV would be projected to itself,
+      // which can be outside the geometric reach when a pre-fire
+      // inset is in play — and the swing is rejected. This is exactly
+      // the juke case: target briefly enters the FOV, no time to
+      // build up a velocity estimate, and the shot is lost.
+      //
+      // Assume a moderate closing speed and project a small amount
+      // toward the player. Capped so a single-frame assumption cannot
+      // make a target that is genuinely out of range look in range.
+      // Receding targets are still filtered by the receding lead
+      // (usableHitRadius shrinks before the smart trigger sees them),
+      // so the wrong-direction assumption does not cause over-fire.
+      firstFrameContactAssumeClosing: 200,  // px/s assumption when no velocity
+      firstFrameContactAssumeCap: 15        // max projection (px) for the assumption
     };
 
-    // ======================================================
-    // HEURISTIC INSETS (merged into autohit)
+  // ======================================================
+  // HEURISTIC INSETS (merged into autohit)
     //
     // The standalone visibleHeuristic A/B mode was retired. Its useful
     // insets (level-relation, contact inset, long-reach extra inset, and
@@ -3671,6 +3728,34 @@ var __spreadArray =
       }
       var contactSec = contactMs / 1000;
 
+      // No-velocity assumption (JUKE FIX). When the snapshot has no
+      // reliable velocity (target just appeared, or motion is too small
+      // to register), the predictive check computes projDist = dist.
+      // A target at the very edge of the FOV with a pre-fire inset in
+      // play can be outside the geometric reach and the shot is
+      // rejected. This is the juke case: target briefly enters the
+      // FOV, no time to build up a velocity estimate, shot lost.
+      //
+      // Assume a moderate closing speed (firstFrameContactAssumeClosing,
+      // 200 px/s by default) and project a small amount toward the
+      // player. Capped so a single-frame assumption cannot make a
+      // target that is genuinely out of range look in range. Receding
+      // targets are filtered by the receding lead (usableHitRadius
+      // shrinks before the smart trigger sees them), so the wrong-
+      // direction assumption does not cause over-fire on them.
+      var velocityReliable = tgtSnap && (
+        Math.abs(tgtSnap.vx) > 1 || Math.abs(tgtSnap.vy) > 1
+      );
+      if (!velocityReliable && dist > 1) {
+        var assumeCloseSpeed = tuning.firstFrameContactAssumeClosing || 200;
+        var assumeProjPx = Math.min(
+          tuning.firstFrameContactAssumeCap || 15,
+          assumeCloseSpeed * contactSec
+        );
+        relVx = -dx / dist * assumeProjPx / contactSec;
+        relVy = -dy / dist * assumeProjPx / contactSec;
+      }
+
       var projDx = dx + relVx * contactSec;
       var projDy = dy + relVy * contactSec;
       var projDist = Math.hypot(projDx, projDy);
@@ -4120,15 +4205,23 @@ var __spreadArray =
               // check still passes, and is bounded by recedingLeadCap.
               var recedingSpeed = Math.max(0, -radialSignedSpeed);
               if (recedingSpeed > 0 && window.netTuning.recedingLeadEnabled !== false) {
+                // Receding lead: contact-time estimate used for the fire-time
+                // adjustment. Includes the optional recedingLeadExtraMs so the
+                // lead can be longer than the smart trigger's predictive window
+                // (which would over-reject at this duration). The receding
+                // multiplier and the extra-ms are independent — the multiplier
+                // extends the smart trigger's predictive-geometry check, the
+                // extra-ms is added on top of the fire-time contact estimate.
                 var leadContactMs = Math.max(40,
                   (window.netTuning.smartTriggerContactMs || 100)
                     + pingMs * (window.netTuning.smartTriggerContactPingScale || 0.4)
+                    + (window.netTuning.recedingLeadExtraMs || 50)
                 );
                 var recedingLead = Math.min(
-                  Math.min(window.netTuning.recedingLeadCap || 90,
-                    usableHitRadius * (window.netTuning.recedingLeadMaxFraction || 0.5)),
+                  Math.min(window.netTuning.recedingLeadCap || 150,
+                    usableHitRadius * (window.netTuning.recedingLeadMaxFraction || 0.6)),
                   recedingSpeed * (leadContactMs / 1000)
-                    * (window.netTuning.recedingLeadScale || 1.0)
+                    * (window.netTuning.recedingLeadScale || 1.5)
                 );
                 usableHitRadius = Math.max(1, usableHitRadius - recedingLead);
               }
@@ -4145,13 +4238,19 @@ var __spreadArray =
               var predContactMs = 100;
               if (!inRangeNow
                   && window.netTuning.predictiveTriggerEnabled !== false
-                  && radialClosingSpeed >= (window.netTuning.predictiveMinClosingSpeed || 80)) {
+                  && radialClosingSpeed >= (window.netTuning.predictiveMinClosingSpeed || 200)) {
+                  // Short contact window for the predictive path (60 ms by
+                  // default). Using the longer smartTriggerContactMs here
+                  // would over-project the target past the geometric edge
+                  // and cause the bot to fire across the map — the
+                  // predictive path is meant for close-by fast approaches,
+                  // not for a long-horizon pre-emptive swing.
                   predContactMs = Math.max(40,
-                    (window.netTuning.smartTriggerContactMs || 100)
+                    (window.netTuning.predictiveContactMs || 60)
                       + pingMs * (window.netTuning.smartTriggerContactPingScale || 0.4)
                   );
                   predictiveExtensionPx = Math.min(
-                    window.netTuning.predictiveExtensionCap || 100,
+                    window.netTuning.predictiveExtensionCap || 40,
                     radialClosingSpeed * (predContactMs / 1000)
                   );
               }
