@@ -1124,19 +1124,41 @@ var __spreadArray =
       // Target selection within the trigger range.
       //   'closest'       = nearest enemy in range (intuitive FFA behaviour)
       //   'highest-level' = biggest character in range (legacy behaviour)
-      // Ties in 'closest' mode are broken by the higher internal level.
-      targetSelection: "closest",
+      //   'killsteal'     = lowest-HP enemy in range (finish off wounded
+      //                     targets; switch to whoever is closest to death
+      //                     so the kill credit goes to the bot)
+      //   'smart'         = score-based selection combining:
+      //                       - proximity (closer = higher score)
+      //                       - threat priority (stronger enemy = more urgent)
+      //                       - escape risk (receding target = catch it now)
+      //                       - kill opportunity (low HP = finish the kill)
+      //                     Ties broken by level (higher level wins).
+      //   'sticky'        = like 'closest' but once a target is locked the
+      //                     bot refuses to switch for stickyMinFrames frames
+      //                     unless the current target is no longer valid.
+      // Ties in 'closest' / 'sticky' mode are broken by the higher internal
+      // level. In 'smart' mode, the score is the tiebreaker.
+      targetSelection: "smart",
 
       // Level filter applied before the range check.
       //   'all'             = no level restriction (default — attack anyone)
-      //   'big-only'        = only attack enemies within 5 levels of your own
+      //   'big-only'        = only attack enemies within bigTargetLevelRange
+      //                       levels of your own (BOTH directions — both
+      //                       higher and lower; default range 10, configurable
+      //                       via netTuning.bigTargetLevelRange).
       //   'small-only'      = only attack smaller enemies
       //   'bigger-only'     = only attack bigger enemies
       //   'same-only'       = only attack same internal level
       //   'same-or-smaller' = attack same or smaller
       //   'same-or-bigger'  = attack same or bigger
+      //   'within-N'        = same as big-only with custom range (alias)
       // The [C] Big Target key sets this to 'big-only' / 'all'.
       levelFilter: "all",
+      // Range (in levels) used by the 'big-only' filter. Wider range = the
+      // bot engages more targets but takes on tougher fights. Bump to 12-15
+      // for chaotic FFA rooms, drop to 5-7 when you're farming lower levels
+      // for XP and don't want the bigger fish to gank you.
+      bigTargetLevelRange: 10,
 
       // Reach-aware pre-fire. When myWeaponReach is below reachPrefireReference,
       // the negative currentDistanceInset is scaled UP so short swords get a
@@ -1377,7 +1399,25 @@ var __spreadArray =
       // (usableHitRadius shrinks before the smart trigger sees them),
       // so the wrong-direction assumption does not cause over-fire.
       firstFrameContactAssumeClosing: 200,  // px/s assumption when no velocity
-      firstFrameContactAssumeCap: 15        // max projection (px) for the assumption
+      firstFrameContactAssumeCap: 15,       // max projection (px) for the assumption
+
+      // ======================================================
+      // SMART TARGET SELECTION (2026-10, BIG-TARGET v2)
+      // ======================================================
+      // Tunables for the 'killsteal' and 'sticky' selection modes.
+      //   killstealMaxDistance: don't chase low-HP targets across the
+      //     whole map — only consider them for a killsteal if they
+      //     are within this many pixels. Beyond that range, the
+      //     bot ignores killsteal candidates and picks the closest
+      //     target instead. Default 800 (~ a long sword's reach).
+      //   stickyMinFrames: in 'sticky' mode, once a target is locked
+      //     it stays locked for at least this many frames before the
+      //     bot considers switching. Default 25 frames ≈ 0.4 s at
+      //     60 fps, which is enough to commit to a duel without
+      //     jittering every frame.
+      // ======================================================
+      killstealMaxDistance: 800,
+      stickyMinFrames: 25
     };
 
   // ======================================================
@@ -1853,6 +1893,48 @@ var __spreadArray =
       return effective;
     };
 
+    // Console helper: cycle / set the target selection mode. Pass one of
+    // 'closest', 'highest-level', 'killsteal', 'smart', 'sticky'. With no
+    // argument, cycles to the next mode and prints the result. Use this
+    // when the bot keeps switching between equally-valid targets
+    // (switch to 'sticky') or keeps ignoring low-HP targets (switch to
+    // 'killsteal' or 'smart').
+    var TARGET_SELECTION_MODES = ["smart", "closest", "killsteal", "sticky", "highest-level"];
+    window.cycleTargetSelection = function (mode) {
+      if (!window.netTuning) window.netTuning = {};
+      var current = window.netTuning.targetSelection || "smart";
+      if (mode && TARGET_SELECTION_MODES.indexOf(mode) !== -1) {
+        window.netTuning.targetSelection = mode;
+      } else if (!mode) {
+        var idx = TARGET_SELECTION_MODES.indexOf(current);
+        window.netTuning.targetSelection = TARGET_SELECTION_MODES[(idx + 1) % TARGET_SELECTION_MODES.length];
+      } else {
+        console.log("[AutoHit] Unknown mode:", mode,
+          "— valid:", TARGET_SELECTION_MODES.join(", "));
+        return current;
+      }
+      // Reset the sticky lock so the new mode starts from a clean slate.
+      window._stickyTargetUID = undefined;
+      window._stickyTargetLockUntil = 0;
+      console.log("[AutoHit] targetSelection:", window.netTuning.targetSelection,
+        "(was:", current + ")");
+      return window.netTuning.targetSelection;
+    };
+
+    // Console helper: adjust the big-target level range at runtime. Pass
+    // a number (1-20) to set the range, or no argument to print the
+    // current value.
+    window.setBigTargetRange = function (range) {
+      if (!window.netTuning) window.netTuning = {};
+      if (typeof range === "number" && Number.isFinite(range) && range >= 1 && range <= 20) {
+        window.netTuning.bigTargetLevelRange = Math.round(range);
+      }
+      console.log("[AutoHit] bigTargetLevelRange:",
+        window.netTuning.bigTargetLevelRange, "(±" +
+        window.netTuning.bigTargetLevelRange + " levels around you)");
+      return window.netTuning.bigTargetLevelRange;
+    };
+
     // Console helper: inspect the character-rotation plumbing. Prints which
     // instance-var index currently stores the facing angle, its live value,
     // and the swing angle offset that will be applied to the next click.
@@ -1984,6 +2066,13 @@ var __spreadArray =
           uid: closest.inst.uid,
           name: closest.inst.instance_vars && closest.inst.instance_vars[18],
           level: closest.level,
+          // HP comes from the same instance-var slots the ESP HP bar uses
+          // (instance_vars[7] / [8]). Falls back to "—" when not finite
+          // (e.g. a freshly-spawned instance that hasn't synced yet).
+          hp: Number.isFinite(Number(closest.inst.instance_vars[7]))
+            ? Math.round(Number(closest.inst.instance_vars[7])) : "—",
+          maxHp: Number.isFinite(Number(closest.inst.instance_vars[8]))
+            ? Math.round(Number(closest.inst.instance_vars[8])) : "—",
           distance: Math.round(closest.distance),
           bodyRadius: Math.round(bodyR),
           totalRadius: Math.round(totalR),
@@ -2004,8 +2093,12 @@ var __spreadArray =
         myLevel: report.myLevel,
         cooldownMs: report.cooldownMs,
         ready: report.ready,
+        targetSelection: (window.netTuning && window.netTuning.targetSelection) || "smart",
+        bigTargetRange: (window.netTuning && window.netTuning.bigTargetLevelRange) || 10,
         closestName: report.closest ? report.closest.name : "—",
         closestLevel: report.closest ? report.closest.level : "—",
+        closestHp: report.closest && report.closest.hp !== "—"
+          ? (report.closest.hp + "/" + report.closest.maxHp) : "—",
         distance: report.closest ? report.closest.distance : "—",
         totalRadius: report.closest ? report.closest.totalRadius : "—",
         reachScale: report.closest ? report.closest.reachScale : "—",
@@ -2581,7 +2674,11 @@ var __spreadArray =
 
       var isTeamMode = window.modData.gameMode === 1;
       var bigTargetActive = !!window.bigCharacterMode;
-      var bigTargetThreshold = myLevel - 5;
+      // ESP big-target threshold matches the level-filter range. Eligible
+      // targets get the orange border; ineligible get dimmed/hidden per
+      // espSettings.bigTargetHighlight mode.
+      var bigTargetRange = (window.netTuning && window.netTuning.bigTargetLevelRange) || 10;
+      var bigTargetThreshold = myLevel - bigTargetRange;
       var myCx = bounds.left + (myInst.x - layer.viewLeft) * scaleX;
       var myCy = bounds.top  + (myInst.y - layer.viewTop)  * scaleY;
       var fontSize = Math.max(10, settings.fontSize * Math.min(scaleX, scaleY));
@@ -3339,7 +3436,8 @@ var __spreadArray =
           window.netTuning.levelFilter = window.bigCharacterMode ? "big-only" : "all";
         }
         console.log("[AutoHit] Big Target mode:", window.bigCharacterMode ? "ON" : "OFF",
-            "(only attacks enemies within 5 levels of your own)");
+            "(only attacks enemies within " +
+            (window.netTuning.bigTargetLevelRange || 10) + " levels of your own)");
         updateStatusDisplay();
         event.preventDefault();
       }
@@ -3571,6 +3669,9 @@ var __spreadArray =
     var minDistanceForNearby = 3000;
 
     // Reads only the current engine-frame state.
+    // Exposes `hp` and `maxHp` so the smart target selector can prioritise
+    // low-HP targets for killsteals; the values come from the same
+    // instance-var slots the ESP HP bar uses (instance_vars[7] / [8]).
     function processPlayer(myInst, opponentInst) {
       var out = {};
       out.pX = opponentInst.x;
@@ -3584,7 +3685,68 @@ var __spreadArray =
       out.name = opponentInst.instance_vars[18];
       out.myTeam = myInst.instance_vars[36];
       out.enemyTeam = opponentInst.instance_vars[36];
+      out.hp = Number(opponentInst.instance_vars[7]);
+      out.maxHp = Number(opponentInst.instance_vars[8]);
       return out;
+    }
+
+    // Score a target for the 'smart' target-selection mode. Combines four
+    // signals so the bot picks the most worthwhile target, not just the
+    // closest one:
+    //   1. Proximity     — closer targets are easier to hit; positive.
+    //   2. Threat        — enemies stronger than us are dangerous and need
+    //                      to be dealt with first; strongly positive.
+    //   3. Escape risk   — receding targets are about to flee and the
+    //                      swing is needed before they escape; positive.
+    //   4. Kill opportunity — low-HP targets can be finished quickly for
+    //                      a guaranteed kill; positive (smaller bonus for
+    //                      bigger targets — we want XP from kills, but
+    //                      we don't want to over-prioritise a tiny
+    //                      level-0 while a level-15 is targeting us).
+    //
+    // All factors are normalised so the distance penalty never
+    // dominates, the threat bonus can't push us into chasing a
+    // level-30 across the map, and the kill bonus stays meaningful
+    // even on high-HP targets.
+    function calculateTargetScore(out, enemyLevel, myLevel, radialSignedSpeed) {
+      var score = 0;
+
+      // 1) Proximity — distance penalty, capped so a 1000-px-away target
+      //    doesn't completely kill a high-threat score.
+      //    0px -> 0 penalty,  1000px -> -200,  2000+px -> -260 (capped).
+      if (out.distance > 0) {
+        score -= Math.min(260, out.distance * 0.2);
+      }
+
+      // 2) Threat — enemy is stronger than us. Bumps priority the bigger
+      //    the gap is. Capped at +100 to avoid endless chase.
+      if (enemyLevel > myLevel) {
+        score += Math.min(100, (enemyLevel - myLevel) * 15);
+      } else if (enemyLevel < myLevel) {
+        // Slightly deprioritise easy targets so we don't ignore a
+        // nearby threat to chase a level-0. Mild penalty only.
+        score -= Math.min(15, (myLevel - enemyLevel) * 2);
+      }
+
+      // 3) Escape risk — target is moving away. Big bonus for fast
+      //    runners so the swing lands before they leave the reach.
+      if (radialSignedSpeed < 0) {
+        // -radialSignedSpeed is the receding speed in px/s.
+        score += Math.min(50, -radialSignedSpeed * 0.18);
+      }
+
+      // 4) Kill opportunity — HP ratio. A 10 % HP target is worth far
+      //    more than a 100 % HP target even at the same distance, because
+      //    one swing likely finishes the kill. The bonus scales with the
+      //    MAX HP so high-level targets (which are also threats) still
+      //    get a meaningful kill bonus.
+      if (Number.isFinite(out.hp) && Number.isFinite(out.maxHp) && out.maxHp > 0) {
+        var hpRatio = Math.max(0, Math.min(1, out.hp / out.maxHp));
+        // 0% HP -> +80,  50% HP -> +40,  100% HP -> 0.
+        score += (1 - hpRatio) * 80;
+      }
+
+      return score;
     }
 
     // Enemy hitbox radius derived from game internal measurements.
@@ -3601,7 +3763,15 @@ var __spreadArray =
       var filter = (window.netTuning && window.netTuning.levelFilter) || "all";
       switch (filter) {
         case "all":             return true;
-        case "big-only":        return enemyLevel >= myLevel - 5;
+        case "big-only": {
+          // Attack within bigTargetLevelRange levels, BOTH directions
+          // (higher and lower). The previous implementation only included
+          // targets 5 levels below the player; expanding to 10 in both
+          // directions lets the bot engage bigger threats in FFA without
+          // giving up easy XP from smaller players.
+          var range = (window.netTuning && window.netTuning.bigTargetLevelRange) || 10;
+          return Math.abs(enemyLevel - myLevel) <= range;
+        }
         case "small-only":      return enemyLevel < myLevel;
         case "bigger-only":     return enemyLevel > myLevel;
         case "same-only":       return enemyLevel === myLevel;
@@ -3899,8 +4069,21 @@ var __spreadArray =
       var bestTargetOut = null;
       var maxTargetLevel = -1;
       var bestTargetDist = Infinity;
+      // Used by the 'smart' target-selection mode to track the highest
+      // scoring candidate. Higher score = more worth attacking. Reset
+      // every frame because each candidate's score depends on per-frame
+      // values (distance, HP, closing speed).
+      var bestTargetScore = -Infinity;
       var closestOut = null;
       var closestInst = null;
+
+      // Sticky target — the targetSelection = 'sticky' mode picks the
+      // best candidate once and refuses to switch to a worse candidate
+      // for stickyMinFrames frames. Lets the bot commit to a duel
+      // instead of jittering between equally valid options. Tracked
+      // here so the loop and the post-loop highlight stay in sync.
+      var stickyUID = window._stickyTargetUID;
+      var stickyLockUntil = window._stickyTargetLockUntil || 0;
 
       var now = performance.now();
       if (window.modData.myInst) {
@@ -4045,6 +4228,9 @@ var __spreadArray =
                   radialClosingSpeed = Math.max(0, radialSignedSpeed);
                 }
               }
+              // Expose radial signed speed on `out` so the 'smart'
+              // target-selection mode can use it for the escape-risk score.
+              out.radialSignedSpeed = radialSignedSpeed;
 
               // Reach-aware pre-fire. A fixed -8 px pre-fire becomes a tiny
               // fraction of a 1100 px trigger and the target slips past before
@@ -4354,14 +4540,88 @@ var __spreadArray =
               // for targets that survived either the normal smart trigger
               // OR the predictive trigger — keeps the closest / highest-
               // level winner logic in one place.
+              //
+              // Five modes:
+              //   'highest-level'  — biggest character in range
+              //   'closest'        — lowest distance, ties broken by level
+              //   'killsteal'      — lowest HP, ties broken by distance
+              //   'smart'          — combined score (proximity + threat +
+              //                       escape risk + kill opportunity)
+              //   'sticky'         — like 'closest' but keeps the current
+              //                       target locked for stickyMinFrames
+              //                       frames unless a new candidate is
+              //                       meaningfully better
               var isBetterTarget = false;
-              if (window.netTuning.targetSelection === "highest-level") {
+              var selectionMode = (window.netTuning && window.netTuning.targetSelection) || "smart";
+              if (selectionMode === "highest-level") {
                   if (enemyLevel > maxTargetLevel) {
                       isBetterTarget = true;
                       maxTargetLevel = enemyLevel;
                   }
+              } else if (selectionMode === "killsteal") {
+                  // Lowest HP target wins. Ties broken by distance so the
+                  // bot doesn't run across the map to finish off a 5-HP
+                  // enemy when a 30-HP one is right next to it.
+                  var killstealDistCap = (window.netTuning && window.netTuning.killstealMaxDistance) || 800;
+                  if (out.distance > killstealDistCap) {
+                      // Out of killsteal range — only switch if the
+                      // current best is also out of range, otherwise
+                      // skip to avoid chasing a low-HP target across
+                      // the whole map.
+                      var bestOutOfRange = !bestTargetOut || bestTargetOut.distance > killstealDistCap;
+                      if (bestOutOfRange) {
+                          isBetterTarget = (out.distance < bestTargetDist);
+                      } else {
+                          return; // keep the in-range candidate
+                      }
+                  } else {
+                      var myHp = Number.isFinite(out.hp) ? out.hp : Infinity;
+                      var bestHp = (bestTargetOut && Number.isFinite(bestTargetOut.hp)) ? bestTargetOut.hp : Infinity;
+                      if (myHp < bestHp ||
+                          (myHp === bestHp && out.distance < bestTargetDist)) {
+                          isBetterTarget = true;
+                      }
+                  }
+              } else if (selectionMode === "smart") {
+                  // Score-based selection. The function combines four
+                  // signals (proximity, threat, escape risk, kill
+                  // opportunity) so the bot picks the most worthwhile
+                  // target. Ties broken by level (higher wins).
+                  var smartScore = calculateTargetScore(
+                    out, enemyLevel, belsoszint, radialSignedSpeed
+                  );
+                  if (smartScore > bestTargetScore ||
+                      (smartScore === bestTargetScore && enemyLevel > maxTargetLevel)) {
+                      isBetterTarget = true;
+                      bestTargetScore = smartScore;
+                  }
+              } else if (selectionMode === "sticky") {
+                  // Sticky mode: keep the currently locked target if it
+                  // is still valid. Only switch when the new candidate
+                  // is meaningfully better (or the current target is no
+                  // longer in range). The lock is reset every time a
+                  // swing actually fires (see post-loop block).
+                  var stickyMinFrames = (window.netTuning && window.netTuning.stickyMinFrames) || 25;
+                  if (stickyUID && otherPlayer.uid === stickyUID && now < stickyLockUntil) {
+                      // Keep the sticky target as long as it still passes
+                      // the range + trigger gates.
+                      isBetterTarget = true;
+                      bestTargetDist = out.distance;
+                      maxTargetLevel = enemyLevel;
+                  } else if (!stickyUID || now >= stickyLockUntil) {
+                      // No lock or lock expired: pick the closest, ties
+                      // broken by level (same as legacy 'closest').
+                      if (out.distance < bestTargetDist ||
+                          (out.distance === bestTargetDist && enemyLevel > maxTargetLevel)) {
+                          isBetterTarget = true;
+                          bestTargetDist = out.distance;
+                          maxTargetLevel = enemyLevel;
+                      }
+                  }
               } else {
-                  // 'closest' (default): lower distance wins, ties broken by level.
+                  // 'closest' (default fallback): lower distance wins,
+                  // ties broken by level. Same logic as before the
+                  // selection modes were added.
                   if (out.distance < bestTargetDist ||
                       (out.distance === bestTargetDist && enemyLevel > maxTargetLevel)) {
                       isBetterTarget = true;
@@ -4462,7 +4722,28 @@ var __spreadArray =
           window.currentTargetUID = bestTargetInst.uid;
           window.currentTargetName = bestTargetOut.name || "";
           window.currentTargetLevel = window.getLevelFromInst(bestTargetInst);
+          // Update the sticky target lock when a swing actually fires.
+          // This is the only time the bot commits to a target, so the
+          // lock is refreshed here instead of every frame. If the user
+          // is not in sticky mode, the values are still kept up to
+          // date in case they switch mid-fight.
+          var stickyMinFramesForLock = (window.netTuning && window.netTuning.stickyMinFrames) || 25;
+          window._stickyTargetUID = bestTargetInst.uid;
+          window._stickyTargetLockUntil = now + stickyMinFramesForLock * (1000 / 60);
           executeAttack(bestTargetInst, bestTargetOut);
+      } else if (bestTargetInst && bestTargetOut && !isReadyToSwing) {
+          // Mid-cooldown: keep the sticky lock on the current candidate
+          // (the swing was committed to before the cooldown started) so
+          // the bot doesn't suddenly flip to a different target the
+          // moment the cooldown ends. The lock will be refreshed on
+          // the next successful fire.
+          window._stickyTargetUID = bestTargetInst.uid;
+      } else if (stickyUID && now >= stickyLockUntil) {
+          // Lock expired and no new candidate is in range: clear the
+          // sticky pointer so the next eligible target starts a fresh
+          // lock window.
+          window._stickyTargetUID = undefined;
+          window._stickyTargetLockUntil = 0;
       }
 
       window.closestPlayerUID = closestPlayerUID;
