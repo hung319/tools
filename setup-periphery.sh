@@ -274,7 +274,7 @@ Description=Agent to connect with Komodo Core
 
 [Service]
 Environment="HOME=${home_dir}"
-ExecStart=/bin/sh -lc "\"${bin_dir}/periphery\" --config-path \"${config_dir}/periphery.config.toml\""
+ExecStart="${bin_dir}/periphery" --config-path "${config_dir}/periphery.config.toml"
 Restart=on-failure
 TimeoutStartSec=0
 
