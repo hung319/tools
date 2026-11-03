@@ -1074,7 +1074,12 @@ svc_verify() {
 svc_verify || exit 1
 
 echo "Enabling Periphery on boot..."
-svc_enable
+if ! svc_enable; then
+  echo ""
+  echo "Warning: could not enable Periphery on boot (${INIT_SYSTEM})."
+  echo "  It is running now, but will NOT start again after a reboot."
+  echo "  Enable it manually, or fix the reason above and re-run this installer."
+fi
 
 echo ""
 echo "Finished Periphery setup."
