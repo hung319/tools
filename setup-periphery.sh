@@ -275,7 +275,8 @@ Description=Agent to connect with Komodo Core
 [Service]
 Environment="HOME=${home_dir}"
 ExecStart="${bin_dir}/periphery" --config-path "${config_dir}/periphery.config.toml"
-Restart=on-failure
+Restart=always
+RestartSec=5
 TimeoutStartSec=0
 
 [Install]
@@ -349,6 +350,9 @@ command_background=true
 pidfile="/run/periphery.pid"
 output_log="/var/log/periphery.log"
 error_log="/var/log/periphery.log"
+
+respawn_delay=5
+respawn_max=0
 
 depend() {
     need net
@@ -431,15 +435,33 @@ export HOME="${HOME_DIR}"
 case "$1" in
   start)
     log_daemon_msg "Starting $NAME"
-    start-stop-daemon --start --quiet --background \
-      --make-pidfile --pidfile "$PIDFILE" \
-      --exec "$DAEMON" -- $DAEMON_ARGS \
-      >> "$LOGFILE" 2>&1
+    "$0" supervisor >> "$LOGFILE" 2>&1 &
+    echo $! > /run/periphery-supervisor.pid
+    sleep 1
     log_end_msg $?
+    ;;
+  supervisor)
+    while :; do
+      if [ -f "$PIDFILE" ] && ! kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+        rm -f "$PIDFILE"
+      fi
+      if [ ! -f "$PIDFILE" ]; then
+        start-stop-daemon --start --quiet --background \
+          --make-pidfile --pidfile "$PIDFILE" \
+          --exec "$DAEMON" -- $DAEMON_ARGS \
+          >> "$LOGFILE" 2>&1
+      fi
+      sleep 5
+    done
     ;;
   stop)
     log_daemon_msg "Stopping $NAME"
+    if [ -f /run/periphery-supervisor.pid ]; then
+      kill "$(cat /run/periphery-supervisor.pid)" 2>/dev/null
+      rm -f /run/periphery-supervisor.pid
+    fi
     start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
+    rm -f "$PIDFILE"
     log_end_msg $?
     ;;
   restart)
