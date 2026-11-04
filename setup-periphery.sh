@@ -69,6 +69,8 @@ Options:
   --force-service-file         Recreate the service file even if it already exists.
   --config-url URL             Use a custom config URL.
   --binary-url URL             Use alternate binary source.
+  -t, --threads N              Parallel connections for the binary download
+                               (default: 16; falls back to single stream).
   -h, --help                   Show this help message.
 EOF
   exit 0
@@ -88,6 +90,7 @@ FORCE_SERVICE=false
 CONFIG_URL="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
 BINARY_URL="https://github.com/moghtech/komodo/releases/download"
 INIT_SYSTEM=""
+DL_THREADS="${DL_THREADS:-16}"
 
 # ── GitHub access routing ──
 CONFIG_URL_SET=false
@@ -108,8 +111,15 @@ REACHABLE_PROXIES=()   # every proxy that passed the reachability probe
 # GitHub (sha256 match) for release binaries, HTTP Range supported (resume).
 # If it ever dies, add a backup mirror here (trailing-slash bases are treated
 # as prefix proxies, slash-less bases as path-based) or pass --binary-url.
+# Trailing slash = prefix-style mirror (https://mirror/https://github.com/...);
+# no trailing slash = path-style (https://mirror/owner/repo/...).
+# gh.bibica.net stays first: it is a Cloudflare Pages reverse proxy, so it is
+# reachable from networks where the big public mirrors are blocked/deprioritised.
 PROXY_LIST=(
-  "https://gh.bibica.net"
+  "https://gh.bibica.net"     # path-style, Cloudflare, primary
+  "https://ghfast.top/"       # prefix-style
+  "https://gh-proxy.com/"     # prefix-style
+  "https://ghproxy.net/"      # prefix-style
 )
 # Small, version-independent canary used to probe reachability
 RAW_CANARY="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
@@ -129,6 +139,7 @@ while [[ $# -gt 0 ]]; do
     --force-service-file) FORCE_SERVICE=true;   shift   ;;
     --config-url)         CONFIG_URL="$2"; CONFIG_URL_SET=true; shift 2 ;;
     --binary-url)         BINARY_URL="$2"; BINARY_URL_SET=true; shift 2 ;;
+    -t|--threads)         DL_THREADS="$2";       shift 2 ;;
     -h|--help)            usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -867,7 +878,7 @@ if [[ "$BINARY_URL_SET" != true && "${#REACHABLE_PROXIES[@]}" -gt 1 ]]; then
     DL_URLS+=("$url")
   done < <(for p in "${REACHABLE_PROXIES[@]}"; do
              t0=$(date +%s)
-             bytes=$(curl -fsSL --http1.1 -r 0-2097151 --connect-timeout 5 --max-time 20 \
+             bytes=$(curl -fsSL --http1.1 -r 0-1048575 --connect-timeout 5 --max-time 8 \
                     -o /dev/null -w '%{size_download}' \
                     "$(rewrite_github_url "${ORIG_BINARY_URL}/${VERSION}/${PERIPHERY_BIN}" "$p")" 2>/dev/null || true)
              echo "${bytes:-0} $(( $(date +%s) - t0 )) $p"
@@ -899,16 +910,79 @@ verify_binary() { # $1 = path; returns 0 if it looks like a real executable
   return 0
 }
 
+# ── Multi-thread ranged fetch ─────────────────────────────────────────────
+# One curl stream on a throttled CN-transit link (~110-130KB/s) cannot move
+# 24.5MB inside the 90s budget. Throttling is per-connection on every mirror
+# we rank, and all of them advertise "accept-ranges: bytes", so the file is
+# split into N byte ranges pulled in parallel. aria2c/axel are used when the
+# host has them; otherwise a built-in N-way curl splitter runs (no package
+# needed). Returns 0 only when the reassembled file matches content-length.
+fetch_multi() { # $1=url $2=out $3=threads
+  local url="$1" out="$2" threads="${3:-16}"
+  local size i st en chunk got=0
+  size=$(curl -fsIL --http1.1 --connect-timeout 8 --max-time 20 "$url" 2>/dev/null \
+         | tr -d '\r' | awk 'BEGIN{IGNORECASE=1}/^content-length:/{v=$2}END{print v+0}')
+  if [[ "${size:-0}" -gt 1048576 ]]; then :; else
+    echo "  no usable content-length from this source"
+    return 1
+  fi
+
+  rm -f "${out}".p*
+  if command -v aria2c &>/dev/null; then
+    echo "  aria2c -x${threads} -s${threads}"
+    if aria2c -x"$threads" -s"$threads" -k 1M --max-tries=5 --retry-wait=2 \
+              --timeout=30 --connect-timeout=10 --allow-overwrite=true \
+              -d "$(dirname "$out")" -o "$(basename "$out")" "$url" >/dev/null 2>&1; then
+      [[ "$(wc -c < "$out" 2>/dev/null || echo 0)" -eq "$size" ]] && return 0
+    fi
+  elif command -v axel &>/dev/null; then
+    echo "  axel -n ${threads}"
+    if axel -n "$threads" -q -o "$out" "$url" >/dev/null 2>&1; then
+      [[ "$(wc -c < "$out" 2>/dev/null || echo 0)" -eq "$size" ]] && return 0
+    fi
+  fi
+
+  echo "  parallel curl x${threads} (${size} bytes)"
+  chunk=$(( (size + threads - 1) / threads ))
+  for ((i=0; i<threads; i++)); do
+    st=$(( i * chunk )); en=$(( st + chunk - 1 ))
+    (( en >= size )) && en=$(( size - 1 ))
+    ( curl -fsL --http1.1 -r "${st}-${en}" --connect-timeout 10 --max-time 300 \
+        --retry 3 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" -S "$url" -o "${out}.p${i}" ) &
+  done
+  wait || true
+
+  for ((i=0; i<threads; i++)); do
+    [[ -f "${out}.p${i}" ]] && got=$(( got + $(wc -c < "${out}.p${i}") ))
+  done
+  if (( got != size )); then
+    echo "  partial: ${got}/${size} bytes"
+    rm -f "${out}".p*
+    return 1
+  fi
+  # MUST concatenate in numeric order: a lexicographic glob would emit
+  # p0 p1 p10 p11 ... p2, i.e. a same-size but scrambled file that still
+  # passes the size+ELF-magic gate. Build the file part by part instead.
+  for ((i=0; i<threads; i++)); do
+    [[ -f "${out}.p${i}" ]] || { rm -f "${out}".p*; return 1; }
+    cat "${out}.p${i}"
+  done > "$out" || { rm -f "${out}".p*; return 1; }
+  rm -f "${out}".p*
+  return 0
+}
+
 DL_OK=false
 for url in "${DL_URLS[@]}"; do
   echo "Downloading $url ..."
+  rm -f "$BIN_PATH" "${BIN_PATH}".p*
+  if fetch_multi "$url" "$BIN_PATH" "$DL_THREADS" && verify_binary "$BIN_PATH"; then
+    DL_OK=true
+    break
+  fi
+  rm -f "$BIN_PATH" "${BIN_PATH}".p*
+  echo "  multi-thread failed via $url — single-stream resume fallback ..."
   # --http1.1: HTTP/2 streams die on flaky transit ("stream not closed
-  # cleanly"); HTTP/1.1 is far more forgiving. -C -: resume partial
-  # downloads so retries make progress instead of restarting ~25MB from
-  # zero. One retry only, short max-time: a proxy that stalls large
-  # transfers is abandoned quickly instead of burning 4x180s before the
-  # next (speed-ranked) candidate is tried. -S: surface curl's own error
-  # text (a stalled transfer with -s looks like a hang).
+  # cleanly"); -C -: resume partial downloads so retries keep progress.
   if curl -fSL --http1.1 -C - --retry 1 --retry-delay 2 "${RETRY_ALL_FLAGS[@]}" \
        --connect-timeout 10 --max-time 90 -S "$url" -o "$BIN_PATH" && verify_binary "$BIN_PATH"; then
     DL_OK=true
