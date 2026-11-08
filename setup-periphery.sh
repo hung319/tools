@@ -119,7 +119,6 @@ PROXY_LIST=(
   "https://gh.bibica.net"     # path-style, Cloudflare, primary
   "https://ghfast.top/"       # prefix-style
   "https://gh-proxy.com/"     # prefix-style
-  "https://ghproxy.net/"      # prefix-style
 )
 # Small, version-independent canary used to probe reachability
 RAW_CANARY="https://raw.githubusercontent.com/moghtech/komodo/refs/heads/main/config/periphery.config.toml"
